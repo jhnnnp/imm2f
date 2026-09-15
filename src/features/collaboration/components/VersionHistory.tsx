@@ -1,0 +1,3 @@
+export function VersionHistory({ latest = 12 }: { latest?: number }) {
+  return <div><span className="eyebrow">PLAN HISTORY</span><h2>변경 기록</h2><div className="version-list"><article><header><b>v{latest}</b><span>방금 · YOU</span></header><p>AI 수정안 적용</p><small>• 카페 삭제<br />• 은파 체류시간 +40분</small><button>이 버전 보기</button></article><article><header><b>v11</b><span>오늘 21:52 · PARTNER</span></header><p>카페 라파르 시간 변경</p><small>15:00 → 16:30</small><button>이 버전 보기</button></article><article><header><b>v10</b><span>어제 19:06 · YOU</span></header><p>DAY 1 장소 3곳 추가</p><button>이 버전 보기</button></article></div></div>;
+}

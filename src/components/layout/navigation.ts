@@ -1,0 +1,17 @@
+export const NAVIGATION = [
+  { label: "Home", href: "/", icon: "⌂" },
+  { section: "PLAN" },
+  { label: "Date", href: "/date", icon: "○" },
+  { label: "Trip", href: "/trip", icon: "◇" },
+  { label: "Calendar", href: "/calendar", icon: "□" },
+  { section: "DISCOVER" },
+  { label: "Places", href: "/places", icon: "⌖", count: 14 },
+  { label: "Our Map", href: "/our-map", icon: "⌁" },
+  { section: "REMEMBER" },
+  { label: "Memories", href: "/memories", icon: "▧" },
+  { label: "Vault", href: "/vault", icon: "◫" },
+  { section: "TOGETHER" },
+  { label: "Bucket", href: "/bucket", icon: "☆" },
+  { label: "Gifts", href: "/gifts", icon: "♢" },
+  { label: "Insights", href: "/insights", icon: "∿" },
+] as const;
