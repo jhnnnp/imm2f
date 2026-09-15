@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="둘만의 여행 노트와 사진첩, 그리고 살아 있는 추억 지도">
+  <meta name="theme-color" content="#f4f0e8">
+  <title>ONLY US — 우리의 여행 기록</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23F4F0E8'/%3E%3Cpath d='M32 49S14 39 14 25c0-7 9-11 18-2 9-9 18-5 18 2 0 14-18 24-18 24Z' fill='%238FA89A'/%3E%3Ccircle cx='32' cy='29' r='5' fill='%23F4F0E8'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="주요 메뉴">
+      <div class="brand">
+        <span class="brand-mark">✦</span>
+        <div><strong>ONLY US</strong><small>our story, always</small></div>
+      </div>
+      <nav class="nav-list">
+        <p>OUR SPACE</p>
+        <button class="nav-item is-active" data-view="home"><span>⌂</span>홈</button>
+        <button class="nav-item" data-view="trip"><span>◫</span>여행</button>
+        <button class="nav-item" data-view="map"><span>⌖</span>우리의 지도</button>
+        <button class="nav-item" data-view="memories"><span>▧</span>추억</button>
+        <p>TOGETHER</p>
+        <button class="nav-item" data-view="bucket"><span>☆</span>버킷리스트</button>
+        <button class="nav-item" data-view="calendar"><span>□</span>캘린더</button>
+      </nav>
+      <div class="sidebar-note">
+        <span class="pressed-flower">❧</span>
+        <p>좋은 곳도,<br>좋은 너와라서<br>더 특별해져요.</p>
+      </div>
+      <div class="couple-chip">
+        <span class="avatar avatar-a">지</span><span class="avatar avatar-b">상</span>
+        <div><strong>지은 &amp; 상민</strong><small>함께한 지 1,842일</small></div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div class="breadcrumb"><span>SEPTEMBER</span><b>15, 2026</b></div>
+        <div class="top-actions">
+          <button class="icon-btn" aria-label="검색">⌕</button>
+          <button class="icon-btn" aria-label="알림">♢<i></i></button>
+          <button class="mini-profile" aria-label="프로필">지은</button>
+        </div>
+      </header>
+
+      <section id="home-view" class="view is-visible" aria-labelledby="home-title">
+        <div class="greeting-row">
+          <div><span class="eyebrow">MONDAY · 맑음 24°</span><h1 id="home-title">오늘도 우리 기록 중</h1></div>
+          <p class="handwritten">우리의 이야기는<br>아직도 여행 중 ♡</p>
+        </div>
+
+        <article class="feature-story">
+          <img src="./assets/gunsan-evening.png" alt="바닷가 산책로에서 함께 풍경을 바라보는 연인">
+          <div class="story-overlay">
+            <span class="date-stamp">2026 · 09 · 12</span>
+            <h2>성수에서 보낸 토요일</h2>
+            <p>계획 없이 걷다가, 오래 기억할 저녁을 만났어요.</p>
+          </div>
+          <span class="coordinates">37.5446°N, 127.0559°E</span>
+        </article>
+
+        <div class="home-grid">
+          <article class="journal-card next-trip">
+            <div class="card-heading"><span class="eyebrow">NEXT JOURNEY</span><span class="countdown">D−3</span></div>
+            <h3>군산, 느리게 걷는 2박 3일</h3>
+            <p>9월 18일 — 20일 · 저장한 장소 8</p>
+            <div class="route-line"><span>서울</span><i></i><b>군산</b></div>
+            <button class="text-btn" data-open-trip>여행 노트 펼치기 <span>→</span></button>
+          </article>
+          <article class="journal-card next-date">
+            <img src="./assets/cafe-memory.png" alt="햇살이 드는 카페 테이블 위의 커피와 카메라">
+            <div><span class="eyebrow">NEXT DATE · D−6</span><h3>서촌 필름 산책</h3><p>사진 한 롤, 커피 두 잔</p></div>
+          </article>
+        </div>
+
+        <section class="map-preview" aria-labelledby="map-preview-title">
+          <div class="map-copy"><span class="eyebrow">OUR PLACES</span><h2 id="map-preview-title">둘이 함께 만든 장소의 지도</h2><p>함께 가 본 곳 28 · 가고 싶은 곳 14</p></div>
+          <div class="soft-map" role="img" aria-label="서울에서 군산까지 이어지는 추억 장소 지도">
+            <svg viewBox="0 0 720 250" aria-hidden="true">
+              <path class="coast" d="M30 80C130 18 222 36 293 79s115 29 179-2 143-19 220 37v118H30Z"/>
+              <path class="river" d="M-20 157c145-73 194 57 326-5s217-58 430-5"/>
+              <path class="journey" d="M129 93C243 70 305 115 395 144s133 22 204-40"/>
+            </svg>
+            <button class="map-pin pin-seoul" data-place="서울"><span>3</span><b>서울</b></button>
+            <button class="map-pin pin-gunsan is-photo" data-place="군산"><img src="./assets/gunsan-evening.png" alt=""><b>군산</b></button>
+            <button class="map-pin pin-jeonju" data-place="전주"><span>♡</span><b>전주</b></button>
+            <p class="map-quote">more places,<br>more stories,<br>with you.</p>
+          </div>
+        </section>
+      </section>
+
+      <section id="trip-view" class="view" aria-labelledby="trip-title">
+        <div class="trip-head">
+          <button class="back-home" aria-label="홈으로">←</button>
+          <div><span class="eyebrow">UPCOMING TRIP · D−3</span><h1 id="trip-title">군산, 2박 3일</h1><p>바다도, 시간도, 우리와 조금 더 가까워지는 여행.</p></div>
+          <button class="outline-btn" id="share-button">둘이 보기</button>
+        </div>
+        <div class="trip-tabs" role="tablist">
+          <button class="is-active" role="tab">일정 보기</button><button role="tab">지도 보기</button><button role="tab">여행 노트</button>
+        </div>
+        <div class="trip-layout">
+          <div class="itinerary">
+            <article class="day-page">
+              <header><div><span>DAY 1</span><b>9월 18일 · 금</b></div><small>네 곳</small></header>
+              <div class="timeline-list">
+                <button class="schedule-item" data-place="한주옥"><time>09:30</time><i></i><span><b>한주옥</b><small>여행의 시작은 따뜻한 한 상</small></span><em>식사</em></button>
+                <button class="schedule-item" data-place="초원사진관"><time>11:20</time><i></i><span><b>초원사진관</b><small>오래된 골목을 천천히</small></span><em>사진</em></button>
+                <button class="schedule-item" data-place="이성당"><time>14:00</time><i></i><span><b>이성당</b><small>단팥빵은 두 개 사기</small></span><em>간식</em></button>
+                <button class="schedule-item" data-place="은파호수공원"><time>17:30</time><i></i><span><b>은파호수공원</b><small>해 질 무렵의 산책</small></span><em>산책</em></button>
+              </div>
+            </article>
+            <article class="day-page collapsed-day"><header><div><span>DAY 2</span><b>9월 19일 · 토</b></div><small>세 곳</small></header></article>
+          </div>
+          <div class="trip-map soft-map">
+            <svg viewBox="0 0 720 700" aria-hidden="true">
+              <path class="coast" d="M0 80c123-47 186 51 280 20s154-94 247-26 145 39 193 20v606H0Z"/>
+              <path class="river" d="M-10 415c142-91 215 28 355-34s221-35 390 16"/>
+              <path class="journey" d="M124 180C208 239 188 351 315 383s170 18 245 121"/>
+            </svg>
+            <span class="sticky-note">좋은 사람과<br>좋은 곳을 가는 것,<br>그게 여행이니까.</span>
+            <button class="place-marker marker-one" data-place="한주옥"><span>01</span><b>한주옥</b></button>
+            <button class="place-marker marker-two" data-place="초원사진관"><span>02</span><b>초원사진관</b></button>
+            <button class="place-marker marker-three" data-place="이성당"><span>03</span><b>이성당</b></button>
+            <button class="place-marker marker-four" data-place="은파호수공원"><span>04</span><b>은파호수공원</b></button>
+            <span class="compass">N<br><b>✦</b><br>S</span>
+            <span class="map-coord">35.9677°N · 126.7366°E</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="memories-view" class="view" aria-labelledby="memories-title">
+        <div class="collection-head"><span class="eyebrow">OUR ARCHIVE · 2026</span><h1 id="memories-title">함께여서 기억나는 장면들</h1><p>사진보다 먼저 떠오르는 마음까지, 천천히 모아두었어요.</p></div>
+        <div class="memory-spread">
+          <figure class="memory-photo wide"><img src="./assets/gunsan-evening.png" alt="바닷가의 두 사람"><figcaption><b>군산의 저녁</b><span>Sep 12, 2026 · 35.9677°N</span></figcaption></figure>
+          <figure class="memory-photo taped"><img src="./assets/cafe-memory.png" alt="카페 테이블 위의 커피"><figcaption><b>커피 두 잔</b><span>Aug 28, 2026 · 서촌</span></figcaption></figure>
+          <blockquote>“어디를 가든,<br>결국 기억나는 건<br>그날의 우리.”</blockquote>
+        </div>
+      </section>
+    </main>
+
+    <aside class="context-panel" aria-label="오늘의 기록과 상세 정보">
+      <div id="activity-panel">
+        <div class="panel-heading"><div><span class="eyebrow">TODAY</span><h2>오늘의 이야기</h2></div><button class="icon-btn" aria-label="더 보기">···</button></div>
+        <article class="activity featured"><span class="activity-icon">✉</span><div><b>군산 여행 계획을 수정했어요</b><small>상민 · 3시간 전</small><p>첫날 산책 시간을 해 질 무렵으로 옮겼어요.</p></div></article>
+        <article class="activity"><span class="activity-icon sage">♡</span><div><b>새로운 장소를 저장했어요</b><small>지은 · 5시간 전</small><p>“여기 창가 자리, 꼭 같이 앉자.”</p></div></article>
+        <article class="activity"><span class="activity-icon blue">▧</span><div><b>지난 제주 사진을 정리했어요</b><small>어제</small><div class="tiny-gallery"><img src="./assets/gunsan-evening.png" alt=""><img src="./assets/cafe-memory.png" alt=""><span>+9</span></div></div></article>
+        <div class="quiet-card"><span>OUR NEXT PAGE</span><strong>군산으로 떠나기까지</strong><b>3</b><small>days to go</small></div>
+      </div>
+      <div id="place-panel" hidden>
+        <button class="close-detail" aria-label="상세 닫기">×</button>
+        <img class="detail-image" src="./assets/cafe-memory.png" alt="선택한 장소의 기억 사진">
+        <span class="eyebrow">PLACE NOTE</span><h2 id="place-title">한주옥</h2><p id="place-desc">첫날, 따뜻한 밥으로 천천히 여행을 시작해요.</p>
+        <dl><div><dt>언제</dt><dd id="place-time">9월 18일 오전 9:30</dd></div><div><dt>우리 마음</dt><dd>둘 다 가고 싶음 ♡♡</dd></div><div><dt>위치</dt><dd>전북 군산시</dd></div></dl>
+        <div class="couple-opinion"><span class="avatar avatar-a">지</span><p><b>지은의 메모</b>사진도 음식도 천천히, 오늘 첫 페이지처럼.</p></div>
+      </div>
+    </aside>
+  </div>
+  <div class="toast" role="status" aria-live="polite"></div>
+  <script src="./app.js"></script>
+</body>
+</html>
