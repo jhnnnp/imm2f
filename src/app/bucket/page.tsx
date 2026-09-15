@@ -1,2 +1,12 @@
 import { AppShell } from "@/components/layout/AppShell";
-export default function BucketPage() { return <AppShell><div className="page-title-row"><div><span className="eyebrow">SOMEDAY, TOGETHER</span><h1>우리의 버킷리스트</h1><p>언젠가를 진짜 약속으로 만드는 작은 목록.</p></div><button className="primary-button">＋ 하고 싶은 일</button></div><div className="bucket-list">{[["01","제주에서 한 달 살아보기","느린 아침과 매일 다른 바다"],["02","서로의 어린 시절 동네 걷기","사진 한 장씩 다시 찍어보기"],["03","겨울 삿포로 눈 축제","따뜻한 라멘과 첫눈"]].map(item => <article key={item[0]}><span>{item[0]}</span><div><h2>{item[1]}</h2><p>{item[2]}</p></div><em>여행</em></article>)}</div></AppShell>; }
+import { CoupleNotesBoard } from "@/features/lists/components/CoupleNotesBoard";
+import { listNotes } from "@/features/lists/actions";
+
+export default async function BucketPage() {
+  const { notes, persist } = await listNotes("bucket");
+  return (
+    <AppShell>
+      <CoupleNotesBoard kind="bucket" initialNotes={notes} persist={persist} />
+    </AppShell>
+  );
+}

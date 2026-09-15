@@ -1,11 +1,62 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { loadCoupleActivities } from "../actions";
+import { hrefForActivity, type CoupleActivity } from "../types";
+
+function symbolFor(action: string) {
+  if (action.startsWith("TRIP") || action.startsWith("DATE")) return { className: "activity-symbol", mark: "↗" };
+  if (action === "PLACE_ADDED" || action === "PLACE_LIKED") return { className: "activity-symbol blue", mark: "♡" };
+  if (action === "MEMORY_ADDED") return { className: "activity-symbol", mark: "♥" };
+  if (action === "VAULT_UPDATED" || action === "GIFT_UPDATED" || action === "BUCKET_UPDATED") return { className: "activity-symbol blue", mark: "▣" };
+  if (action === "PARTNER_JOINED") return { className: "activity-symbol", mark: "◎" };
+  return { className: "activity-symbol blue", mark: "·" };
+}
+
 export function ActivityPanel() {
-  return <div>
-    <div className="panel-heading"><div><span className="eyebrow">TODAY</span><h2>오늘의 이야기</h2></div><button className="icon-button">•••</button></div>
-    <div className="activity-feed">
-      <article className="activity-item important"><span className="activity-symbol">↗</span><div><b>군산 여행 계획을 수정했어요</b><small>상민 · 3시간 전</small><p>은파호수공원<br /><del>16:40</del> → <strong>17:30</strong></p></div></article>
-      <article className="activity-item"><span className="avatar you">지</span><div><b>새 장소를 저장했어요</b><small>지은 · 5시간 전</small><p>“여기 창가 자리, 꼭 같이 앉자.”</p></div></article>
-      <article className="activity-item"><span className="activity-symbol blue">▧</span><div><b>지난 제주 사진을 정리했어요</b><small>어제</small><div className="tiny-gallery"><img src="/assets/gunsan-evening.png" alt="" /><img src="/assets/cafe-memory.png" alt="" /><span>+9</span></div></div></article>
+  const [items, setItems] = useState<CoupleActivity[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadCoupleActivities().then(next => {
+      if (cancelled) return;
+      setItems(next);
+      setLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <div>
+      <div className="panel-heading">
+        <div>
+          <span className="eyebrow">TODAY</span>
+          <h2>오늘의 이야기</h2>
+        </div>
+      </div>
+      <div className="activity-feed">
+        {!loaded && <p className="form-hint">활동을 불러오는 중이에요.</p>}
+        {loaded && !items.length && (
+          <p className="form-hint">아직 기록이 없어요. 장소를 저장하거나 일정을 바꾸면 여기에 쌓여요.</p>
+        )}
+        {items.map(item => {
+          const symbol = symbolFor(item.action);
+          return (
+            <Link className={`activity-item ${item.important ? "important" : ""}`} href={hrefForActivity(item.action)} key={item.id}>
+              <span className={symbol.className}>{symbol.mark}</span>
+              <div>
+                <b>{item.title}</b>
+                <small>{item.actorName} · {item.createdAt}</small>
+                {item.detail ? <p>{item.detail}</p> : null}
+              </div>
+            </Link>
+          );
+        })}
+      </div>
     </div>
-    <div className="countdown-card"><span>OUR NEXT PAGE</span><strong>군산으로 떠나기까지</strong><b>2</b><small>days to go</small></div>
-  </div>;
+  );
 }

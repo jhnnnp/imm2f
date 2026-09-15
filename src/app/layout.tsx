@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { SessionProvider } from "@/features/auth/components/SessionProvider";
+import { getAppSession } from "@/features/auth/session";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -7,6 +9,13 @@ export const metadata: Metadata = {
   icons: { icon: "/favicon.svg" },
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="ko" data-scroll-behavior="smooth"><body>{children}</body></html>;
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const session = await getAppSession();
+  return (
+    <html lang="ko" data-scroll-behavior="smooth">
+      <body>
+        <SessionProvider initialSession={session}>{children}</SessionProvider>
+      </body>
+    </html>
+  );
 }

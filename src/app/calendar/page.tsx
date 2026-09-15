@@ -1,2 +1,24 @@
 import { AppShell } from "@/components/layout/AppShell";
-export default function CalendarPage() { return <AppShell><div className="page-title-row"><div><span className="eyebrow">SEPTEMBER 2026</span><h1>둘의 캘린더</h1><p>기념일과 약속, 기다리는 여행을 한눈에.</p></div><button className="primary-button">＋ 일정 추가</button></div><div className="calendar-grid"><div className="week labels">{["MON","TUE","WED","THU","FRI","SAT","SUN"].map(day => <span key={day}>{day}</span>)}</div><div className="week dates"><button>14</button><button>15</button><button className="today-cell">16<small>오늘</small></button><button>17</button><button className="trip-cell">18<small>군산 DAY 1</small></button><button className="trip-cell">19<small>군산 DAY 2</small></button><button className="trip-cell">20<small>군산 DAY 3</small></button></div><div className="week dates"><button className="date-cell">21<small>서촌 데이트</small></button>{[22,23,24,25,26,27].map(day => <button key={day}>{day}</button>)}</div></div></AppShell>; }
+import { loadCouplePlan } from "@/features/planning/actions";
+import { listMemories } from "@/features/memories/actions";
+import { CalendarBoard } from "@/features/calendar/components/CalendarBoard";
+
+export default async function CalendarPage() {
+  const [trip, date, memories] = await Promise.all([loadCouplePlan("trip"), loadCouplePlan("date"), listMemories()]);
+  return (
+    <AppShell>
+      <div className="page-title-row">
+        <div>
+          <span className="eyebrow">CALENDAR</span>
+          <h1>둘의 캘린더</h1>
+          <p>날짜를 고르면 여행·데이트·추억이 붙고, 빈 날은 시작일로 지정할 수 있어요.</p>
+        </div>
+      </div>
+      <CalendarBoard
+        trip={trip}
+        date={date}
+        memories={memories.memories.map(item => ({ id: item.id, title: item.title, happenedOn: item.happenedOn }))}
+      />
+    </AppShell>
+  );
+}

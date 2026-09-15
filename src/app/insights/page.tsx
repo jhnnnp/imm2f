@@ -1,2 +1,16 @@
+import type { Metadata } from "next";
 import { AppShell } from "@/components/layout/AppShell";
-export default function InsightsPage() { const tastes = [["조용한 장소",92],["한식",88],["야경과 산책",84],["오래 머무르기",79]] as const; return <AppShell><div className="page-title-row"><div><span className="eyebrow">OUR TASTE</span><h1>우리의 취향</h1><p>쌓인 기록 속에서 둘이 좋아하는 여행의 리듬을 발견했어요.</p></div><button className="outline-button">다시 분석하기</button></div><div className="insight-grid"><article className="paper-card insight-quote"><span>✦ AI NOTE</span><p>둘은 많은 곳을 빠르게 방문하는 여행보다, 좋아하는 장소에서 오래 머무는 여행의 만족도가 높은 편이에요.</p><small>최근 평가 30개와 저장한 장소를 바탕으로 정리했어요.</small></article><article className="paper-card"><span className="eyebrow">COMMON TASTE</span><div className="taste-bars">{tastes.map(([label,score]) => <label key={label}>{label}<i style={{ "--score": `${score}%` } as React.CSSProperties} /><b>{score}</b></label>)}</div></article></div></AppShell>; }
+import { InsightsPanel } from "@/features/ai/components/InsightsPanel";
+import { analyzeCouplePreferences } from "@/features/ai/actions";
+
+export const metadata: Metadata = { title: "Insights" };
+
+export default async function InsightsPage() {
+  const result = await analyzeCouplePreferences();
+  const initial = "error" in result ? null : result;
+  return (
+    <AppShell>
+      <InsightsPanel initial={initial} />
+    </AppShell>
+  );
+}
