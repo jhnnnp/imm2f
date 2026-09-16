@@ -5,9 +5,20 @@ export type PreferencePlaceInput = {
   categoryLabel: string;
   district: string;
   durationMinutes: number;
-  expectedCostTwo: number | null;
   userStatus: string;
   partnerStatus: string;
+};
+
+export type PreferenceDifference = {
+  you: string;
+  partner: string;
+  bridge: string;
+};
+
+export type PreferenceRecommendation = {
+  title: string;
+  description: string;
+  reason: string;
 };
 
 export type PreferenceInsight = {
@@ -15,6 +26,9 @@ export type PreferenceInsight = {
   youHighlights: string[];
   partnerHighlights: string[];
   commonTastes: Array<{ label: string; score: number }>;
+  matchScore: number;
+  differences: PreferenceDifference[];
+  recommendations: PreferenceRecommendation[];
   note: string;
   sourceCount: number;
 };
@@ -24,6 +38,9 @@ type AnalyzePayload = {
   youHighlights?: string[];
   partnerHighlights?: string[];
   commonTastes?: Array<{ label?: string; score?: number }>;
+  matchScore?: number;
+  differences?: Array<{ you?: string; partner?: string; bridge?: string }>;
+  recommendations?: Array<{ title?: string; description?: string; reason?: string }>;
 };
 
 const POSITIVE = new Set(["want", "must_visit", "revisit", "visited"]);
@@ -60,7 +77,6 @@ function heuristicInsight(places: PreferencePlaceInput[]): PreferenceInsight {
   const userDistricts = countBy(places, "user", place => place.district);
   const partnerDistricts = countBy(places, "partner", place => place.district);
   const longStay = places.filter(place => place.durationMinutes >= 90 && (POSITIVE.has(place.userStatus) || POSITIVE.has(place.partnerStatus))).length;
-  const freeish = places.filter(place => (place.expectedCostTwo ?? 0) === 0 && (POSITIVE.has(place.userStatus) || POSITIVE.has(place.partnerStatus))).length;
 
   const youHighlights = [
     ...topLabels(userCats, 2),
@@ -78,7 +94,6 @@ function heuristicInsight(places: PreferencePlaceInput[]): PreferenceInsight {
     commonMap.set(label, userCount + partnerCount);
   }
   if (longStay >= 2) commonMap.set("오래 머무르기", longStay);
-  if (freeish >= 2) commonMap.set("가벼운 비용", freeish);
 
   const max = Math.max(1, ...commonMap.values());
   const commonTastes = [...commonMap.entries()]
@@ -97,11 +112,34 @@ function heuristicInsight(places: PreferencePlaceInput[]): PreferenceInsight {
     ? "둘은 많은 곳을 빠르게 도는 여행보다, 좋아하는 장소에서 오래 머무는 리듬의 만족도가 높은 편이에요."
     : "아직 기록이 많지 않지만, 저장한 장소를 보면 익숙한 동네와 편한 카테고리를 함께 쌓아가고 있어요.";
 
+  const youPrimary = youHighlights[0] ?? "편안한 장소";
+  const partnerPrimary = partnerHighlights[0] ?? "새로운 장소";
+  const sharedPrimary = commonTastes[0]?.label ?? "함께 천천히 둘러보기";
+  const overlap = commonTastes.length;
+
   return {
     summary,
     youHighlights: youHighlights.length ? youHighlights : ["아직 표시할 취향이 적어요"],
     partnerHighlights: partnerHighlights.length ? partnerHighlights : ["파트너 기록이 아직 적어요"],
     commonTastes,
+    matchScore: Math.min(92, 52 + overlap * 9 + Math.min(places.length, 10)),
+    differences: [{
+      you: `${youPrimary} 쪽에 더 마음이 가요`,
+      partner: `${partnerPrimary} 쪽을 더 자주 골라요`,
+      bridge: `${sharedPrimary}를 중심에 두면 두 취향이 자연스럽게 만나요`,
+    }],
+    recommendations: [
+      {
+        title: "둘 다 편안한 선택",
+        description: `${sharedPrimary} 분위기가 느껴지는 곳`,
+        reason: "둘의 저장 기록에서 가장 자주 겹친 취향이에요.",
+      },
+      {
+        title: "서로의 취향을 섞은 선택",
+        description: `${youPrimary}의 매력과 ${partnerPrimary}의 매력을 함께 가진 곳`,
+        reason: "한 사람에게만 맞추지 않고 두 취향을 한 번에 경험해요.",
+      },
+    ],
     note: places.length < 4
       ? "현재 저장된 기록이 적어 이번 요약은 입력·저장 장소를 중심으로 구성했어요."
       : `저장된 장소 ${places.length}곳을 바탕으로 정리했어요.`,
@@ -136,7 +174,6 @@ export async function analyzePreferencesWithOpenAi(input: {
     category: place.categoryLabel,
     district: place.district,
     durationMinutes: place.durationMinutes,
-    expectedCostTwo: place.expectedCostTwo,
     you: place.userStatus,
     partner: place.partnerStatus,
   }));
@@ -159,8 +196,9 @@ export async function analyzePreferencesWithOpenAi(input: {
               "You summarize a couple's place preferences from saved place states only.",
               "Never invent places, addresses, prices, distances, ratings, or visit counts not implied by the data.",
               "Reply Korean JSON:",
-              '{"summary":"2-3 Korean sentences","youHighlights":["..."],"partnerHighlights":["..."],"commonTastes":[{"label":"...","score":0-100}]}',
+              '{"summary":"2-3 Korean sentences","youHighlights":["..."],"partnerHighlights":["..."],"commonTastes":[{"label":"...","score":0-100}],"matchScore":0-100,"differences":[{"you":"...","partner":"...","bridge":"..."}],"recommendations":[{"title":"...","description":"...","reason":"..."}]}',
               "commonTastes: 3-4 short labels. Scores are soft preference indicators, not probabilities.",
+              "Do not discuss price. differences compare category, mood, area, activity, or pace. recommendations describe place conditions, never invent venue names.",
             ].join(" "),
           },
           {
@@ -182,12 +220,31 @@ export async function analyzePreferencesWithOpenAi(input: {
       }))
       .filter(item => item.label)
       .slice(0, 4);
+    const differences = (parsed.differences ?? [])
+      .map(item => ({
+        you: String(item.you ?? "").trim().slice(0, 80),
+        partner: String(item.partner ?? "").trim().slice(0, 80),
+        bridge: String(item.bridge ?? "").trim().slice(0, 120),
+      }))
+      .filter(item => item.you && item.partner && item.bridge)
+      .slice(0, 2);
+    const recommendations = (parsed.recommendations ?? [])
+      .map(item => ({
+        title: String(item.title ?? "").trim().slice(0, 40),
+        description: String(item.description ?? "").trim().slice(0, 100),
+        reason: String(item.reason ?? "").trim().slice(0, 120),
+      }))
+      .filter(item => item.title && item.description && item.reason)
+      .slice(0, 3);
 
     return {
       summary: String(parsed.summary ?? "").trim().slice(0, 280) || fallback.summary,
       youHighlights: sanitizeList(parsed.youHighlights, fallback.youHighlights),
       partnerHighlights: sanitizeList(parsed.partnerHighlights, fallback.partnerHighlights),
       commonTastes: commonTastes.length ? commonTastes : fallback.commonTastes,
+      matchScore: clampScore(parsed.matchScore) || fallback.matchScore,
+      differences: differences.length ? differences : fallback.differences,
+      recommendations: recommendations.length ? recommendations : fallback.recommendations,
       note: fallback.note,
       sourceCount: input.places.length,
     };

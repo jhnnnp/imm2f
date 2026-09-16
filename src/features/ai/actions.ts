@@ -66,7 +66,6 @@ export async function analyzeCouplePreferences(): Promise<PreferenceInsight | { 
       categoryLabel: place.categoryLabel,
       district: place.district,
       durationMinutes: place.durationMinutes,
-      expectedCostTwo: place.expectedCostTwo,
       userStatus: place.userStatus,
       partnerStatus: place.partnerStatus,
     })),
