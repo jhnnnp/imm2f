@@ -3,17 +3,7 @@
 import { useMemo, useState } from "react";
 import { generatePlanOptions, proposePlanEdits } from "../actions";
 import type { PlanChange, PlanItem, PlanKind, PlanOption } from "@/features/planning/types/plan";
-
-function formatWon(value: number) {
-  return Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-}
-
-function budgetAfter(items: PlanItem[], changes: PlanChange[]) {
-  const removed = new Set(changes.filter(change => change.type === "remove").map(change => change.itemId));
-  return items
-    .filter(item => !removed.has(item.id))
-    .reduce((sum, item) => sum + item.expectedCost, 0);
-}
+import type { Place } from "@/features/places/types/place";
 
 const EDIT_PROMPT = "일정이 조금 빡센 것 같아. 한곳 빼고 남는 곳은 더 여유롭게 해줘.";
 const GENERATE_PROMPT = "조용하고 오래 머무를 수 있게, 이동은 적게.";
@@ -25,14 +15,16 @@ export function AIPlanEditor({
   items,
   onApply,
   onReplace,
+  places,
 }: {
   kind: PlanKind;
   items: PlanItem[];
   onApply: (changes: PlanChange[]) => void;
   onReplace: (next: PlanItem[]) => void;
+  places?: Place[];
 }) {
   const [mode, setMode] = useState<Mode>(items.length ? "edit" : "generate");
-  const [editPrompt, setEditPrompt] = useState(EDIT_PROMPT);
+  const [editPrompt, setEditPrompt] = useState(() => items.length <= 1 ? "이 장소에서 여유롭게 머물 수 있도록 체류 시간을 조정해줘." : EDIT_PROMPT);
   const [generatePrompt, setGeneratePrompt] = useState(GENERATE_PROMPT);
   const [phase, setPhase] = useState<"idle" | "loading" | "preview">("idle");
   const [changes, setChanges] = useState<PlanChange[]>([]);
@@ -43,12 +35,10 @@ export function AIPlanEditor({
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
 
-  const beforeBudget = useMemo(() => items.reduce((sum, item) => sum + item.expectedCost, 0), [items]);
   const chosen = useMemo(
     () => changes.filter((_, index) => selected[index]),
     [changes, selected],
   );
-  const afterBudget = useMemo(() => budgetAfter(items, chosen), [items, chosen]);
   const activeOption = options.find(option => option.key === optionKey) ?? null;
 
   function switchMode(next: Mode) {
@@ -88,7 +78,7 @@ export function AIPlanEditor({
   async function runGenerate() {
     setError("");
     setPhase("loading");
-    const result = await generatePlanOptions({ kind, prompt: generatePrompt });
+    const result = await generatePlanOptions({ kind, prompt: generatePrompt, places });
     if ("error" in result) {
       setError(result.error);
       setPhase("idle");
@@ -152,7 +142,7 @@ export function AIPlanEditor({
 
       {phase === "loading" && (
         <div className="ai-progress">
-          <span>{mode === "generate" ? "여행을 정리하고 있어요." : "일정을 읽고 있어요."}</span>
+          <span>{mode === "generate" ? `${kind === "date" ? "데이트" : "여행"} 후보를 정리하고 있어요.` : "일정을 읽고 있어요."}</span>
           <p>✓ 선택 장소 확인</p>
           <p>{mode === "generate" ? "◌ 지역별 묶기" : "◌ 요청에 맞는 조정 찾기"}</p>
           <p>◌ 미리보기 준비</p>
@@ -181,7 +171,6 @@ export function AIPlanEditor({
             </label>
           ))}
           <div className="proposal-summary">
-            <span>예산 <b>₩{formatWon(beforeBudget)} → ₩{formatWon(afterBudget)}</b></span>
             <span>선택 <b>{chosen.length}/{changes.length}</b></span>
           </div>
           <button className="primary-button full" type="button" disabled={!chosen.length} onClick={() => onApply(chosen)}>
@@ -209,7 +198,7 @@ export function AIPlanEditor({
                 <span>{option.key} · {option.styleLabel}</span>
                 <b>{option.title}</b>
                 <small>{option.summary}</small>
-                <em>₩{formatWon(option.totalCost)} · {option.placeCount}곳</em>
+                <em>{option.placeCount}곳</em>
               </button>
             ))}
           </div>

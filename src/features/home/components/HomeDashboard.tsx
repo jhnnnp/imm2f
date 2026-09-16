@@ -3,7 +3,7 @@ import type { Place } from "@/features/places/types/place";
 import type { Memory } from "@/features/memories/types";
 import type { PlanItem } from "@/features/planning/types/plan";
 import { hrefForActivity, type CoupleActivity } from "@/features/collaboration/types";
-import { formatKoDate, formatKoShort, formatWon } from "@/lib/dates";
+import { formatKoDate, formatKoShort } from "@/lib/dates";
 
 function bothWant(place: Place) {
   const positive = ["want", "must_visit", "revisit"];
@@ -37,8 +37,6 @@ export function HomeDashboard({
   const mine = places.filter(place => ["want", "must_visit", "revisit"].includes(place.userStatus)).slice(0, 3);
   const shownPlaces = shared.length ? shared : mine;
   const memory = memories[0] ?? null;
-  const tripCost = tripItems.reduce((sum, item) => sum + item.expectedCost, 0);
-  const dateCost = dateItems.reduce((sum, item) => sum + item.expectedCost, 0);
 
   return (
     <>
@@ -58,7 +56,7 @@ export function HomeDashboard({
               <h2>{tripTitle || "우리가 고른 여행"}</h2>
               <p>{tripItems.map(item => item.placeName).slice(0, 3).join(" · ")}</p>
               <div className="plan-progress"><i style={{ width: `${Math.min(100, Math.max(12, tripItems.length * 16))}%` }} /></div>
-              <small>{tripStartDate ? `${formatKoShort(tripStartDate)} 출발 · ` : ""}{tripDayCount > 1 ? `${tripDayCount}일 · ` : ""}{tripCost ? `예상 ₩${formatWon(tripCost)}` : `${tripItems.length}곳 초안`}</small>
+              <small>{tripStartDate ? `${formatKoShort(tripStartDate)} 출발 · ` : ""}{tripDayCount > 1 ? `${tripDayCount}일 · ` : ""}{`${tripItems.length}곳 초안`}</small>
             </div>
           ) : (
             <div className="journey-copy">
@@ -78,7 +76,6 @@ export function HomeDashboard({
                 <div>
                   <h3>{dateTitle || "우리가 고른 데이트"}</h3>
                   <p>{dateStartDate ? formatKoDate(dateStartDate) : `${dateItems[0]?.placeName}에서 시작`}</p>
-                  <strong>{dateCost ? `예상 ₩${formatWon(dateCost)}` : "초안 저장됨"}</strong>
                 </div>
               </div>
             ) : (

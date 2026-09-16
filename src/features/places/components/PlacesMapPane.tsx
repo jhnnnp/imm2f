@@ -8,7 +8,7 @@ import { clampRadius, distanceMeters } from "../geo";
 import { isDiscoverPlace } from "../discover";
 import type { Place, PlaceCategoryId } from "../types/place";
 
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
 export function PlacesMapPane({
   saved,
@@ -33,7 +33,7 @@ export function PlacesMapPane({
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
   const searchRef = useRef(onSearchHere);
-  const startRef = useRef(saved[0]?.coordinates ?? DEFAULT_MAP_CENTER);
+  const startRef = useRef(saved.find(place => place.coordinates)?.coordinates ?? DEFAULT_MAP_CENTER);
   const [mapReady, setMapReady] = useState(false);
   const [moved, setMoved] = useState(false);
   searchRef.current = onSearchHere;
@@ -99,6 +99,7 @@ export function PlacesMapPane({
       markersRef.current = [];
       const seen = new Set<string>();
       [...results, ...saved].forEach(place => {
+        if (!place.coordinates) return;
         const key = place.externalPlaceId || place.id;
         if (seen.has(key)) return;
         seen.add(key);
@@ -110,7 +111,7 @@ export function PlacesMapPane({
         if (place.id === selectedId) marker.classList.add("is-selected");
         marker.addEventListener("click", () => {
           onSelect(place.id);
-          map.flyTo({ center: place.coordinates, zoom: Math.max(map.getZoom(), 14), duration: 600 });
+          map.flyTo({ center: place.coordinates!, zoom: Math.max(map.getZoom(), 14), duration: 600 });
         });
         markersRef.current.push(new maplibregl.Marker({ element: marker, anchor: "bottom" }).setLngLat(place.coordinates).addTo(map));
       });

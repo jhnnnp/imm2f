@@ -3,20 +3,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/layout/AppShell";
+import { DatePickerButton } from "@/components/shared/DatePickerButton";
+import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { AIPlanEditor } from "@/features/ai/components/AIPlanEditor";
 import { ActivityPanel } from "@/features/collaboration/components/ActivityPanel";
-import { BudgetPanel } from "@/features/collaboration/components/BudgetPanel";
 import { VersionHistory } from "@/features/collaboration/components/VersionHistory";
 import { loadPlanVersions } from "@/features/collaboration/actions";
-import { getActiveTripDay, getDraftTripItems, setActiveTripDay, setDraftTripItems, subscribeDraftTrip } from "@/features/planning/draftTrip";
+import { getActiveTripDay, getDraftPlanMeta, getDraftTripItems, setActiveTripDay, setDraftPlanMeta, setDraftTripItems, subscribeDraftTrip } from "@/features/planning/draftTrip";
+import { getDemoPlaces, subscribeDemoPlaces } from "@/features/places/demoPlaces";
+import type { Place } from "@/features/places/types/place";
 import { loadCouplePlan, saveCouplePlan } from "@/features/planning/actions";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import type { PlanChange, PlanItem } from "@/features/planning/types/plan";
-import { addDays, formatKoDate, formatKoShort, formatWon } from "@/lib/dates";
+import { addDays, formatKoDate, formatKoShort } from "@/lib/dates";
 import { PlanMap } from "./PlanMap";
 
 type Panel = "ai" | "history" | "activity";
-type Tab = "schedule" | "map" | "budget" | "notes";
+type Tab = "schedule" | "map" | "notes";
 
 function mergeDay(all: PlanItem[], dayIndex: number, nextDay: PlanItem[]) {
   const others = all.filter(item => (item.dayIndex ?? 0) !== dayIndex);
@@ -38,13 +41,12 @@ export function TripPlanner() {
   const [version, setVersion] = useState(0);
   const [saved, setSaved] = useState(true);
   const [saveError, setSaveError] = useState("");
+  const [demoPlaces, setDemoPlaces] = useState<Place[]>([]);
   const revisionRef = useRef(0);
-  const total = useMemo(() => items.reduce((sum, item) => sum + item.expectedCost, 0), [items]);
   const dayItems = useMemo(
     () => items.filter(item => (item.dayIndex ?? 0) === selectedDay),
     [items, selectedDay],
   );
-  const dayCost = useMemo(() => dayItems.reduce((sum, item) => sum + item.expectedCost, 0), [dayItems]);
   const dayLabel = `DAY ${selectedDay + 1}`;
   const dayDate = startDate ? formatKoDate(addDays(startDate, selectedDay)) : "";
 
@@ -55,6 +57,7 @@ export function TripPlanner() {
       setVersion(versions.latest);
       revisionRef.current = result.revision;
       const stored = getDraftTripItems();
+      const localMeta = getDraftPlanMeta("trip");
       if (result.persist && result.items.length) {
         setItems(result.items);
         setDraftTripItems(result.items);
@@ -69,22 +72,27 @@ export function TripPlanner() {
           });
         }
       }
-      if (result.title) setTitle(result.title);
-      if (result.notes) setNotes(result.notes);
-      if (result.startDate) setStartDate(result.startDate);
-      setDayCount(Math.max(1, result.dayCount || 1));
-      const active = Math.min(getActiveTripDay(), Math.max(0, (result.dayCount || 1) - 1));
+      setTitle(result.title || localMeta.title);
+      setNotes(result.notes || localMeta.notes);
+      setStartDate(result.startDate || localMeta.startDate);
+      const storedDays = stored.reduce((max, item) => Math.max(max, (item.dayIndex ?? 0) + 1), 1);
+      const nextDayCount = Math.max(1, result.dayCount || 1, localMeta.dayCount, storedDays);
+      setDayCount(nextDayCount);
+      const active = Math.min(getActiveTripDay(), nextDayCount - 1);
       setSelectedDay(active);
       setActiveTripDay(active);
+      if (!result.persist) setDemoPlaces(getDemoPlaces());
       setLoaded(true);
     });
     const unsubscribe = subscribeDraftTrip(() => {
       const next = getDraftTripItems();
       if (next.length) setItems(next);
     });
+    const unsubscribePlaces = subscribeDemoPlaces(() => setDemoPlaces(getDemoPlaces()));
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribePlaces();
     };
   }, []);
 
@@ -93,6 +101,12 @@ export function TripPlanner() {
     setSaveError("");
     setItems(next);
     setDraftTripItems(next);
+    setDraftPlanMeta("trip", {
+      title: extra?.title ?? title,
+      notes: extra?.subtitle ?? notes,
+      startDate: extra && "startDate" in extra ? extra.startDate ?? "" : startDate,
+      dayCount: extra?.dayCount ?? dayCount,
+    });
     void saveCouplePlan("trip", next, {
       title: extra?.title ?? title,
       subtitle: extra?.subtitle ?? notes,
@@ -125,6 +139,10 @@ export function TripPlanner() {
     setPanel("history");
   };
 
+  const updateItem = (id: string, patch: Pick<PlanItem, "startTime" | "durationMinutes">) => {
+    persist(items.map(item => item.id === id ? { ...item, ...patch } : item));
+  };
+
   const selectDay = (day: number) => {
     setSelectedDay(day);
     setActiveTripDay(day);
@@ -149,7 +167,7 @@ export function TripPlanner() {
   };
 
   const context = panel === "ai"
-    ? <AIPlanEditor kind="trip" items={dayItems.length ? dayItems : items} onApply={apply} onReplace={replace} />
+    ? <AIPlanEditor kind="trip" items={dayItems.length ? dayItems : items} places={demoPlaces.length ? demoPlaces : undefined} onApply={apply} onReplace={replace} />
     : panel === "activity"
       ? <ActivityPanel />
       : <VersionHistory kind="trip" latest={version} onRestore={replace} />;
@@ -168,38 +186,39 @@ export function TripPlanner() {
             {!loaded
               ? "저장된 하루를 가져오고 있어요."
               : items.length
-                ? `${dayCount}일 · ${items.length}곳 · 예상 ₩${formatWon(total)}${startDate ? ` · ${formatKoDate(startDate)}부터` : ""}`
+                ? `${dayCount}일 · ${items.length}곳${startDate ? ` · ${formatKoDate(startDate)}부터` : ""}`
                 : "장소를 담고, 필요하면 AI가 하루 순서를 잡아 줘요."}
           </p>
         </div>
-        <div className="page-actions">
-          <label className="date-field">
-            <span>시작일</span>
-            <input
-              type="date"
-              value={startDate}
-              onChange={event => {
-                setStartDate(event.target.value);
-                persist(items, { startDate: event.target.value || null });
-              }}
-            />
-          </label>
+        <div className="page-actions date-planner-actions trip-planner-actions">
+          <DatePickerButton
+            value={startDate}
+            emptyLabel="시작일 고르기"
+            ariaLabel="여행 시작일"
+            onChange={value => {
+              setStartDate(value);
+              persist(items, { startDate: value || null });
+            }}
+          />
           <div className="save-status"><i /> {saveError || (saved ? "저장됨" : "저장 중...")}</div>
-          <button className="outline-button" type="button" onClick={() => setPanel("activity")}>최근 활동</button>
-          <button className="more-button" type="button" onClick={() => setPanel("ai")}>AI</button>
+          <div className="date-action-group">
+            <button className={`date-action-button is-history ${panel === "activity" ? "is-active" : ""}`} type="button" onClick={() => setPanel("activity")}>
+              <HeaderActionIcon name="activity" /><span>최근 활동</span>
+            </button>
+            <button className={`date-action-button is-ai ${panel === "ai" ? "is-active" : ""}`} type="button" onClick={() => setPanel("ai")}>
+              <HeaderActionIcon name="sparkles" /><span>AI로 다듬기</span>
+            </button>
+          </div>
         </div>
       </div>
       <div className="trip-tabs">
         <button className={tab === "schedule" ? "is-active" : ""} type="button" onClick={() => setTab("schedule")}>일정</button>
         <button className={tab === "map" ? "is-active" : ""} type="button" onClick={() => setTab("map")}>지도</button>
-        <button className={tab === "budget" ? "is-active" : ""} type="button" onClick={() => setTab("budget")}>예산 <b>₩{formatWon(total)}</b></button>
         <button className={tab === "notes" ? "is-active" : ""} type="button" onClick={() => setTab("notes")}>여행 노트</button>
-        <button type="button" onClick={() => setPanel("history")}>버전 <b>{version || "-"}</b></button>
+        <button type="button" onClick={() => setPanel("history")}>변경 기록</button>
       </div>
 
-      {tab === "budget" ? (
-        <BudgetPanel items={items} />
-      ) : tab === "notes" ? (
+      {tab === "notes" ? (
         <section className="plan-notes paper-card">
           <span className="eyebrow">TRIP NOTES</span>
           <h2>둘이 남기는 메모</h2>
@@ -237,7 +256,7 @@ export function TripPlanner() {
               <div className="empty-soft planner-empty">
                 <h1>이 날에 올릴 장소가 없어요</h1>
                 <p>일정에 장소를 담으면 여기서 순서를 보여 줘요.</p>
-                <Link className="primary-button" href="/places">장소 담기</Link>
+                <Link className="primary-button" href={`/places?from=trip&day=${selectedDay}`}>이 날의 장소 찾기</Link>
               </div>
             )
           ) : (
@@ -246,7 +265,7 @@ export function TripPlanner() {
                 <div>
                   <span className="eyebrow">{dayLabel}</span>
                   <h2>{dayItems.length ? "이 날에 담은 장소" : "이 날은 아직 비어 있어요"}</h2>
-                  {startDate && <p className="form-hint">{dayDate} · 예상 ₩{formatWon(dayCost)}</p>}
+                  {startDate && <p className="form-hint">{dayDate}</p>}
                 </div>
               </div>
               {loaded && !dayItems.length ? (
@@ -254,8 +273,8 @@ export function TripPlanner() {
                   <h1>{items.length ? "이날은 비어 있어요" : "여행 초안이 비어 있어요"}</h1>
                   <p>Places에서 담고, 오른쪽 AI로 3안을 만들 수 있어요. 담기는 지금 고른 날에 붙어요.</p>
                   <div className="dialog-actions">
-                    <Link className="primary-button" href="/places">장소에서 추가</Link>
-                    <button className="outline-button" type="button" onClick={() => setPanel("ai")}>AI로 3안 만들기</button>
+                <Link className="primary-button" href={`/places?from=trip&day=${selectedDay}`}>이 날의 장소 찾기</Link>
+                {demoPlaces.length > 0 && <button className="outline-button" type="button" onClick={() => setPanel("ai")}>저장한 장소로 3안 만들기</button>}
                   </div>
                 </div>
               ) : (
@@ -263,9 +282,10 @@ export function TripPlanner() {
                   <PlanTimeline
                     items={dayItems}
                     onReorder={next => persist(mergeDay(items, selectedDay, next))}
+                    onUpdate={updateItem}
                     onRemove={id => persist(items.filter(item => item.id !== id))}
                   />
-                  <Link className="add-schedule" href="/places">＋ 이 날에 장소 추가</Link>
+                  <Link className="add-schedule" href={`/places?from=trip&day=${selectedDay}`}>＋ 이 날에 장소 추가</Link>
                 </>
               )}
             </section>

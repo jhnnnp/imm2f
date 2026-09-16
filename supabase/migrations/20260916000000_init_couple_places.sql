@@ -133,55 +133,6 @@ as $$
   )
 $$;
 
-create or replace function public.seed_demo_places(target_couple uuid, owner_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if exists (select 1 from public.places where couple_id = target_couple) then
-    return;
-  end if;
-
-  with seeded as (
-    insert into public.places (
-      couple_id, name, category, category_label, district, description,
-      duration_minutes, expected_cost_two, lng, lat, image, visual_tone, created_by
-    )
-    values
-      (target_couple, '카페 라파르', 'cafe', '카페', '군산 월명동', '조용한 창가와 오래 머물기 좋은 오후', 90, 22000, 126.7086, 35.9879, '/assets/cafe-memory.png', 'photo', owner_id),
-      (target_couple, '초원사진관', 'photo', '사진', '군산 신창동', '오래된 골목에서 남기는 둘의 한 장', 50, 0, 126.7108, 35.9892, null, 'brown', owner_id),
-      (target_couple, '은파호수공원', 'nature', '산책', '군산 나운동', '노을이 물 위에 머무는 느린 산책', 120, 0, 126.6894, 35.9553, null, 'blue', owner_id),
-      (target_couple, '이성당', 'cafe', '베이커리', '군산 중앙로', '여행 가방에 챙겨올 단팥빵 두 개', 40, 18000, 126.7116, 35.9871, null, 'brown', owner_id),
-      (target_couple, '마리서사', 'book', '책방', '군산 월명동', '여행 중 잠시 고르는 서로의 책', 60, 30000, 126.7049, 35.9898, null, 'green', owner_id),
-      (target_couple, '한주옥', 'restaurant', '한식', '군산 영화동', '여행의 시작을 여는 따뜻한 한 상', 70, 48000, 126.7082, 35.9906, null, 'brown', owner_id)
-    returning id, name
-  )
-  insert into public.place_preferences (place_id, user_id, status, fit)
-  select
-    seeded.id,
-    owner_id,
-    case seeded.name
-      when '카페 라파르' then 'want'
-      when '초원사진관' then 'want'
-      when '은파호수공원' then 'revisit'
-      when '이성당' then 'neutral'
-      when '마리서사' then 'must_visit'
-      else 'revisit'
-    end,
-    case seeded.name
-      when '카페 라파르' then 88
-      when '초원사진관' then 92
-      when '은파호수공원' then 90
-      when '이성당' then 78
-      when '마리서사' then 95
-      else 87
-    end
-  from seeded;
-end;
-$$;
-
 create or replace function public.ensure_own_couple()
 returns uuid
 language plpgsql
@@ -203,7 +154,6 @@ begin
 
   insert into public.couples (name) values ('우리') returning id into cid;
   insert into public.couple_members (couple_id, user_id, role) values (cid, uid, 'owner');
-  perform public.seed_demo_places(cid, uid);
   return cid;
 end;
 $$;

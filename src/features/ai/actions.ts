@@ -6,6 +6,7 @@ import { analyzePreferencesWithOpenAi, type PreferenceInsight } from "@/lib/open
 import { proposePlanEditsWithOpenAi } from "@/lib/openai/editPlan";
 import { generatePlanOptionsWithOpenAi } from "@/lib/openai/generatePlan";
 import type { PlanChange, PlanItem, PlanKind, PlanOption } from "@/features/planning/types/plan";
+import type { Place } from "@/features/places/types/place";
 
 export async function proposePlanEdits(input: {
   kind: PlanKind;
@@ -29,8 +30,9 @@ export async function proposePlanEdits(input: {
 export async function generatePlanOptions(input: {
   kind: PlanKind;
   prompt: string;
+  places?: Place[];
 }): Promise<{ options: PlanOption[]; note: string } | { error: string }> {
-  const { places } = await listPlaces();
+  const places = input.places ?? (await listPlaces()).places;
   const usable = places.filter(place => !["dislike", "not_interested"].includes(place.userStatus));
   return generatePlanOptionsWithOpenAi({
     kind: input.kind,

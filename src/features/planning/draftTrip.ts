@@ -6,6 +6,11 @@ const STORAGE_KEYS: Record<PlanKind, string> = {
   date: "only-us-draft-date",
 };
 const TRIP_DAY_KEY = "only-us-trip-day";
+const META_KEYS: Record<PlanKind, string> = {
+  trip: "only-us-draft-trip-meta",
+  date: "only-us-draft-date-meta",
+};
+export type DraftPlanMeta = { title: string; notes: string; startDate: string; dayCount: number };
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
@@ -29,9 +34,39 @@ function write(kind: PlanKind, items: PlanItem[]) {
   listeners.forEach(listener => listener());
 }
 
+export function getDraftPlanMeta(kind: PlanKind): DraftPlanMeta {
+  const fallback = {
+    title: kind === "date" ? "우리가 고른 데이트" : "우리가 고른 여행",
+    notes: "",
+    startDate: "",
+    dayCount: 1,
+  };
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(META_KEYS[kind]);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<DraftPlanMeta>;
+    return {
+      title: typeof parsed.title === "string" ? parsed.title : fallback.title,
+      notes: typeof parsed.notes === "string" ? parsed.notes : "",
+      startDate: typeof parsed.startDate === "string" ? parsed.startDate : "",
+      dayCount: Number.isFinite(parsed.dayCount) ? Math.max(1, Math.min(7, Number(parsed.dayCount))) : 1,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export function setDraftPlanMeta(kind: PlanKind, patch: Partial<DraftPlanMeta>) {
+  if (typeof window === "undefined") return;
+  const next = { ...getDraftPlanMeta(kind), ...patch };
+  window.localStorage.setItem(META_KEYS[kind], JSON.stringify(next));
+  listeners.forEach(listener => listener());
+}
+
 function nextStart(items: PlanItem[]) {
   const last = items.at(-1);
-  if (!last) return items.length && items[0]?.dayIndex ? "09:30" : "09:30";
+  if (!last) return "13:00";
   const [hours, minutes] = last.startTime.split(":").map(Number);
   const total = (hours || 0) * 60 + (minutes || 0) + (last.durationMinutes || 60) + 20;
   const hour = String(Math.floor(total / 60) % 24).padStart(2, "0");
@@ -95,6 +130,7 @@ function addPlaceToDraft(kind: PlanKind, place: Place, dayIndex: number) {
     order: items.length,
     memo: place.recommendReason || place.description || "",
     dayIndex,
+    coordinates: place.coordinates,
   };
   write(kind, [...items, item]);
   return { item, duplicate: false as const };

@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/layout/AppShell";
+import { DatePickerButton } from "@/components/shared/DatePickerButton";
+import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { AIPlanEditor } from "@/features/ai/components/AIPlanEditor";
-import { BudgetPanel } from "@/features/collaboration/components/BudgetPanel";
 import { VersionHistory } from "@/features/collaboration/components/VersionHistory";
 import { loadPlanVersions } from "@/features/collaboration/actions";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
-import { getDraftDateItems, setDraftDateItems, subscribeDraftTrip } from "@/features/planning/draftTrip";
+import { getDraftDateItems, getDraftPlanMeta, setDraftDateItems, setDraftPlanMeta, subscribeDraftTrip } from "@/features/planning/draftTrip";
+import { getDemoPlaces, subscribeDemoPlaces } from "@/features/places/demoPlaces";
+import type { Place } from "@/features/places/types/place";
 import { loadCouplePlan, saveCouplePlan } from "@/features/planning/actions";
 import type { PlanChange, PlanItem } from "@/features/planning/types/plan";
-import { formatKoDate, formatWon } from "@/lib/dates";
+import { formatKoDate } from "@/lib/dates";
 
 type Panel = "ai" | "history" | null;
 
@@ -21,12 +24,13 @@ export function DatePlanner() {
   const [notes, setNotes] = useState("");
   const [startDate, setStartDate] = useState("");
   const [loaded, setLoaded] = useState(false);
-  const [showBudget, setShowBudget] = useState(false);
   const [panel, setPanel] = useState<Panel>(null);
   const [version, setVersion] = useState(0);
   const [saveError, setSaveError] = useState("");
+  const [demoPlaces, setDemoPlaces] = useState<Place[]>([]);
+  const [notesSaveState, setNotesSaveState] = useState<"saved" | "typing" | "saving">("saved");
   const revisionRef = useRef(0);
-  const total = useMemo(() => items.reduce((sum, item) => sum + item.expectedCost, 0), [items]);
+  const notesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +39,7 @@ export function DatePlanner() {
       setVersion(versions.latest);
       revisionRef.current = result.revision;
       const stored = getDraftDateItems();
+      const localMeta = getDraftPlanMeta("date");
       if (result.persist && result.items.length) {
         setItems(result.items);
         setDraftDateItems(result.items);
@@ -49,18 +54,22 @@ export function DatePlanner() {
           });
         }
       }
-      if (result.title) setTitle(result.title);
-      if (result.notes) setNotes(result.notes);
-      if (result.startDate) setStartDate(result.startDate);
+      setTitle(result.title || localMeta.title);
+      setNotes(result.notes || localMeta.notes);
+      setStartDate(result.startDate || localMeta.startDate);
+      if (!result.persist) setDemoPlaces(getDemoPlaces());
       setLoaded(true);
     });
     const unsubscribe = subscribeDraftTrip(() => {
       const next = getDraftDateItems();
       if (next.length) setItems(next);
     });
+    const unsubscribePlaces = subscribeDemoPlaces(() => setDemoPlaces(getDemoPlaces()));
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribePlaces();
+      if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
     };
   }, []);
 
@@ -68,6 +77,12 @@ export function DatePlanner() {
     const mapped = next.map(item => ({ ...item, dayIndex: 0 }));
     setItems(mapped);
     setDraftDateItems(mapped);
+    setDraftPlanMeta("date", {
+      title: extra?.title ?? title,
+      notes: extra?.subtitle ?? notes,
+      startDate: extra && "startDate" in extra ? extra.startDate ?? "" : startDate,
+      dayCount: 1,
+    });
     setSaveError("");
     void saveCouplePlan("date", mapped, {
       title: extra?.title ?? title,
@@ -95,13 +110,30 @@ export function DatePlanner() {
     setPanel("history");
   };
 
+  const updateItem = (id: string, patch: Pick<PlanItem, "startTime" | "durationMinutes">) => {
+    persist(items.map(item => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  const saveNotes = (value: string) => {
+    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    setNotesSaveState("saving");
+    persist(items, { subtitle: value });
+    setNotesSaveState("saved");
+  };
+
+  const scheduleNotesSave = (value: string) => {
+    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    setNotesSaveState("typing");
+    notesTimerRef.current = setTimeout(() => saveNotes(value), 800);
+  };
+
   const replace = (next: PlanItem[]) => {
     persist(next);
     setPanel("history");
   };
 
   const context = panel === "ai"
-    ? <AIPlanEditor kind="date" items={items} onApply={apply} onReplace={replace} />
+    ? <AIPlanEditor kind="date" items={items} places={demoPlaces.length ? demoPlaces : undefined} onApply={apply} onReplace={replace} />
     : panel === "history"
       ? <VersionHistory kind="date" latest={version} onRestore={replace} />
       : undefined;
@@ -120,44 +152,52 @@ export function DatePlanner() {
             {!loaded
               ? "저장된 오후 일정을 가져오고 있어요."
               : items.length
-                ? `${items.length}곳 · 예상 ₩${formatWon(total)}${startDate ? ` · ${formatKoDate(startDate)}` : ""}`
+                ? `${items.length}곳${startDate ? ` · ${formatKoDate(startDate)}` : ""}`
                 : "장소를 담고 AI로 3안을 고를 수 있어요."}
           </p>
         </div>
-        <div className="page-actions">
-          <label className="date-field">
-            <span>날짜</span>
-            <input
-              type="date"
-              value={startDate}
-              onChange={event => {
-                setStartDate(event.target.value);
-                persist(items, { startDate: event.target.value || null });
-              }}
-            />
-          </label>
-          <button className="outline-button" type="button" onClick={() => setShowBudget(value => !value)}>
-            {showBudget ? "일정 보기" : `예산 ₩${formatWon(total)}`}
-          </button>
-          <button className="outline-button" type="button" onClick={() => setPanel(panel === "history" ? null : "history")}>
-            버전 {version || "-"}
-          </button>
-          <button className="more-button" type="button" onClick={() => setPanel(panel === "ai" ? null : "ai")}>AI</button>
-          <Link className="primary-button" href="/places">장소에서 추가</Link>
+        <div className="page-actions date-planner-actions">
+          <DatePickerButton
+            value={startDate}
+            emptyLabel="날짜 고르기"
+            ariaLabel="데이트 날짜"
+            onChange={value => {
+              setStartDate(value);
+              persist(items, { startDate: value || null });
+            }}
+          />
+          {(items.length > 0 || demoPlaces.length > 0) && (
+            <div className="date-action-group">
+              {items.length > 0 && (
+                <button className={`date-action-button is-history ${panel === "history" ? "is-active" : ""}`} type="button" onClick={() => setPanel(panel === "history" ? null : "history")}>
+                  <HeaderActionIcon name="history" />
+                  <span>변경 기록</span>
+                </button>
+              )}
+              <button className={`date-action-button is-ai ${panel === "ai" ? "is-active" : ""}`} type="button" onClick={() => setPanel(panel === "ai" ? null : "ai")}>
+                <HeaderActionIcon name="sparkles" />
+                <span>AI로 다듬기</span>
+              </button>
+              {items.length > 0 && (
+                <Link className="date-action-button is-primary" href="/places?from=date">
+                  <HeaderActionIcon name="plus" />
+                  <span>장소 더 담기</span>
+                </Link>
+              )}
+            </div>
+          )}
         </div>
       </div>
       {saveError && <p className="form-hint">{saveError}</p>}
       {!loaded ? (
         <p className="form-hint">일정을 불러오는 중이에요.</p>
-      ) : showBudget ? (
-        <BudgetPanel items={items} />
       ) : !items.length ? (
         <div className="empty-soft">
           <h1>데이트 초안이 비어 있어요</h1>
-          <p>저장한 장소로 오후 일정을 만들어 보세요. AI는 새 장소를 만들지 않아요.</p>
+          <p>{demoPlaces.length ? `저장한 장소 ${demoPlaces.length}곳으로 일정을 만들거나, 새 장소를 더 골라 보세요.` : "가고 싶은 장소를 먼저 고르면 오후 일정으로 이어 드려요."}</p>
           <div className="dialog-actions">
-            <Link className="primary-button" href="/places">장소에서 추가</Link>
-            <button className="outline-button" type="button" onClick={() => setPanel("ai")}>AI로 3안 만들기</button>
+            <Link className="primary-button" href="/places?from=date">첫 장소 찾기</Link>
+            {demoPlaces.length > 0 && <button className="outline-button" type="button" onClick={() => setPanel("ai")}>저장한 장소로 3안 만들기</button>}
           </div>
         </div>
       ) : (
@@ -170,7 +210,7 @@ export function DatePlanner() {
               <div className="date-tags">
                 {items.slice(0, 3).map(item => <b key={item.id}>{item.placeName}</b>)}
               </div>
-              <Link className="text-link date-feature-link" href="/places">장소 더 담기 →</Link>
+              <Link className="text-link date-feature-link" href="/places?from=date">장소 더 담기 →</Link>
             </div>
           </article>
           <section className="date-plan paper-card">
@@ -179,19 +219,24 @@ export function DatePlanner() {
                 <span className="eyebrow">SHARED PLAN</span>
                 <h2>{startDate ? formatKoDate(startDate) : "날짜를 아직 안 골랐어요"}</h2>
               </div>
-              <b className="budget-total">₩{formatWon(total)}</b>
             </div>
-            <PlanTimeline items={items} onReorder={persist} onRemove={id => persist(items.filter(item => item.id !== id))} />
-            <Link className="add-schedule" href="/places">＋ 장소 추가</Link>
+            <PlanTimeline items={items} onReorder={persist} onUpdate={updateItem} onRemove={id => persist(items.filter(item => item.id !== id))} />
+            <Link className="add-schedule" href="/places?from=date">＋ 장소 추가</Link>
             <label className="field date-notes">
               <span>둘만의 메모</span>
               <textarea
                 value={notes}
-                onChange={event => setNotes(event.target.value)}
-                onBlur={() => persist(items, { subtitle: notes })}
+                onChange={event => {
+                  setNotes(event.target.value);
+                  scheduleNotesSave(event.target.value);
+                }}
+                onBlur={() => notesSaveState !== "saved" && saveNotes(notes)}
                 placeholder="몇 시에 만날지, 비가 오면 어디로 갈지"
                 rows={4}
               />
+              <span className={`memo-save-state is-${notesSaveState}`} role="status">
+                {notesSaveState === "typing" ? "입력 중 · 잠시 후 자동 저장" : notesSaveState === "saving" ? "저장 중…" : "✓ 자동 저장됨"}
+              </span>
             </label>
           </section>
         </div>

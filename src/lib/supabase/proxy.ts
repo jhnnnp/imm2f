@@ -1,14 +1,18 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseKey, getSupabaseUrl, isSupabaseConfigured } from "./env";
+import { DEMO_COOKIE_NAME, DEMO_COOKIE_VALUE } from "@/features/auth/demo";
 
-const PUBLIC_PREFIXES = ["/login", "/signup", "/invite", "/auth"];
+const PUBLIC_PREFIXES = ["/login", "/signup", "/invite", "/auth", "/demo"];
 
 function isPublicPath(pathname: string) {
   return PUBLIC_PREFIXES.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
 export async function updateSession(request: NextRequest) {
+  const isDemo = request.cookies.get(DEMO_COOKIE_NAME)?.value === DEMO_COOKIE_VALUE;
+  if (isDemo) return NextResponse.next({ request });
+
   if (!isSupabaseConfigured()) {
     return NextResponse.next({ request });
   }

@@ -14,13 +14,24 @@ export function addDays(iso: string, amount: number) {
 export function formatKoDate(iso: string) {
   const date = new Date(`${iso}T12:00:00`);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "short" });
+  return date.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
 }
 
 export function formatKoShort(iso: string) {
   const date = new Date(`${iso}T12:00:00`);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
+}
+
+export function formatKoPicker(iso: string) {
+  const date = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString("ko-KR", {
+    year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
 }
 
 export function formatWon(value: number) {

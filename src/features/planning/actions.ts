@@ -99,7 +99,13 @@ export async function loadCouplePlan(kind: PlanKind): Promise<CouplePlan> {
     itemRows = withoutDay.data;
   }
 
-  const items = (itemRows ?? []).map(item => toItem(item as PlanItemRow));
+  let items = (itemRows ?? []).map(item => toItem(item as PlanItemRow));
+  const placeIds = [...new Set(items.map(item => item.placeId).filter(id => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)))];
+  if (placeIds.length) {
+    const { data: placeRows } = await supabase.from("places").select("id, lng, lat").in("id", placeIds);
+    const coordinates = new Map((placeRows ?? []).filter(row => row.lng != null && row.lat != null).map(row => [row.id, [Number(row.lng), Number(row.lat)] as [number, number]]));
+    items = items.map(item => ({ ...item, coordinates: coordinates.get(item.placeId) ?? null }));
+  }
   const subtitle = plan.subtitle ?? "";
   const maxDay = items.reduce((max, item) => Math.max(max, item.dayIndex + 1), 1);
   return {

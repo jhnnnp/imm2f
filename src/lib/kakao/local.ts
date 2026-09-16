@@ -174,7 +174,7 @@ export async function searchKakaoPlacesRemote(input: KakaoSearchInput): Promise<
   const keys = getKakaoApiKeys();
   if (!keys.length) return { ok: false, code: "not_configured", error: "카카오 키가 없어요. .env.local을 확인해 주세요." };
 
-  let lastError: KakaoSearchResult = { ok: false, code: "unavailable", error: "카카오 검색을 불러오지 못했어요." };
+  let lastError: KakaoSearchResult = { ok: false, code: "unavailable", error: "장소를 불러오지 못했어요." };
 
   try {
     for (const key of keys) {
@@ -201,7 +201,7 @@ export async function searchKakaoPlacesRemote(input: KakaoSearchInput): Promise<
     }
     return lastError;
   } catch {
-    return { ok: false, code: "unavailable", error: "카카오 검색을 불러오지 못했어요." };
+    return { ok: false, code: "unavailable", error: "장소를 불러오지 못했어요." };
   }
 }
 

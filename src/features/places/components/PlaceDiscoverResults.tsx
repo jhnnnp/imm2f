@@ -34,7 +34,7 @@ export function PlaceDiscoverResults({
   onManual?: () => void;
 }) {
   if (error) return <div className="empty-inline" role="alert"><h2>검색을 불러오지 못했어요.</h2><p>{error}</p></div>;
-  if (pending && !places.length) return <div className="empty-inline"><h2>장소를 찾고 있어요.</h2><p>외부 후보를 가져온 뒤, 저장한 취향이 있으면 순서만 맞춰요. 저장하기 전까지는 DB에 남지 않아요.</p></div>;
+  if (pending && !places.length) return <div className="empty-inline"><h2>장소를 찾고 있어요.</h2><p>이 조건에 맞는 후보를 모으고 있어요.</p></div>;
   if (!places.length) {
     return <div className="empty-inline">
       <h2>{emptyTitle}</h2>

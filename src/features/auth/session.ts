@@ -1,8 +1,10 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
+import { DEMO_COOKIE_NAME, DEMO_COOKIE_VALUE } from "./demo";
 import type { AppSession } from "./types";
 
 function safeNextPath(value: FormDataEntryValue | string | null) {
@@ -18,6 +20,8 @@ function authErrorMessage(message: string) {
 }
 
 export async function getAppSession(): Promise<AppSession> {
+  const cookieStore = await cookies();
+  if (cookieStore.get(DEMO_COOKIE_NAME)?.value === DEMO_COOKIE_VALUE) return { mode: "demo" };
   if (!isSupabaseConfigured()) return { mode: "prototype" };
   const supabase = await createClient();
   if (!supabase) return { mode: "guest" };
@@ -62,6 +66,7 @@ export async function signIn(formData: FormData) {
   if (error) return { error: authErrorMessage(error.message) };
 
   await supabase.rpc("ensure_own_couple");
+  (await cookies()).delete(DEMO_COOKIE_NAME);
   redirect(safeNextPath(formData.get("next")));
 }
 
@@ -110,12 +115,14 @@ export async function signUp(formData: FormData) {
     if (coupleError) return { error: coupleError.message };
   }
 
+  (await cookies()).delete(DEMO_COOKIE_NAME);
   redirect("/");
 }
 
 export async function signOut() {
   const supabase = await createClient();
   if (supabase) await supabase.auth.signOut();
+  (await cookies()).delete(DEMO_COOKIE_NAME);
   redirect("/login");
 }
 

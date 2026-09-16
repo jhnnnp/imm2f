@@ -1,19 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { saveCouplePlan } from "@/features/planning/actions";
 import type { CouplePlan } from "@/features/planning/types/plan";
-import { addDays, formatKoDate, formatKoShort, toIsoDate } from "@/lib/dates";
+import { addDays, formatKoDate, toIsoDate } from "@/lib/dates";
+import { getDraftDateItems, getDraftPlanMeta, getDraftTripItems, setDraftPlanMeta } from "@/features/planning/draftTrip";
 
 type MemoryMark = { id: string; title: string; happenedOn: string };
 
 function startOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function daysInMonth(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
 }
 
 function shiftMonth(date: Date, delta: number) {
@@ -35,6 +32,10 @@ export function CalendarBoard({
   const [tripStart, setTripStart] = useState(trip.startDate ?? "");
   const [dateStart, setDateStart] = useState(date.startDate ?? "");
   const [notice, setNotice] = useState("");
+  const [tripPlan, setTripPlan] = useState(trip);
+  const [datePlan, setDatePlan] = useState(date);
+  const [modalOpen, setModalOpen] = useState(false);
+  const modalCloseRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const now = new Date();
@@ -42,43 +43,65 @@ export function CalendarBoard({
     const iso = toIsoDate(now);
     setTodayIso(iso);
     setSelected(iso);
+    if (!trip.persist) {
+      const meta = getDraftPlanMeta("trip");
+      const items = getDraftTripItems();
+      setTripPlan({ ...trip, items, title: meta.title, notes: meta.notes, startDate: meta.startDate || null, dayCount: meta.dayCount });
+      setTripStart(meta.startDate);
+    }
+    if (!date.persist) {
+      const meta = getDraftPlanMeta("date");
+      const items = getDraftDateItems();
+      setDatePlan({ ...date, items, title: meta.title, notes: meta.notes, startDate: meta.startDate || null, dayCount: 1 });
+      setDateStart(meta.startDate);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    modalCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setModalOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [modalOpen]);
 
   const tripDays = useMemo(() => {
     if (!tripStart) return new Set<string>();
-    return new Set(Array.from({ length: Math.max(1, trip.dayCount || 1) }, (_, index) => addDays(tripStart, index)));
-  }, [tripStart, trip.dayCount]);
+    return new Set(Array.from({ length: Math.max(1, tripPlan.dayCount || 1) }, (_, index) => addDays(tripStart, index)));
+  }, [tripStart, tripPlan.dayCount]);
 
   const selectedEvents = useMemo(() => {
     if (!selected) return [] as Array<{ kind: string; title: string; href: string; detail: string }>;
     const events = [];
-    if (tripDays.has(selected) && trip.items.length) {
+    if (tripDays.has(selected) && tripPlan.items.length) {
       const offset = [...tripDays].sort().indexOf(selected);
       events.push({
         kind: "여행",
-        title: trip.title || "우리가 고른 여행",
+        title: tripPlan.title || "우리가 고른 여행",
         href: "/trip",
-        detail: `DAY ${offset + 1} · ${trip.items.filter(item => (item.dayIndex ?? 0) === offset).length || trip.items.length}곳`,
+        detail: `DAY ${offset + 1} · ${tripPlan.items.filter(item => (item.dayIndex ?? 0) === offset).length}곳`,
       });
     }
-    if (dateStart === selected && date.items.length) {
+    if (dateStart === selected && datePlan.items.length) {
       events.push({
         kind: "데이트",
-        title: date.title || "우리가 고른 데이트",
+        title: datePlan.title || "우리가 고른 데이트",
         href: "/date",
-        detail: `${date.items.length}곳`,
+        detail: `${datePlan.items.length}곳`,
       });
     }
     memories.filter(item => item.happenedOn === selected).forEach(item => {
       events.push({ kind: "추억", title: item.title, href: "/memories", detail: "그날의 기록" });
     });
     return events;
-  }, [selected, tripDays, trip, dateStart, date, memories]);
+  }, [selected, tripDays, tripPlan, dateStart, datePlan, memories]);
 
   async function assign(kind: "trip" | "date") {
     const startDate = selected || todayIso;
     if (!startDate) return;
-    const plan = kind === "trip" ? trip : date;
+    const plan = kind === "trip" ? tripPlan : datePlan;
     const result = await saveCouplePlan(kind, plan.items, {
       title: plan.title,
       subtitle: plan.notes,
@@ -92,6 +115,7 @@ export function CalendarBoard({
     }
     if (kind === "trip") setTripStart(startDate);
     else setDateStart(startDate);
+    if (!plan.persist) setDraftPlanMeta(kind, { startDate });
     setNotice(kind === "trip" ? "여행 시작일을 붙였어요." : "데이트 날짜를 붙였어요.");
   }
 
@@ -101,83 +125,105 @@ export function CalendarBoard({
 
   const view = cursor;
   const first = startOfMonth(view);
-  const total = daysInMonth(view);
   const pad = (first.getDay() + 6) % 7;
-  const cells = [...Array(pad).fill(null), ...Array.from({ length: total }, (_, i) => i + 1)];
+  const total = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
+  const cellCount = Math.ceil((pad + total) / 7) * 7;
+  const gridStart = new Date(view.getFullYear(), view.getMonth(), 1 - pad);
+  const cells = Array.from({ length: cellCount }, (_, index) => {
+    const cellDate = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index);
+    return {
+      date: cellDate,
+      day: cellDate.getDate(),
+      iso: toIsoDate(cellDate),
+      outside: cellDate.getMonth() !== view.getMonth(),
+    };
+  });
   const monthLabel = view.toLocaleDateString("ko-KR", { year: "numeric", month: "long" });
 
-  function isoFor(day: number) {
-    return toIsoDate(new Date(view.getFullYear(), view.getMonth(), day));
+  function goToday() {
+    const now = new Date();
+    setCursor(now);
+    setSelected(toIsoDate(now));
   }
 
   return (
     <div className="calendar-layout">
       <div className="calendar-grid">
         <div className="calendar-month-nav">
-          <button type="button" className="outline-button" onClick={() => setCursor(current => (current ? shiftMonth(current, -1) : current))} aria-label="이전 달">이전</button>
-          <strong>{monthLabel}</strong>
-          <button type="button" className="outline-button" onClick={() => setCursor(current => (current ? shiftMonth(current, 1) : current))} aria-label="다음 달">다음</button>
+          <div className="calendar-month-controls">
+            <button type="button" className="calendar-nav-button" onClick={() => setCursor(current => (current ? shiftMonth(current, -1) : current))} aria-label="이전 달">‹</button>
+            <strong>{monthLabel}</strong>
+            <button type="button" className="calendar-nav-button" onClick={() => setCursor(current => (current ? shiftMonth(current, 1) : current))} aria-label="다음 달">›</button>
+          </div>
+          <button type="button" className="calendar-today-button" onClick={goToday}>오늘</button>
         </div>
         <div className="week labels">{["월", "화", "수", "목", "금", "토", "일"].map(day => <span key={day}>{day}</span>)}</div>
         <div className="week dates calendar-dates">
-          {cells.map((day, index) => {
-            if (!day) return <span key={`pad-${index}`} />;
-            const iso = isoFor(day);
+          {cells.map(cell => {
+            const iso = cell.iso;
             const isToday = iso === todayIso;
             const isSelected = iso === selected;
             const marks = [
-              tripDays.has(iso) ? "여행" : "",
-              dateStart === iso ? "데이트" : "",
-              memories.some(item => item.happenedOn === iso) ? "추억" : "",
+              tripDays.has(iso) ? { label: "여행", className: "is-trip" } : null,
+              dateStart === iso ? { label: "데이트", className: "is-date" } : null,
+              memories.some(item => item.happenedOn === iso) ? { label: "추억", className: "is-memory" } : null,
             ].filter(Boolean);
             return (
               <button
                 type="button"
-                className={`${isToday ? "today-cell" : ""} ${isSelected ? "is-selected" : ""} ${tripDays.has(iso) ? "trip-cell" : ""} ${dateStart === iso ? "date-cell" : ""}`}
-                key={day}
+                className={`${isToday ? "today-cell" : ""} ${isSelected ? "is-selected" : ""} ${cell.outside ? "is-outside" : ""}`}
+                key={iso}
                 aria-current={isToday ? "date" : undefined}
                 aria-pressed={isSelected}
-                onClick={() => setSelected(iso)}
+                onClick={() => {
+                  setSelected(iso);
+                  setModalOpen(true);
+                  if (cell.outside) setCursor(startOfMonth(cell.date));
+                }}
               >
-                <b>{day}</b>
-                {marks.slice(0, 2).map(mark => <small key={mark}>{mark}</small>)}
+                <b>{cell.day}</b>
+                <span className="calendar-cell-events">
+                  {marks.slice(0, 2).map(mark => mark && <small className={mark.className} key={mark.label}>{mark.label}</small>)}
+                  {marks.length > 2 && <small className="is-more">+{marks.length - 2}</small>}
+                </span>
               </button>
             );
           })}
         </div>
       </div>
-      <aside className="calendar-side">
-        <article className="paper-card">
-          <span className="eyebrow">SELECTED DAY</span>
-          <h2>{selected ? formatKoDate(selected) : "날짜를 고르면 일정이 보여요"}</h2>
-          {notice && <p className="form-hint">{notice}</p>}
-          {selectedEvents.length ? selectedEvents.map(event => (
-            <Link className="calendar-event" href={event.href} key={`${event.kind}-${event.title}`}>
-              <span>{event.kind}</span>
-              <b>{event.title}</b>
-              <small>{event.detail}</small>
-            </Link>
-          )) : (
-            <p className="form-hint">이 날에는 아직 붙은 일정이 없어요.</p>
-          )}
-          <div className="dialog-actions calendar-assign">
-            {trip.items.length ? <button className="outline-button" type="button" onClick={() => void assign("trip")}>{tripStart ? "여행 시작일 바꾸기" : "여행 시작일로"}</button> : null}
-            {date.items.length ? <button className="primary-button" type="button" onClick={() => void assign("date")}>{dateStart ? "데이트 날짜 바꾸기" : "데이트 날짜로"}</button> : null}
-          </div>
-        </article>
-        <article className="paper-card">
-          <span className="eyebrow">TRIP</span>
-          <h2>{trip.items.length ? trip.title || "우리가 고른 여행" : "저장된 여행 없음"}</h2>
-          <p>{trip.items.length ? `${trip.dayCount}일 · ${trip.items.length}곳${tripStart ? ` · ${formatKoShort(tripStart)}부터` : " · 시작일을 아직 안 붙였어요"}` : "장소를 담으면 여행 초안이 생겨요."}</p>
-          <Link className="quiet-link" href="/trip">여행 보기 →</Link>
-        </article>
-        <article className="paper-card">
-          <span className="eyebrow">DATE</span>
-          <h2>{date.items.length ? date.title || "우리가 고른 데이트" : "저장된 데이트 없음"}</h2>
-          <p>{date.items.length ? `${date.items.length}곳${dateStart ? ` · ${formatKoDate(dateStart)}` : " · 날짜를 아직 안 붙였어요"}` : "오후 일정도 같은 방식으로 만들 수 있어요."}</p>
-          <Link className="quiet-link" href="/date">데이트 보기 →</Link>
-        </article>
-      </aside>
+      {modalOpen && (
+        <div className="calendar-modal-backdrop" role="presentation" onMouseDown={event => {
+          if (event.target === event.currentTarget) setModalOpen(false);
+        }}>
+          <section className="calendar-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-modal-title">
+            <button ref={modalCloseRef} className="calendar-modal-close" type="button" aria-label="닫기" onClick={() => setModalOpen(false)}>×</button>
+            <span className="eyebrow">DAY DETAILS</span>
+            <h2 id="calendar-modal-title">{selected ? formatKoDate(selected) : "선택한 날짜"}</h2>
+            {notice && <p className="calendar-modal-notice">{notice}</p>}
+            {selectedEvents.length > 0 ? (
+              <div className="calendar-event-list">
+                {selectedEvents.map(event => (
+                  <Link className="calendar-event" href={event.href} key={`${event.kind}-${event.title}`}>
+                    <span>{event.kind}</span>
+                    <b>{event.title}</b>
+                    <small>{event.detail}</small>
+                    <em>일정 보기 →</em>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <div className="calendar-modal-empty">
+                <b>아직 일정이 없는 날이에요.</b>
+                <p>이 날짜를 데이트 날짜나 여행 시작일로 지정할 수 있어요.</p>
+              </div>
+            )}
+            <div className="calendar-assign">
+              {tripPlan.items.length ? <button className="outline-button" type="button" onClick={() => void assign("trip")}>{tripStart ? "여행 시작일 변경" : "여행 시작일로"}</button> : null}
+              {datePlan.items.length ? <button className="primary-button" type="button" onClick={() => void assign("date")}>{dateStart ? "데이트 날짜 변경" : "데이트 날짜로"}</button> : null}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

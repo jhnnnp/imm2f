@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
+import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { createClient } from "@/lib/supabase/client";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { createMemory } from "../actions";
@@ -99,8 +100,8 @@ export function MemoryTimeline({
       locationLabel: locationLabel || selected?.district || selected?.name || "",
       placeId: placeId || null,
       coverUrl: photoUrl,
-      lng: selected?.coordinates[0] ?? null,
-      lat: selected?.coordinates[1] ?? null,
+      lng: selected?.coordinates?.[0] ?? null,
+      lat: selected?.coordinates?.[1] ?? null,
       memoryType,
     });
     setPending(false);
@@ -201,7 +202,7 @@ export function MemoryTimeline({
           <h1>함께여서 기억나는 장면들</h1>
           <p>사진보다 먼저 떠오르는 마음까지 천천히 모아두었어요.</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => setOpen(true)}>추억 남기기</button>
+        <button className="date-action-button is-primary" type="button" onClick={() => setOpen(true)}><HeaderActionIcon name="plus" /><span>추억 남기기</span></button>
       </div>
       <div className="memory-tabs">
         {([

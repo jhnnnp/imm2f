@@ -41,7 +41,7 @@ export function candidateToPlace(candidate: DiscoverCandidate, extras?: { userFi
 }
 
 export function placeToCandidate(place: Place): DiscoverCandidate | null {
-  if (!place.externalPlaceId) return null;
+  if (!place.externalPlaceId || !place.coordinates) return null;
   return {
     externalSource: place.externalSource === "tourapi" ? "tourapi" : "kakao",
     externalPlaceId: place.externalPlaceId,

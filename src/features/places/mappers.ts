@@ -7,7 +7,6 @@ type PlaceRow = Database["public"]["Tables"]["places"]["Row"] & {
 };
 
 const STATUSES: PlacePreferenceStatus[] = ["visited", "want", "must_visit", "revisit", "neutral", "dislike", "not_interested"];
-export const DEFAULT_COORDINATES: [number, number] = [126.7116, 35.9871];
 const TONE_BY_CATEGORY: Record<PlaceCategoryId, Place["visualTone"]> = {
   cafe: "brown",
   restaurant: "brown",
@@ -50,7 +49,7 @@ export function mapPlaceRow(row: PlaceRow, userId: string, partnerId: string | n
     description: row.description,
     durationMinutes: row.duration_minutes,
     expectedCostTwo: row.expected_cost_two,
-    coordinates: row.lng != null && row.lat != null ? [row.lng, row.lat] : DEFAULT_COORDINATES,
+    coordinates: row.lng != null && row.lat != null ? [row.lng, row.lat] : null,
     image: row.image ?? undefined,
     visualTone: (["photo", "blue", "brown", "green"] as const).includes(row.visual_tone as Place["visualTone"])
       ? (row.visual_tone as Place["visualTone"])

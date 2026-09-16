@@ -9,6 +9,7 @@ export type PlanItem = {
   order: number;
   memo: string;
   dayIndex: number;
+  coordinates?: [number, number] | null;
 };
 
 export type CouplePlan = {

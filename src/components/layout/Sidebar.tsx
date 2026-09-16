@@ -7,6 +7,7 @@ import { NAVIGATION } from "./navigation";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { initialFromName } from "@/features/auth/types";
 import { listPlaces } from "@/features/places/actions";
+import { BrandMark, SidebarIcon } from "./SidebarIcon";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -30,8 +31,8 @@ export function Sidebar() {
   return (
     <aside className="sidebar" aria-label="주요 메뉴">
       <Link className="brand" href="/" aria-label="홈으로 이동">
-        <span className="brand-mark">US</span>
-        <span><strong>ONLY US</strong><small>private space for two</small></span>
+        <span className="brand-mark"><BrandMark /></span>
+        <span className="brand-copy"><strong>ONLY US</strong><small>PRIVATE SPACE FOR TWO</small></span>
       </Link>
       <nav className="nav-list">
         {NAVIGATION.map((item, index) => {
@@ -40,7 +41,7 @@ export function Sidebar() {
           const count = item.href === "/places" ? placeCount : null;
           return (
             <Link className={`nav-item ${active ? "is-active" : ""}`} href={item.href} key={item.href}>
-              <span>{item.icon}</span>{item.label}
+              <span className="nav-icon-wrap"><SidebarIcon name={item.iconName} /></span>{item.label}
               {count != null && count > 0 && <em>{count}</em>}
             </Link>
           );
@@ -53,13 +54,13 @@ export function Sidebar() {
           <small>
             {session.mode === "authenticated"
               ? session.partner ? "연결된 둘의 공간" : "파트너를 초대해 주세요"
-              : "로그인하면 둘이 같은 공간을 봐요"}
+              : session.mode === "demo" ? "로그인 없는 체험 공간" : "로그인하면 둘이 같은 공간을 봐요"}
           </small>
         </div>
         {session.mode === "authenticated" && !session.partner
           ? <Link href="/invite">초대</Link>
           : session.mode !== "authenticated"
-            ? <Link href="/login">로그인</Link>
+            ? <Link href={session.mode === "demo" ? "/demo/exit" : "/login"}>{session.mode === "demo" ? "나가기" : "로그인"}</Link>
             : null}
       </div>
     </aside>

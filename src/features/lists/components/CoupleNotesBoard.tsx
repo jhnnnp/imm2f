@@ -4,6 +4,7 @@ import { useState } from "react";
 import { formatKoDate } from "@/lib/dates";
 import { createNote, deleteNote, updateNoteStatus } from "../actions";
 import { NOTE_COPY, NOTE_STATUS, type CoupleNote, type NoteKind } from "../types";
+import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 
 export function CoupleNotesBoard({
   kind,
@@ -55,7 +56,7 @@ export function CoupleNotesBoard({
           <h1>{copy.title}</h1>
           <p>{copy.lead}</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => setOpen(true)}>새로 남기기</button>
+        <button className="date-action-button is-primary" type="button" onClick={() => setOpen(true)}><HeaderActionIcon name="plus" /><span>새로 남기기</span></button>
       </div>
       {!persist && <p className="inline-notice" role="status">로그인하면 둘이 같은 목록을 봐요. <a href="/login">로그인</a></p>}
       {!notes.length ? (

@@ -116,10 +116,10 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
     const response = await fetch(url, { cache: "no-store" });
     const text = await response.text();
     if (response.status === 429) {
-      return { ok: false, code: "rate_limited", error: "TourAPI 한도를 잠시 넘었어요. 조금 뒤에 다시 시도해 주세요." };
+      return { ok: false, code: "rate_limited", error: "검색 한도를 잠시 넘었어요. 조금 뒤에 다시 시도해 주세요." };
     }
     if (!response.ok) {
-      return { ok: false, code: "unavailable", error: "TourAPI를 불러오지 못했어요." };
+      return { ok: false, code: "unavailable", error: "장소를 불러오지 못했어요." };
     }
     if (text.trim().startsWith("<")) {
       return { ok: false, code: "invalid_key", error: "TourAPI 키가 거부되었어요. data.go.kr에서 KorService2 활용신청과 키를 확인해 주세요." };
@@ -127,11 +127,11 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
     const payload = JSON.parse(text) as TourResponse;
     const code = payload.response?.header?.resultCode ?? "";
     if (code && code !== "0000") {
-      return { ok: false, code: "unavailable", error: payload.response?.header?.resultMsg || "TourAPI를 불러오지 못했어요." };
+      return { ok: false, code: "unavailable", error: payload.response?.header?.resultMsg || "장소를 불러오지 못했어요." };
     }
     return { ok: true, payload, page: Number(params.pageNo || "1") };
   } catch {
-    return { ok: false, code: "unavailable", error: "TourAPI를 불러오지 못했어요." };
+    return { ok: false, code: "unavailable", error: "장소를 불러오지 못했어요." };
   }
 }
 

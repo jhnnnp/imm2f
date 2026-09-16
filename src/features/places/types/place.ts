@@ -24,7 +24,7 @@ export type Place = {
   description: string;
   durationMinutes: number;
   expectedCostTwo: number | null;
-  coordinates: [number, number];
+  coordinates: [number, number] | null;
   image?: string;
   visualTone: "photo" | "blue" | "brown" | "green";
   userStatus: PlacePreferenceStatus;
