@@ -7,14 +7,6 @@ import { visualToneForCategory } from "../mappers";
 import type { DiscoverCandidate, Place, PlaceCategoryId } from "../types/place";
 import { withObjectParticle } from "@/lib/korean";
 
-const STAY_OPTIONS = [
-  { minutes: 30, label: "30분" },
-  { minutes: 60, label: "1시간" },
-  { minutes: 90, label: "1시간 30분" },
-  { minutes: 120, label: "2시간" },
-  { minutes: 180, label: "3시간" },
-] as const;
-
 export function PlaceCreateDialog({
   open,
   mode,
@@ -43,7 +35,7 @@ export function PlaceCreateDialog({
 
   if (!open) return null;
 
-  function localFromCandidate(item: DiscoverCandidate, description: string, durationMinutes: number, expectedCostTwo: number | null): Place {
+  function localFromCandidate(item: DiscoverCandidate, description: string): Place {
     const source = item.externalSource === "tourapi" ? "tourapi" : "kakao";
     return {
       id: `${source}-${item.externalPlaceId}`,
@@ -57,8 +49,8 @@ export function PlaceCreateDialog({
       phone: item.phone,
       openingHours: item.openingHours ?? null,
       description,
-      durationMinutes,
-      expectedCostTwo,
+      durationMinutes: 60,
+      expectedCostTwo: null,
       coordinates: item.coordinates,
       image: item.image,
       visualTone: visualToneForCategory(item.category),
@@ -76,19 +68,16 @@ export function PlaceCreateDialog({
     setPending(true);
     setError("");
     const description = String(formData.get("description") ?? "").trim();
-    const durationMinutes = Number(formData.get("durationMinutes") ?? 60);
-    const costRaw = String(formData.get("expectedCostTwo") ?? "").trim();
-    const expectedCostTwo = costRaw === "" ? null : Number(costRaw);
 
     if (!persist) {
       if (savedKakaoIds.includes(`${candidate.externalSource}:${candidate.externalPlaceId}`) || savedKakaoIds.includes(candidate.externalPlaceId)) {
         setPending(false);
-        onSaved(localFromCandidate(candidate, description, durationMinutes, expectedCostTwo), `${candidate.name}은 이미 저장된 장소예요.`);
+        onSaved(localFromCandidate(candidate, description), `${candidate.name}은 이미 저장된 장소예요.`);
         onClose();
         return;
       }
       onSaved(
-        localFromCandidate(candidate, description, durationMinutes, expectedCostTwo),
+        localFromCandidate(candidate, description),
         `${withObjectParticle(candidate.name)} 이 기기에 저장했어요. 데모를 나가기 전까지 유지돼요.`,
       );
       setPending(false);
@@ -96,7 +85,7 @@ export function PlaceCreateDialog({
       return;
     }
 
-    const result = await saveKakaoPlace({ candidate, description, durationMinutes, expectedCostTwo });
+    const result = await saveKakaoPlace({ candidate, description, durationMinutes: 60, expectedCostTwo: null });
     setPending(false);
     if ("error" in result) {
       setError(result.error);
@@ -109,14 +98,13 @@ export function PlaceCreateDialog({
   async function submitManual(formData: FormData) {
     setPending(true);
     setError("");
-    const costRaw = String(formData.get("expectedCostTwo") ?? "").trim();
     const input = {
       name: String(formData.get("name") ?? ""),
       category: String(formData.get("category") ?? "cafe") as PlaceCategoryId,
       district: String(formData.get("district") ?? ""),
       description: String(formData.get("description") ?? ""),
-      durationMinutes: Number(formData.get("durationMinutes") ?? 60),
-      expectedCostTwo: costRaw === "" ? null : Number(costRaw),
+      durationMinutes: 60,
+      expectedCostTwo: null,
     };
 
     if (!persist) {
@@ -169,18 +157,6 @@ export function PlaceCreateDialog({
               <span>둘만의 메모</span>
               <textarea name="description" rows={3} placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것" />
             </label>
-            <div className="field-row">
-              <label className="field">
-                <span>예상 시간</span>
-                <select name="durationMinutes" defaultValue="60">
-                  {STAY_OPTIONS.map(item => <option value={item.minutes} key={item.minutes}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="field">
-                <span>예상 금액</span>
-                <input name="expectedCostTwo" type="number" min={0} step={1000} placeholder="모르면 비워 두기" />
-              </label>
-            </div>
             <p className="form-hint">저장하기 전까지는 목록에만 보여요.</p>
             {error && <p className="form-error" role="alert">{error}</p>}
             <div className="dialog-actions">
@@ -211,18 +187,6 @@ export function PlaceCreateDialog({
               <span>둘만의 메모</span>
               <textarea name="description" rows={3} placeholder="둘에게 이 장소가 특별한 이유" />
             </label>
-            <div className="field-row">
-              <label className="field">
-                <span>예상 시간</span>
-                <select name="durationMinutes" defaultValue="60">
-                  {STAY_OPTIONS.map(item => <option value={item.minutes} key={item.minutes}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="field">
-                <span>예상 금액</span>
-                <input name="expectedCostTwo" type="number" min={0} step={1000} placeholder="모르면 비워 두기" />
-              </label>
-            </div>
             {error && <p className="form-error" role="alert">{error}</p>}
             <div className="dialog-actions">
               <button className="outline-button" type="button" onClick={onClose}>닫기</button>

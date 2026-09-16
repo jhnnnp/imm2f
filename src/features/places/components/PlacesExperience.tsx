@@ -22,7 +22,7 @@ import { getDemoPlaces, saveDemoPlace, updateDemoPlaceStatus } from "../demoPlac
 import { withObjectParticle } from "@/lib/korean";
 
 type Section = "saved" | "search" | "browse" | "map";
-type Filter = "all" | "want" | "visited" | "revisit";
+type Filter = "all" | "want" | "visited" | "revisit" | "not_interested";
 type Layout = "grid" | "list";
 type DialogMode = "confirm" | "manual";
 const SAVED: PlacePreferenceStatus[] = ["want", "must_visit", "revisit"];
@@ -109,11 +109,15 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     want: places.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "want" || value === "must_visit")).length,
     visited: places.filter(place => [place.userStatus, place.partnerStatus].includes("visited")).length,
     revisit: places.filter(place => [place.userStatus, place.partnerStatus].includes("revisit")).length,
+    notInterested: places.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "not_interested" || value === "dislike")).length,
   }), [places]);
 
   const visibleSaved = useMemo(() => places.filter(place => {
     const statuses: PlacePreferenceStatus[] = [place.userStatus, place.partnerStatus];
-    const matchesStatus = filter === "all" || (filter === "want" && statuses.some(value => value === "want" || value === "must_visit")) || statuses.includes(filter);
+    const matchesStatus = filter === "all"
+      || (filter === "want" && statuses.some(value => value === "want" || value === "must_visit"))
+      || (filter === "not_interested" && statuses.some(value => value === "not_interested" || value === "dislike"))
+      || statuses.includes(filter);
     return matchesStatus && (savedCategory === "all" || place.category === savedCategory) && place.name.toLowerCase().includes(savedQuery.toLowerCase());
   }), [places, filter, savedCategory, savedQuery]);
 
@@ -356,7 +360,13 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     {section === "saved" && (
       <>
         <div className="segmented status-tabs" role="tablist" aria-label="장소 상태">
-          {([["all", "전체", counts.all], ["want", "가고 싶어요", counts.want], ["visited", "가봤어요", counts.visited], ["revisit", "다시 갈래요", counts.revisit]] as const).map(([id, label, count]) => (
+          {([
+            ["all", "전체", counts.all],
+            ["want", "가고 싶은 곳", counts.want],
+            ["visited", "다녀온 곳", counts.visited],
+            ["revisit", "또 가고 싶은 곳", counts.revisit],
+            ["not_interested", "관심 없는 곳", counts.notInterested],
+          ] as const).map(([id, label, count]) => (
             <button className={filter === id ? "is-active" : ""} onClick={() => setFilter(id)} key={id} type="button" role="tab" aria-selected={filter === id}>{label} <b>{count}</b></button>
           ))}
         </div>

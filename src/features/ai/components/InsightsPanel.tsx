@@ -29,9 +29,17 @@ export function InsightsPanel({ initial }: { initial: PreferenceInsight | null }
           <h1>우리의 취향</h1>
           <p>쌓인 기록 속에서 둘이 좋아하는 여행의 리듬을 발견해요.</p>
         </div>
-        <button className="outline-button" type="button" onClick={refresh} disabled={pending}>
-          {pending ? "분석 중..." : "다시 분석하기"}
-        </button>
+        <div className="page-actions insight-actions">
+          <button
+            className={`taste-action-button${insight ? "" : " is-primary"}`}
+            type="button"
+            onClick={refresh}
+            disabled={pending}
+          >
+            <span aria-hidden="true">✦</span>
+            {pending ? "분석 중..." : insight ? "다시 분석하기" : "지금 분석하기"}
+          </button>
+        </div>
       </div>
 
       {error && <p className="form-error" role="alert">{error}</p>}
@@ -42,11 +50,8 @@ export function InsightsPanel({ initial }: { initial: PreferenceInsight | null }
           <h2>좋아하는 곳에서 우리다움을 찾아요</h2>
           <p>각자 저장한 장소의 유형, 분위기, 지역과 활동을 비교해 보여드려요.</p>
           <div className="insight-empty-flow" aria-label="분석 결과 구성">
-            <b>공통 취향</b><i aria-hidden="true">→</i><b>각자의 매력</b><i aria-hidden="true">→</i><b>데이트 아이디어</b>
+            <b>각자의 기록</b><i aria-hidden="true">→</i><b>우리의 취향</b><i aria-hidden="true">→</i><b>둘만의 시간</b>
           </div>
-          <button className="primary-button" type="button" onClick={refresh} disabled={pending}>
-            {pending ? "분석 중..." : "지금 분석하기"}
-          </button>
         </div>
       ) : (
         <div className="taste-report">

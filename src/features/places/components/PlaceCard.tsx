@@ -1,7 +1,6 @@
 import type { Place } from "../types/place";
 import { isDiscoverPlace } from "../discover";
 import { PlaceStatusBadge } from "./PlaceStatusBadge";
-import { formatPlaceCostShort } from "../format";
 import { PlaceGraphicCover } from "./PlaceGraphicCover";
 
 export function PlaceCard({
@@ -29,7 +28,7 @@ export function PlaceCard({
       {discover
         ? <div className="couple-fit" aria-label="두 사람의 취향 예상 점수"><span>나 <b>{place.userFit}</b></span><span>파트너 <b>{place.partnerFit}</b></span><em>{saved ? "저장됨" : "후보"}</em></div>
         : <div className="couple-fit"><span>나 <b>{place.userFit}</b></span><span>파트너 <b>{place.partnerFit}</b></span><em><PlaceStatusBadge status={place.partnerStatus} /></em></div>}
-      <footer><b>{discover ? (place.roadAddress || place.address || "주소 확인") : formatPlaceCostShort(place.expectedCostTwo)}</b><span>{discover ? "미리보기 →" : "상세 보기 →"}</span></footer>
+      <footer><b>{place.roadAddress || place.address || place.district}</b><span>{discover ? "미리보기 →" : "상세 보기 →"}</span></footer>
     </button>
   </article>;
 }
