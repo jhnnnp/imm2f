@@ -7,10 +7,10 @@ import { listPlaces } from "@/features/places/actions";
 export const metadata: Metadata = { title: "Our Map" };
 
 export default async function OurMapPage() {
-  const [{ places }, { memories }] = await Promise.all([listPlaces(), listMemories()]);
+  const [{ places, persist }, { memories }] = await Promise.all([listPlaces(), listMemories()]);
   return (
     <AppShell>
-      <CoupleMap places={places} memories={memories} />
+      <CoupleMap places={places} memories={memories} persist={persist} />
     </AppShell>
   );
 }
