@@ -34,6 +34,11 @@ export type Place = {
   externalSource?: PlaceExternalSource;
   externalPlaceId?: string;
   recommendReason?: string;
+  detailedCategory?: string;
+  distanceMeters?: number;
+  homepage?: string;
+  detailFacts?: Array<{ label: string; value: string }>;
+  tourDetailLoaded?: boolean;
 };
 
 export type DiscoverCandidate = {
@@ -49,6 +54,9 @@ export type DiscoverCandidate = {
   mapUrl: string;
   coordinates: [number, number];
   image?: string;
+  detailedCategory?: string;
+  distanceMeters?: number;
+  openingHours?: string;
 };
 
 export type KakaoPlaceCandidate = DiscoverCandidate;

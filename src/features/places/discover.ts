@@ -23,7 +23,6 @@ export function candidateToPlace(candidate: DiscoverCandidate, extras?: { userFi
     roadAddress: candidate.roadAddress,
     mapUrl: candidate.mapUrl,
     phone: candidate.phone,
-    openingHours: null,
     description: extras?.recommendReason || "",
     durationMinutes: 60,
     expectedCostTwo: null,
@@ -37,6 +36,9 @@ export function candidateToPlace(candidate: DiscoverCandidate, extras?: { userFi
     externalSource: source,
     externalPlaceId: candidate.externalPlaceId,
     recommendReason: extras?.recommendReason,
+    detailedCategory: candidate.detailedCategory,
+    distanceMeters: candidate.distanceMeters,
+    openingHours: candidate.openingHours ?? null,
   };
 }
 
@@ -55,6 +57,9 @@ export function placeToCandidate(place: Place): DiscoverCandidate | null {
     mapUrl: place.mapUrl ?? "",
     coordinates: place.coordinates,
     image: place.image,
+    detailedCategory: place.detailedCategory,
+    distanceMeters: place.distanceMeters,
+    openingHours: place.openingHours ?? undefined,
   };
 }
 

@@ -55,7 +55,7 @@ export function PlaceCreateDialog({
       roadAddress: item.roadAddress,
       mapUrl: item.mapUrl,
       phone: item.phone,
-      openingHours: null,
+      openingHours: item.openingHours ?? null,
       description,
       durationMinutes,
       expectedCostTwo,

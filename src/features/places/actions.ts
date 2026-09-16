@@ -35,6 +35,8 @@ export type DiscoverSearchResult =
   | { ok: true; places: DiscoverCandidate[]; isEnd: boolean; page: number; totalCount: number; ranking?: RankedCandidate[] }
   | { ok: false; code: string; error: string };
 
+export type DiscoverSearchInput = KakaoSearchInput | (Omit<KakaoSearchInput, "category"> & { categories: PlaceCategoryId[] });
+
 async function loadPreferences(placeIds: string[]) {
   if (!placeIds.length) return [] as PreferenceRow[];
   const supabase = await createClient();
@@ -72,19 +74,43 @@ export async function listPlaces(): Promise<{ persist: boolean; places: Place[] 
   };
 }
 
-export async function loadTourPlaceDetail(contentId: string) {
-  return loadTourPlaceDetailRemote(contentId);
+export async function loadTourPlaceDetail(contentId: string, category: PlaceCategoryId) {
+  return loadTourPlaceDetailRemote(contentId, category);
 }
 
 export async function searchKakaoPlaces(input: KakaoSearchInput | string) {
   return searchDiscoverPlaces(input);
 }
 
-export async function searchDiscoverPlaces(input: KakaoSearchInput | string): Promise<DiscoverSearchResult> {
+export async function searchDiscoverPlaces(input: DiscoverSearchInput | string): Promise<DiscoverSearchResult> {
   const params = typeof input === "string" ? { query: input } : input;
-  const raw = usesTourApi(params.category)
-    ? await searchTourPlacesRemote(params)
-    : await searchKakaoPlacesRemote(params);
+  const categories = "categories" in params ? [...new Set(params.categories)] : [];
+  let raw: DiscoverSearchResult;
+  if (categories.length > 0) {
+    raw = await Promise.all(categories.map(category => {
+      const categoryParams = { ...params, categories: undefined, category };
+      return usesTourApi(category)
+        ? searchTourPlacesRemote(categoryParams)
+        : searchKakaoPlacesRemote(categoryParams);
+    })).then(results => {
+      const successful = results.filter((result): result is Extract<DiscoverSearchResult, { ok: true }> => result.ok);
+      if (!successful.length) return results[0] ?? { ok: false as const, code: "NO_RESULT", error: "장소를 불러오지 못했어요." };
+      const unique = new Map<string, DiscoverCandidate>();
+      successful.flatMap(result => result.places).forEach(place => unique.set(`${place.externalSource}:${place.externalPlaceId}`, place));
+      return {
+        ok: true as const,
+        places: [...unique.values()].slice(0, 36),
+        isEnd: successful.every(result => result.isEnd),
+        page: params.page ?? 1,
+        totalCount: successful.reduce((sum, result) => sum + result.totalCount, 0),
+      };
+    });
+  } else {
+    const singleParams = params as KakaoSearchInput;
+    raw = usesTourApi(singleParams.category)
+      ? await searchTourPlacesRemote(singleParams)
+      : await searchKakaoPlacesRemote(singleParams);
+  }
   if (!raw.ok) return raw;
   if ((params.page ?? 1) > 1 || raw.places.length < 2) return raw;
   const { places: saved } = await listPlaces();
@@ -145,7 +171,7 @@ export async function saveKakaoPlace(input: SaveKakaoPlaceInput): Promise<{ plac
       road_address: candidate.roadAddress || null,
       phone: candidate.phone || null,
       map_url: candidate.mapUrl || null,
-      opening_hours: null,
+      opening_hours: candidate.openingHours || null,
       expected_cost_two: optionalCost(input.expectedCostTwo),
       description: input.description.trim(),
       duration_minutes: Number.isFinite(input.durationMinutes) ? input.durationMinutes : 60,

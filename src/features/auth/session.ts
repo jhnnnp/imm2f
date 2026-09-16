@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 import { DEMO_COOKIE_NAME, DEMO_COOKIE_VALUE } from "./demo";
@@ -19,7 +20,7 @@ function authErrorMessage(message: string) {
   return message;
 }
 
-export async function getAppSession(): Promise<AppSession> {
+const loadAppSession = cache(async (): Promise<AppSession> => {
   const cookieStore = await cookies();
   if (cookieStore.get(DEMO_COOKIE_NAME)?.value === DEMO_COOKIE_VALUE) return { mode: "demo" };
   if (!isSupabaseConfigured()) return { mode: "prototype" };
@@ -52,6 +53,10 @@ export async function getAppSession(): Promise<AppSession> {
     coupleId,
     partner: partnerRow ? { userId: partnerRow.id, displayName: partnerRow.display_name || "파트너" } : null,
   };
+});
+
+export async function getAppSession(): Promise<AppSession> {
+  return loadAppSession();
 }
 
 export async function signIn(formData: FormData) {

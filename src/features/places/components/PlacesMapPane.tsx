@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap, Marker } from "maplibre-gl";
 import { DEFAULT_MAP_CENTER } from "../config/regions";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
+import { PlaceCategoryIcon } from "./PlaceCategoryIcon";
 import { clampRadius, distanceMeters } from "../geo";
 import { isDiscoverPlace } from "../discover";
 import type { Place, PlaceCategoryId } from "../types/place";
@@ -125,7 +126,7 @@ export function PlacesMapPane({
     <div className="places-map-pane">
       <div className="places-map-toolbar">
         {PLACE_CATEGORIES.map(item => (
-          <button className={category === item.id ? "is-active" : ""} type="button" key={item.id} onClick={() => onCategoryChange(item.id)}>{item.label}</button>
+          <button className={category === item.id ? "is-active" : ""} type="button" key={item.id} onClick={() => onCategoryChange(item.id)}><PlaceCategoryIcon category={item.id} />{item.label}</button>
         ))}
         <button className="primary-button" type="button" onClick={searchViewport} disabled={pending}>{pending ? "찾는 중..." : "이 화면에서 찾기"}</button>
       </div>

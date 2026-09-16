@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { loadCoupleActivities } from "../actions";
 import { hrefForActivity, type CoupleActivity } from "../types";
 
@@ -14,12 +15,25 @@ function symbolFor(action: string) {
   return { className: "activity-symbol blue", mark: "·" };
 }
 
-export function ActivityPanel() {
-  const [items, setItems] = useState<CoupleActivity[]>([]);
-  const [loaded, setLoaded] = useState(false);
+export function ActivityPanel({ initialItems }: { initialItems?: CoupleActivity[] }) {
+  const session = useAppSession();
+  const [items, setItems] = useState<CoupleActivity[]>(initialItems ?? []);
+  const [loaded, setLoaded] = useState(initialItems !== undefined || session.mode !== "authenticated");
 
   useEffect(() => {
+    if (initialItems !== undefined) {
+      setItems(initialItems);
+      setLoaded(true);
+      return;
+    }
+    if (session.mode !== "authenticated") {
+      setItems([]);
+      setLoaded(true);
+      return;
+    }
+
     let cancelled = false;
+    setLoaded(false);
     void loadCoupleActivities().then(next => {
       if (cancelled) return;
       setItems(next);
@@ -28,7 +42,7 @@ export function ActivityPanel() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [initialItems, session.mode]);
 
   return (
     <div>

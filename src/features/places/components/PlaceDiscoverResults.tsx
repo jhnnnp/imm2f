@@ -7,9 +7,7 @@ export function PlaceDiscoverResults({
   selectedId,
   pending,
   error,
-  hint,
   isEnd,
-  totalCount,
   layout,
   emptyTitle,
   emptyBody,
@@ -22,9 +20,7 @@ export function PlaceDiscoverResults({
   selectedId: string;
   pending: boolean;
   error: string;
-  hint: string;
   isEnd: boolean;
-  totalCount: number;
   layout: "grid" | "list";
   emptyTitle: string;
   emptyBody: string;
@@ -34,7 +30,14 @@ export function PlaceDiscoverResults({
   onManual?: () => void;
 }) {
   if (error) return <div className="empty-inline" role="alert"><h2>검색을 불러오지 못했어요.</h2><p>{error}</p></div>;
-  if (pending && !places.length) return <div className="empty-inline"><h2>장소를 찾고 있어요.</h2><p>이 조건에 맞는 후보를 모으고 있어요.</p></div>;
+  if (pending && !places.length) return (
+    <div className="discover-loading-panel" role="status" aria-live="polite">
+      <div className="discover-loading-copy"><i /><div><b>장소를 찾고 있어요</b><span>선택한 조건에 맞는 후보를 모으고 있어요.</span></div></div>
+      <div className="discover-skeleton-grid" aria-hidden="true">
+        {[0, 1, 2].map(item => <span key={item}><i /><b /><small /><small /></span>)}
+      </div>
+    </div>
+  );
   if (!places.length) {
     return <div className="empty-inline">
       <h2>{emptyTitle}</h2>
@@ -44,9 +47,13 @@ export function PlaceDiscoverResults({
   }
 
   return (
-    <div className="discover-results">
-      <p className="discover-count">{totalCount ? `${totalCount}곳 중 ${places.length}곳을 보고 있어요.` : `${places.length}곳을 둘러보는 중이에요.`} 저장한 장소는 함께 표시돼요.</p>
-      {hint && <p className="form-hint">{hint}</p>}
+    <div className="discover-results" aria-busy={pending}>
+      {pending && (
+        <div className="discover-refreshing" role="status" aria-live="polite">
+          <i /><span><b>새 후보를 찾는 중</b> 현재 결과는 그대로 두고 업데이트할게요.</span>
+        </div>
+      )}
+      <div className={pending ? "discover-result-content is-refreshing" : "discover-result-content"}>
       {layout === "list" ? (
         <ul className="place-result-list">
           {places.map(place => (
@@ -62,6 +69,7 @@ export function PlaceDiscoverResults({
       ) : (
         <div className="place-grid">{places.map(place => <PlaceCard key={place.id} place={place} selected={selectedId === place.id} onSelect={() => onSelect(place.id)} onToggleSave={() => onSave(place)} />)}</div>
       )}
+      </div>
       {onLoadMore && !isEnd && <div className="discover-more"><button className="outline-button" type="button" onClick={onLoadMore} disabled={pending}>{pending ? "불러오는 중..." : "더 보기"}</button></div>}
     </div>
   );

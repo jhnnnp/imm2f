@@ -28,6 +28,19 @@ type TourItem = {
   firstimage2?: string;
   overview?: string;
   originimgurl?: string;
+  homepage?: string;
+  usetime?: string;
+  restdate?: string;
+  parking?: string;
+  chkpet?: string;
+  eventstartdate?: string;
+  eventenddate?: string;
+  playtime?: string;
+  spendtimefestival?: string;
+  checkintime?: string;
+  checkouttime?: string;
+  parkinglodging?: string;
+  reservationurl?: string;
 };
 
 type TourResponse = {
@@ -43,7 +56,47 @@ type TourResponse = {
 export type TourPlaceDetail = {
   overview: string;
   image?: string;
+  openingHours?: string;
+  homepage?: string;
+  facts: Array<{ label: string; value: string }>;
 };
+
+function cleanText(value: unknown) {
+  return typeof value === "string" ? value.replace(/<br\s*\/?\s*>/gi, " · ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "";
+}
+
+function extractUrl(value: unknown) {
+  return typeof value === "string" ? value.match(/https?:\/\/[^\s"'<>]+/)?.[0] : undefined;
+}
+
+function compactDate(value: string | undefined) {
+  const digits = value?.replace(/\D/g, "") ?? "";
+  return digits.length === 8 ? `${digits.slice(0, 4)}.${digits.slice(4, 6)}.${digits.slice(6)}` : cleanText(value);
+}
+
+function detailFacts(item: TourItem | undefined, category: PlaceCategoryId) {
+  if (!item) return [];
+  const facts: Array<{ label: string; value: string }> = [];
+  const add = (label: string, value: unknown) => {
+    const cleaned = cleanText(value);
+    if (cleaned) facts.push({ label, value: cleaned });
+  };
+  if (category === "festival") {
+    const period = [compactDate(item.eventstartdate), compactDate(item.eventenddate)].filter(Boolean).join(" – ");
+    add("기간", period);
+    add("운영", item.playtime);
+    add("관람 시간", item.spendtimefestival);
+  } else if (category === "stay") {
+    add("체크인", item.checkintime);
+    add("체크아웃", item.checkouttime);
+    add("주차", item.parkinglodging);
+  } else {
+    add("휴무", item.restdate);
+    add("주차", item.parking);
+    add("반려동물", item.chkpet);
+  }
+  return facts.slice(0, 4);
+}
 
 function asItems(value: TourResponse["response"]): TourItem[] {
   const raw = value?.body?.items;
@@ -185,17 +238,22 @@ export async function searchTourPlacesRemote(input: KakaoSearchInput): Promise<K
   };
 }
 
-export async function loadTourPlaceDetail(contentId: string): Promise<TourPlaceDetail | null> {
+export async function loadTourPlaceDetail(contentId: string, category: PlaceCategoryId): Promise<TourPlaceDetail | null> {
   const id = contentId.trim();
   if (!id) return null;
-  const [common, images] = await Promise.all([
+  const [common, intro, images] = await Promise.all([
     tourFetch("detailCommon2", { contentId: id, overviewYN: "Y", defaultYN: "Y", firstImageYN: "Y" }),
+    tourFetch("detailIntro2", { contentId: id, contentTypeId: contentTypeId(category) }),
     tourFetch("detailImage2", { contentId: id, imageYN: "Y", subImageYN: "Y" }),
   ]);
   const commonItem = common.ok ? asItems(common.payload.response)[0] : undefined;
+  const introItem = intro.ok ? asItems(intro.payload.response)[0] : undefined;
   const imageItem = images.ok ? asItems(images.payload.response)[0] : undefined;
-  const overview = commonItem?.overview?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() ?? "";
+  const overview = cleanText(commonItem?.overview);
   const image = commonItem?.firstimage || commonItem?.firstimage2 || imageItem?.originimgurl || imageItem?.firstimage;
-  if (!overview && !image) return null;
-  return { overview, image };
+  const openingHours = cleanText(introItem?.usetime || introItem?.playtime || ([introItem?.checkintime, introItem?.checkouttime].filter(Boolean).join(" – ")));
+  const homepage = extractUrl(commonItem?.homepage) || extractUrl(introItem?.reservationurl);
+  const facts = detailFacts(introItem, category);
+  if (!overview && !image && !openingHours && !homepage && !facts.length) return null;
+  return { overview, image, openingHours, homepage, facts };
 }

@@ -14,6 +14,7 @@ type KakaoKeywordDocument = {
   x?: string;
   y?: string;
   place_url?: string;
+  distance?: string;
 };
 
 type KakaoKeywordResponse = {
@@ -80,6 +81,8 @@ function toCandidate(document: KakaoKeywordDocument): KakaoPlaceCandidate | null
     phone: document.phone ?? "",
     mapUrl: document.place_url ?? "",
     coordinates: [lng, lat],
+    detailedCategory: categoryName,
+    distanceMeters: document.distance ? Number(document.distance) : undefined,
   };
 }
 
@@ -190,7 +193,12 @@ export async function searchKakaoPlacesRemote(input: KakaoSearchInput): Promise<
         continue;
       }
       const payload = JSON.parse(text) as KakaoKeywordResponse;
-      const places = (payload.documents ?? []).map(toCandidate).filter((item): item is KakaoPlaceCandidate => item !== null);
+      const mapped = (payload.documents ?? []).map(toCandidate).filter((item): item is KakaoPlaceCandidate => item !== null);
+      const administrativeArea = input.region?.split(/\s+/).findLast(part => /(?:구|군|시)$/.test(part));
+      const scoped = administrativeArea
+        ? mapped.filter(place => `${place.address} ${place.roadAddress} ${place.district}`.includes(administrativeArea))
+        : [];
+      const places = scoped.length ? scoped : mapped;
       return {
         ok: true,
         places,

@@ -4,6 +4,7 @@ import { STATUS_META } from "../config/statusMeta";
 import { PlaceStatusBadge } from "./PlaceStatusBadge";
 import { formatOpeningHours, formatPlaceCost, formatStayMinutes, naverPlaceSearchUrl } from "../format";
 import { PlaceGraphicCover } from "./PlaceGraphicCover";
+import { PlaceLocationMap } from "./PlaceLocationMap";
 
 const STATUS_OPTIONS: PlacePreferenceStatus[] = ["visited", "want", "must_visit", "revisit", "neutral", "dislike", "not_interested"];
 
@@ -29,14 +30,21 @@ export function PlaceDetailPanel({
     <div className={`detail-photo tone-${place.visualTone} ${place.image ? "" : "is-empty"}`}>{place.image ? <img src={place.image} alt={place.name} /> : <PlaceGraphicCover place={place} />}<span>{place.categoryLabel.toUpperCase()} · {preview ? "CANDIDATE" : "PLACE"}</span></div>
     <div className="place-detail-head"><div><span className="eyebrow">{preview ? "PLACE PREVIEW" : "PLACE NOTE"}</span><h2>{place.name}</h2><p>{address}</p></div>{!preview && <button className="detail-heart is-on" type="button" aria-label="가고 싶어요 해제" onClick={() => onSave?.()}>♥</button>}</div>
     {place.recommendReason ? <p className="detail-description">{place.recommendReason}</p> : place.description ? <p className="detail-description">{place.description}{place.description.endsWith(".") ? "" : "."}</p> : <p className="detail-description muted">{preview ? "저장하면 둘만의 메모를 남길 수 있어요." : "아직 둘만의 메모는 없어요."}</p>}
-    <div className="detail-facts">
-      <div><span>예상 시간</span><b>{preview ? "저장 후 입력" : formatStayMinutes(place.durationMinutes)}</b></div>
-      <div><span>예상 금액</span><b>{preview ? "저장 후 입력" : formatPlaceCost(place.expectedCostTwo)}</b></div>
+    {preview && place.coordinates && <PlaceLocationMap name={place.name} coordinates={place.coordinates} />}
+    {preview && (place.detailedCategory || place.openingHours || place.detailFacts?.length) && <dl className="place-api-facts">
+      {place.detailedCategory && <div><dt>분류</dt><dd>{place.detailedCategory.split(">").map(item => item.trim()).filter(Boolean).slice(-2).join(" · ")}</dd></div>}
+      {place.openingHours && <div><dt>이용시간</dt><dd>{place.openingHours}</dd></div>}
+      {place.detailFacts?.map(fact => <div key={`${fact.label}-${fact.value}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
+    </dl>}
+    {!preview && <div className="detail-facts">
+      <div><span>예상 시간</span><b>{formatStayMinutes(place.durationMinutes)}</b></div>
+      <div><span>예상 금액</span><b>{formatPlaceCost(place.expectedCostTwo)}</b></div>
       <div><span>{place.phone ? "전화" : "영업시간"}</span><b>{place.phone || formatOpeningHours(place.openingHours)}</b></div>
-    </div>
+    </div>}
     <div className="external-place-links">
       {place.mapUrl && <a className="quiet-link" href={place.mapUrl} target="_blank" rel="noreferrer">{sourceLabel} ↗</a>}
       <a className="quiet-link naver-link" href={naverPlaceSearchUrl(place.name, address)} target="_blank" rel="noreferrer">네이버 지도에서 보기 ↗</a>
+      {place.homepage && <a className="quiet-link" href={place.homepage} target="_blank" rel="noreferrer">공식 홈페이지 ↗</a>}
     </div>
     {preview ? (
       <button className={preferredPlan ? "outline-button full" : "primary-button full"} type="button" onClick={onSave}>나중을 위해 저장</button>

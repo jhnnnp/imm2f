@@ -2,31 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
 import { NAVIGATION } from "./navigation";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { initialFromName } from "@/features/auth/types";
-import { listPlaces } from "@/features/places/actions";
 import { BrandMark, SidebarIcon } from "./SidebarIcon";
 
 export function Sidebar() {
   const pathname = usePathname();
   const session = useAppSession();
-  const [placeCount, setPlaceCount] = useState<number | null>(null);
   const youName = session.mode === "authenticated" ? session.displayName : "나";
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? null : null;
   const youInitial = initialFromName(youName);
   const partnerInitial = partnerName ? initialFromName(partnerName) : "?";
-
-  useEffect(() => {
-    let cancelled = false;
-    void listPlaces().then(result => {
-      if (!cancelled) setPlaceCount(result.places.length);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [pathname]);
 
   return (
     <aside className="sidebar" aria-label="주요 메뉴">
@@ -38,30 +25,30 @@ export function Sidebar() {
         {NAVIGATION.map((item, index) => {
           if ("section" in item) return <p key={`${item.section}-${index}`}>{item.section}</p>;
           const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-          const count = item.href === "/places" ? placeCount : null;
           return (
             <Link className={`nav-item ${active ? "is-active" : ""}`} href={item.href} key={item.href}>
               <span className="nav-icon-wrap"><SidebarIcon name={item.iconName} /></span>{item.label}
-              {count != null && count > 0 && <em>{count}</em>}
             </Link>
           );
         })}
       </nav>
-      <div className="couple-card">
-        <div className="paired-avatars"><span className="avatar you">{youInitial}</span><span className="avatar partner">{partnerInitial}</span></div>
-        <div>
-          <strong>{youName} &amp; {partnerName ?? "파트너"}</strong>
-          <small>
-            {session.mode === "authenticated"
-              ? session.partner ? "연결된 둘의 공간" : "파트너를 초대해 주세요"
-              : session.mode === "demo" ? "로그인 없는 체험 공간" : "로그인하면 둘이 같은 공간을 봐요"}
-          </small>
+      <div className={`couple-card is-${session.mode} ${partnerName ? "has-partner" : ""}`}>
+        <div className="couple-card-main">
+          <div className="paired-avatars" aria-hidden="true"><span className="avatar you">{youInitial}</span><span className="avatar partner">{partnerInitial}</span></div>
+          <div className="couple-card-copy">
+            <strong>{youName} <span>&amp;</span> {partnerName ?? "파트너"}</strong>
+            <small>
+              {session.mode === "authenticated"
+                ? session.partner ? "둘의 공간이 연결되어 있어요" : "함께할 파트너를 초대해 보세요"
+                : session.mode === "demo" ? "로그인 없이 둘러보는 체험 공간" : "로그인하고 둘만의 공간을 시작해요"}
+            </small>
+          </div>
         </div>
-        {session.mode === "authenticated" && !session.partner
-          ? <Link href="/invite">초대</Link>
-          : session.mode !== "authenticated"
-            ? <Link href={session.mode === "demo" ? "/demo/exit" : "/login"}>{session.mode === "demo" ? "나가기" : "로그인"}</Link>
-            : null}
+        {session.mode === "authenticated" && session.partner
+          ? <span className="couple-card-status"><i />연결됨</span>
+          : <Link className="couple-card-action" href={session.mode === "authenticated" ? "/invite" : session.mode === "demo" ? "/demo/exit" : "/login"}>
+              <span>{session.mode === "authenticated" ? "파트너 초대" : session.mode === "demo" ? "체험 나가기" : "로그인"}</span><b aria-hidden="true">→</b>
+            </Link>}
       </div>
     </aside>
   );

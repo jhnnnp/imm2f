@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { HomeDashboard } from "@/features/home/components/HomeDashboard";
+import { ActivityPanel } from "@/features/collaboration/components/ActivityPanel";
 import { loadCoupleActivities } from "@/features/collaboration/actions";
 import { listMemories } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
@@ -15,7 +16,7 @@ export default async function HomePage() {
   ]);
 
   return (
-    <AppShell>
+    <AppShell context={<ActivityPanel initialItems={activities} />}>
       <HomeDashboard
         places={placesResult.persist ? placesResult.places : []}
         memories={memoriesResult.persist ? memoriesResult.memories : []}

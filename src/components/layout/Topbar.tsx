@@ -26,6 +26,7 @@ export function Topbar() {
   const [notifyLoaded, setNotifyLoaded] = useState(false);
   const [today, setToday] = useState("");
   const notifyRef = useRef<HTMLDivElement>(null);
+  const notifyLoadingRef = useRef(false);
   const session = useAppSession();
   const label = session.mode === "authenticated" ? initialFromName(session.displayName) : "나";
   const unread = useMemo(() => activities.filter(item => item.important).length, [activities]);
@@ -45,17 +46,17 @@ export function Topbar() {
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const openNotifications = () => {
+    setNotifyOpen(open => !open);
+    setMenuOpen(false);
+    if (notifyLoaded || notifyLoadingRef.current) return;
+    notifyLoadingRef.current = true;
     void loadCoupleActivities(8).then(next => {
-      if (cancelled) return;
       setActivities(next);
       setNotifyLoaded(true);
+      notifyLoadingRef.current = false;
     });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  };
 
   useEffect(() => {
     if (!notifyOpen && !menuOpen) return;
@@ -79,7 +80,7 @@ export function Topbar() {
           type="button"
           aria-label="최근 활동 보기"
           aria-expanded={notifyOpen}
-          onClick={() => { setNotifyOpen(open => !open); setMenuOpen(false); }}
+          onClick={openNotifications}
         >
           ◌{unread > 0 && <i />}
         </button>

@@ -6,8 +6,8 @@ import { AppShell } from "@/components/layout/AppShell";
 import { DatePickerButton } from "@/components/shared/DatePickerButton";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { AIPlanEditor } from "@/features/ai/components/AIPlanEditor";
+import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { VersionHistory } from "@/features/collaboration/components/VersionHistory";
-import { loadPlanVersions } from "@/features/collaboration/actions";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import { getDraftDateItems, getDraftPlanMeta, setDraftDateItems, setDraftPlanMeta, subscribeDraftTrip } from "@/features/planning/draftTrip";
 import { getDemoPlaces, subscribeDemoPlaces } from "@/features/places/demoPlaces";
@@ -19,11 +19,12 @@ import { formatKoDate } from "@/lib/dates";
 type Panel = "ai" | "history" | null;
 
 export function DatePlanner() {
+  const session = useAppSession();
   const [items, setItems] = useState<PlanItem[]>([]);
   const [title, setTitle] = useState("우리가 고른 데이트");
   const [notes, setNotes] = useState("");
   const [startDate, setStartDate] = useState("");
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(true);
   const [panel, setPanel] = useState<Panel>(null);
   const [version, setVersion] = useState(0);
   const [saveError, setSaveError] = useState("");
@@ -34,12 +35,32 @@ export function DatePlanner() {
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([loadCouplePlan("date"), loadPlanVersions("date")]).then(([result, versions]) => {
+    const stored = getDraftDateItems();
+    const localMeta = getDraftPlanMeta("date");
+    setItems(stored);
+    setTitle(localMeta.title);
+    setNotes(localMeta.notes);
+    setStartDate(localMeta.startDate);
+    setDemoPlaces(getDemoPlaces());
+    setLoaded(true);
+
+    const unsubscribe = subscribeDraftTrip(() => {
+      setItems(getDraftDateItems());
+    });
+    const unsubscribePlaces = subscribeDemoPlaces(() => setDemoPlaces(getDemoPlaces()));
+
+    if (session.mode !== "authenticated") {
+      return () => {
+        cancelled = true;
+        unsubscribe();
+        unsubscribePlaces();
+        if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+      };
+    }
+
+    void loadCouplePlan("date").then(result => {
       if (cancelled) return;
-      setVersion(versions.latest);
       revisionRef.current = result.revision;
-      const stored = getDraftDateItems();
-      const localMeta = getDraftPlanMeta("date");
       if (result.persist && result.items.length) {
         setItems(result.items);
         setDraftDateItems(result.items);
@@ -57,21 +78,14 @@ export function DatePlanner() {
       setTitle(result.title || localMeta.title);
       setNotes(result.notes || localMeta.notes);
       setStartDate(result.startDate || localMeta.startDate);
-      if (!result.persist) setDemoPlaces(getDemoPlaces());
-      setLoaded(true);
     });
-    const unsubscribe = subscribeDraftTrip(() => {
-      const next = getDraftDateItems();
-      if (next.length) setItems(next);
-    });
-    const unsubscribePlaces = subscribeDemoPlaces(() => setDemoPlaces(getDemoPlaces()));
     return () => {
       cancelled = true;
       unsubscribe();
       unsubscribePlaces();
       if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
     };
-  }, []);
+  }, [session.mode]);
 
   const persist = (next: PlanItem[], extra?: { title?: string; subtitle?: string; startDate?: string | null }) => {
     const mapped = next.map(item => ({ ...item, dayIndex: 0 }));

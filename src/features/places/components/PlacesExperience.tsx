@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
-import { PLACE_MOODS, PLACE_AREA_GROUPS, areaGroupById, browseDiscoverInput } from "../config/regions";
+import { PLACE_ADMINISTRATIVE_AREAS, PLACE_AREA_GROUPS, areaGroupById, browseDiscoverInput } from "../config/regions";
 import { searchDiscoverPlaces, loadTourPlaceDetail, updateMyPlaceStatus } from "../actions";
 import { addPlaceToDraftDate, addPlaceToDraftTrip, getDraftDateItems, getDraftTripItems, setActiveTripDay } from "@/features/planning/draftTrip";
 import { saveCouplePlan } from "@/features/planning/actions";
@@ -16,6 +16,7 @@ import { PlaceCard } from "./PlaceCard";
 import { PlaceCreateDialog } from "./PlaceCreateDialog";
 import { PlaceDetailPanel } from "./PlaceDetailPanel";
 import { PlaceDiscoverResults } from "./PlaceDiscoverResults";
+import { PlaceCategoryIcon } from "./PlaceCategoryIcon";
 import { PlacesMapPane } from "./PlacesMapPane";
 import { getDemoPlaces, saveDemoPlace, updateDemoPlaceStatus } from "../demoPlaces";
 import { withObjectParticle } from "@/lib/korean";
@@ -56,21 +57,23 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchCategory, setSearchCategory] = useState<PlaceCategoryId | "all">("all");
   const [browseGroup, setBrowseGroup] = useState("seoul");
-  const [browseArea, setBrowseArea] = useState("");
-  const [browseCategory, setBrowseCategory] = useState<PlaceCategoryId | "all">("cafe");
-  const [browseMood, setBrowseMood] = useState("");
+  const [browseArea, setBrowseArea] = useState("all");
+  const [browseCategories, setBrowseCategories] = useState<PlaceCategoryId[]>(["cafe"]);
+  const [browseRegionQuery, setBrowseRegionQuery] = useState("");
+  const [browseResultQuery, setBrowseResultQuery] = useState("");
+  const [regionSuggestionsOpen, setRegionSuggestionsOpen] = useState(false);
   const [mapCategory, setMapCategory] = useState<PlaceCategoryId | "all">("cafe");
   const [mapOrigin, setMapOrigin] = useState<{ x: number; y: number; radius: number } | null>(null);
 
   const [discover, setDiscover] = useState<Place[]>([]);
   const [discoverPage, setDiscoverPage] = useState(1);
   const [discoverIsEnd, setDiscoverIsEnd] = useState(true);
-  const [discoverTotal, setDiscoverTotal] = useState(0);
   const [discoverPending, setDiscoverPending] = useState(false);
   const [discoverError, setDiscoverError] = useState("");
-  const [discoverHint, setDiscoverHint] = useState("");
   const [searched, setSearched] = useState(false);
   const placesRef = useRef(places);
+  const discoverRequestRef = useRef(0);
+  const regionSearchRef = useRef<HTMLDivElement>(null);
   placesRef.current = places;
 
   useEffect(() => {
@@ -92,6 +95,15 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     }
   }, [selectedParam, places, discover]);
 
+  useEffect(() => {
+    if (!regionSuggestionsOpen) return;
+    const closeSuggestions = (event: MouseEvent) => {
+      if (!regionSearchRef.current?.contains(event.target as Node)) setRegionSuggestionsOpen(false);
+    };
+    document.addEventListener("mousedown", closeSuggestions);
+    return () => document.removeEventListener("mousedown", closeSuggestions);
+  }, [regionSuggestionsOpen]);
+
   const counts = useMemo(() => ({
     all: places.length,
     want: places.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "want" || value === "must_visit")).length,
@@ -108,16 +120,16 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   const selected = [...discover, ...places].find(place => place.id === selectedId) ?? (section === "saved" ? places[0] : discover[0]);
 
   const runDiscover = useCallback(async (input: Parameters<typeof searchDiscoverPlaces>[0], append = false) => {
+    const requestId = ++discoverRequestRef.current;
     setDiscoverPending(true);
     setDiscoverError("");
-    setDiscoverHint("");
     setSearched(true);
     const result = await searchDiscoverPlaces(input);
+    if (requestId !== discoverRequestRef.current) return;
     setDiscoverPending(false);
     if (!result.ok) {
       if (!append) {
         setDiscover([]);
-        setDiscoverTotal(0);
       }
       setDiscoverError(result.error);
       setDiscoverIsEnd(true);
@@ -131,9 +143,6 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     setDiscover(previous => uniqueByExternalId(append ? [...previous, ...merged] : merged));
     setDiscoverPage(result.page);
     setDiscoverIsEnd(result.isEnd);
-    setDiscoverTotal(result.totalCount);
-    if (!result.places.length) setDiscoverHint("이 조건의 후보가 없어요. 지역이나 카테고리를 바꿔 보세요.");
-    else if (ranking?.some(item => item.reason)) setDiscoverHint("저장한 취향을 기준으로 후보 순서를 맞췄어요.");
     if (!append && merged[0]) setSelectedId(merged[0].id);
   }, []);
 
@@ -196,9 +205,8 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     if (next !== section) {
       setDiscover([]);
       setDiscoverError("");
-      setDiscoverHint("");
       setSearched(false);
-      setDiscoverTotal(0);
+      if (next === "browse") void runDiscover({ ...browseInput(browseGroup, browseArea), categories: browseCategories, page: 1 });
     }
   }
 
@@ -206,12 +214,13 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     setSelectedId(id);
     const place = [...discover, ...places].find(item => item.id === id);
     if (!place || place.externalSource !== "tourapi" || !place.externalPlaceId) return;
-    if (place.description && place.image) return;
-    const detail = await loadTourPlaceDetail(place.externalPlaceId);
-    if (!detail) return;
+    if (place.tourDetailLoaded) return;
+    const detail = await loadTourPlaceDetail(place.externalPlaceId, place.category);
     setDiscover(current => current.map(item => (
       item.id === id
-        ? { ...item, description: detail.overview || item.description, image: detail.image || item.image }
+        ? detail
+          ? { ...item, description: detail.overview || item.description, image: detail.image || item.image, openingHours: detail.openingHours || item.openingHours, homepage: detail.homepage, detailFacts: detail.facts, tourDetailLoaded: true }
+          : { ...item, tourDetailLoaded: true }
         : item
     )));
   }
@@ -232,19 +241,54 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     void runDiscover({ query: nextQuery, category: searchCategory, page: 1 });
   }
 
-  function runBrowse(next: { group?: string; area?: string; category?: PlaceCategoryId | "all"; mood?: string }) {
+  function browseInput(group: string, area: string) {
+    if (area.startsWith("custom:")) return { region: area.slice("custom:".length) };
+    return browseDiscoverInput(group, area);
+  }
+
+  function runBrowse(next: { group?: string; area?: string; categories?: PlaceCategoryId[] }) {
     const group = next.group ?? browseGroup;
     const area = next.area ?? browseArea;
-    const category = next.category ?? browseCategory;
-    const mood = next.mood ?? browseMood;
+    const categories = next.categories ?? browseCategories;
     if (!group || !area) return;
-    void runDiscover({ ...browseDiscoverInput(group, area), category, mood, page: 1 });
+    setBrowseResultQuery("");
+    void runDiscover(categories.length
+      ? { ...browseInput(group, area), categories, page: 1 }
+      : { ...browseInput(group, area), category: "all", page: 1 });
+  }
+
+  function toggleBrowseCategory(category: PlaceCategoryId) {
+    const next = browseCategories.includes(category)
+      ? browseCategories.filter(item => item !== category)
+      : [...browseCategories, category];
+    setBrowseCategories(next);
+    runBrowse({ categories: next });
+  }
+
+  function applyRegionSearch(value: string) {
+    const query = value.trim();
+    if (!query) return;
+    const region = selectedBrowseGroup && !query.includes(selectedBrowseGroup.label)
+      ? `${selectedBrowseGroup.label} ${query}`
+      : query;
+    setBrowseRegionQuery(query);
+    setBrowseArea(`custom:${region}`);
+    setRegionSuggestionsOpen(false);
+    void runDiscover(browseCategories.length
+      ? { region, categories: browseCategories, page: 1 }
+      : { region, category: "all", page: 1 });
+  }
+
+  function handleRegionSearch(formData: FormData) {
+    applyRegionSearch(String(formData.get("region") ?? ""));
   }
 
   function handleLoadMore() {
     const nextPage = discoverPage + 1;
     if (section === "search") void runDiscover({ query: searchQuery, category: searchCategory, page: nextPage }, true);
-    if (section === "browse") void runDiscover({ ...browseDiscoverInput(browseGroup, browseArea), category: browseCategory, mood: browseMood, page: nextPage }, true);
+    if (section === "browse") void runDiscover(browseCategories.length
+      ? { ...browseInput(browseGroup, browseArea), categories: browseCategories, page: nextPage }
+      : { ...browseInput(browseGroup, browseArea), category: "all", page: nextPage }, true);
     if (section === "map" && mapOrigin) void runDiscover({ ...mapOrigin, category: mapCategory, page: nextPage }, true);
   }
 
@@ -254,6 +298,22 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   }
 
   const selectedBrowseGroup = areaGroupById(browseGroup);
+  const selectedBrowseAreaLabel = browseArea.startsWith("custom:")
+    ? browseArea.slice("custom:".length)
+    : browseArea === "all"
+    ? `${selectedBrowseGroup?.label ?? "지역"} 전체`
+    : selectedBrowseGroup?.areas.find(item => item.id === browseArea)?.label ?? "동네 선택";
+  const selectedBrowseCategoryLabel = browseCategories.length
+    ? PLACE_CATEGORIES.filter(item => browseCategories.includes(item.id)).map(item => item.label).join(" · ")
+    : "전체";
+  const regionSuggestions = (PLACE_ADMINISTRATIVE_AREAS[browseGroup] ?? [])
+    .filter(area => !browseRegionQuery.trim() || area.toLowerCase().includes(browseRegionQuery.trim().toLowerCase()))
+    .slice(0, 8);
+  const normalizedBrowseResultQuery = browseResultQuery.trim().toLowerCase();
+  const visibleBrowseDiscover = normalizedBrowseResultQuery
+    ? discover.filter(place => [place.name, place.categoryLabel, place.district, place.address, place.roadAddress]
+      .some(value => value?.toLowerCase().includes(normalizedBrowseResultQuery)))
+    : discover;
 
   const copy = {
     saved: { title: "둘의 장소", body: "저장한 장소만 여기에 모여 있어요." },
@@ -302,7 +362,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
         </div>
         <div className="category-row">
           <button className={savedCategory === "all" ? "is-active" : ""} type="button" onClick={() => setSavedCategory("all")}>전체</button>
-          {PLACE_CATEGORIES.map(item => <button className={savedCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSavedCategory(item.id)} key={item.id}>{item.icon} {item.label}</button>)}
+          {PLACE_CATEGORIES.map(item => <button className={savedCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSavedCategory(item.id)} key={item.id}><PlaceCategoryIcon category={item.id} />{item.label}</button>)}
           <label><span>⌕</span><input id="place-archive-search" value={savedQuery} onChange={event => setSavedQuery(event.target.value)} placeholder="저장한 이름만 찾기" /></label>
         </div>
       </>
@@ -322,7 +382,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
         </div>
         <div className="chip-row discover-cats">
           <button className={searchCategory === "all" ? "is-active" : ""} type="button" onClick={() => setSearchCategory("all")}>전체</button>
-          {PLACE_CATEGORIES.map(item => <button className={searchCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSearchCategory(item.id)} key={item.id}>{item.label}</button>)}
+          {PLACE_CATEGORIES.map(item => <button className={searchCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSearchCategory(item.id)} key={item.id}><PlaceCategoryIcon category={item.id} />{item.label}</button>)}
         </div>
       </form>
     )}
@@ -330,24 +390,11 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     {section === "browse" && (
       <div className="discover-browse">
         <div className="region-browser" aria-label="지역 선택">
+          <div className="region-browser-head">
+            <div><span>지역 둘러보기</span><strong>어디에서 함께 시간을 보낼까요?</strong></div>
+            <p>지역과 장소 종류를 고르면 바로 후보를 보여드려요.</p>
+          </div>
           <div className="region-tabs" role="tablist" aria-label="넓은 지역">
-            <button
-              className={!browseGroup ? "is-active" : ""}
-              type="button"
-              role="tab"
-              aria-selected={!browseGroup}
-              onClick={() => {
-                setBrowseGroup("");
-                setBrowseArea("");
-                setDiscover([]);
-                setDiscoverError("");
-                setDiscoverHint("");
-                setSearched(false);
-                setDiscoverTotal(0);
-              }}
-            >
-              전체
-            </button>
             {PLACE_AREA_GROUPS.map(group => (
               <button
                 className={browseGroup === group.id ? "is-active" : ""}
@@ -357,12 +404,9 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
                 aria-selected={browseGroup === group.id}
                 onClick={() => {
                   setBrowseGroup(group.id);
-                  setBrowseArea("");
-                  setDiscover([]);
-                  setDiscoverError("");
-                  setDiscoverHint("");
-                  setSearched(false);
-                  setDiscoverTotal(0);
+                  setBrowseArea("all");
+                  setBrowseRegionQuery("");
+                  runBrowse({ group: group.id, area: "all" });
                 }}
               >
                 {group.label}
@@ -370,16 +414,17 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
             ))}
           </div>
           <div className="region-options" role="listbox" aria-label="세부 지역">
-            {selectedBrowseGroup ? (
-              <>
+            <span className="region-section-label">추천 동네</span>
+            {selectedBrowseGroup && <>
                 <button
                   className={browseArea === "all" ? "is-active" : ""}
                   type="button"
                   role="option"
                   aria-selected={browseArea === "all"}
-                  onClick={() => {
-                    setBrowseArea("all");
-                    runBrowse({ group: selectedBrowseGroup.id, area: "all" });
+                    onClick={() => {
+                      setBrowseArea("all");
+                      setBrowseRegionQuery("");
+                      runBrowse({ group: selectedBrowseGroup.id, area: "all" });
                   }}
                 >
                   {selectedBrowseGroup.label} 전체
@@ -393,53 +438,68 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
                     aria-selected={browseArea === item.id}
                     onClick={() => {
                       setBrowseArea(item.id);
+                      setBrowseRegionQuery("");
                       runBrowse({ group: selectedBrowseGroup.id, area: item.id });
                     }}
                   >
                     {item.label}
                   </button>
                 ))}
-              </>
-            ) : (
-              PLACE_AREA_GROUPS.map(group => (
-                <button
-                  type="button"
-                  key={group.id}
-                  role="option"
-                  aria-selected="false"
-                  onClick={() => {
-                    setBrowseGroup(group.id);
-                    setBrowseArea("all");
-                    runBrowse({ group: group.id, area: "all" });
-                  }}
-                >
-                  {group.label} 전체
-                </button>
-              ))
-            )}
+              </>}
           </div>
-        </div>
-        <div className="discover-filter">
-          <span>종류</span>
-          <div className="chip-row">
-            {PLACE_CATEGORIES.map(item => (
-              <button className={browseCategory === item.id ? "is-active" : ""} type="button" key={item.id} onClick={() => {
-                setBrowseCategory(item.id);
-                runBrowse({ category: item.id });
-              }}>{item.label}</button>
-            ))}
+          <form className="region-search" onSubmit={event => {
+            event.preventDefault();
+            handleRegionSearch(new FormData(event.currentTarget));
+          }}>
+            <label htmlFor="region-detail-search"><span>시·군·구·동 직접 찾기</span><small>목록에 없는 지역도 검색할 수 있어요.</small></label>
+            <div className="region-search-control" ref={regionSearchRef}>
+              <span className="region-search-icon" aria-hidden="true">⌕</span>
+              <input
+                id="region-detail-search"
+                name="region"
+                value={browseRegionQuery}
+                onChange={event => {
+                  setBrowseRegionQuery(event.target.value);
+                  setRegionSuggestionsOpen(true);
+                }}
+                onFocus={() => setRegionSuggestionsOpen(true)}
+                onKeyDown={event => {
+                  if (event.key === "Escape") setRegionSuggestionsOpen(false);
+                }}
+                placeholder={`${selectedBrowseGroup?.label ?? "지역"}의 구·시·군·동 입력`}
+                role="combobox"
+                aria-expanded={regionSuggestionsOpen}
+                aria-controls="region-suggestions"
+                aria-autocomplete="list"
+                autoComplete="off"
+              />
+              <button className="region-apply-button" type="submit" disabled={discoverPending}>
+                {discoverPending ? <><i className="button-spinner" />찾는 중</> : "지역 적용"}
+              </button>
+              {regionSuggestionsOpen && regionSuggestions.length > 0 && (
+                <div className="region-suggestion-popover" id="region-suggestions" role="listbox" aria-label={`${selectedBrowseGroup?.label ?? "지역"} 세부 지역`}>
+                  <span>추천 지역</span>
+                  {regionSuggestions.map(area => (
+                    <button type="button" role="option" aria-selected={browseRegionQuery === area} key={area} onClick={() => applyRegionSearch(area)}>
+                      <b>{area}</b>
+                      <small>{selectedBrowseGroup?.label}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </form>
+          <div className="discover-filter">
+            <span>장소 종류</span>
+            <div className="chip-row">
+              {PLACE_CATEGORIES.map(item => (
+                <button className={browseCategories.includes(item.id) ? "is-active" : ""} type="button" key={item.id} aria-pressed={browseCategories.includes(item.id)} disabled={discoverPending} onClick={() => toggleBrowseCategory(item.id)}><PlaceCategoryIcon category={item.id} />{item.label}</button>
+              ))}
+            </div>
           </div>
-        </div>
-        <div className="discover-filter is-mood">
-          <span>분위기</span>
-          <div className="chip-row">
-            {PLACE_MOODS.map(item => (
-              <button className={browseMood === item.query ? "is-active" : ""} type="button" key={item.id} onClick={() => {
-                const next = browseMood === item.query ? "" : item.query;
-                setBrowseMood(next);
-                runBrowse({ mood: next });
-              }}>{item.label}</button>
-            ))}
+          <div className={`browse-selection ${discoverPending ? "is-loading" : ""}`} aria-live="polite">
+            <span><i />{discoverPending ? "후보를 찾는 중" : "선택한 조건"}</span>
+            <b>{selectedBrowseAreaLabel} · {selectedBrowseCategoryLabel}{discoverPending ? " · 검색 중" : ""}</b>
           </div>
         </div>
       </div>
@@ -481,9 +541,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
         selectedId={selectedId}
         pending={discoverPending}
         error={discoverError}
-        hint={discoverHint}
         isEnd={discoverIsEnd}
-        totalCount={discoverTotal}
         layout={layout}
         emptyTitle={searched ? "검색 결과가 없어요." : "장소 이름을 검색해 보세요."}
         emptyBody={searched ? "다른 이름이거나, 못 찾으면 직접 입력해 보세요." : "성수 대림창고처럼 알고 있는 이름을 넣으면 후보가 나와요."}
@@ -496,21 +554,27 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
 
     {section === "browse" && (
       browseArea ? (
-        <PlaceDiscoverResults
-          places={discover}
+        <>
+          {(discover.length > 0 || browseResultQuery) && (
+            <div className="result-search-toolbar">
+              <div><b>검색 결과</b><span>{visibleBrowseDiscover.length}곳{browseResultQuery ? ` / 전체 ${discover.length}곳` : ""}</span></div>
+              <label><span aria-hidden="true">⌕</span><input value={browseResultQuery} onChange={event => setBrowseResultQuery(event.target.value)} placeholder="결과에서 이름·주소 찾기" aria-label="검색 결과 내 찾기" />{browseResultQuery && <button type="button" onClick={() => setBrowseResultQuery("")} aria-label="결과 검색어 지우기">×</button>}</label>
+            </div>
+          )}
+          <PlaceDiscoverResults
+          places={visibleBrowseDiscover}
           selectedId={selectedId}
           pending={discoverPending}
           error={discoverError}
-          hint={discoverHint}
           isEnd={discoverIsEnd}
-          totalCount={discoverTotal}
           layout={layout}
-          emptyTitle="이 동네의 후보가 아직 없어요."
-          emptyBody="다른 동네를 고르거나, 종류와 분위기를 바꿔 보세요."
+          emptyTitle={browseResultQuery ? "결과 안에서 일치하는 장소가 없어요." : "이 동네의 후보가 아직 없어요."}
+          emptyBody={browseResultQuery ? "검색어를 줄이거나 다른 이름과 주소로 찾아보세요." : "다른 동네를 고르거나, 종류를 바꿔 보세요."}
           onSelect={handleSelect}
           onSave={openSave}
           onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}
         />
+        </>
       ) : (
         <div className="empty-inline">
           <h2>데이트할 동네를 골라 주세요.</h2>
@@ -538,9 +602,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
             selectedId={selectedId}
             pending={discoverPending}
             error=""
-            hint={discoverHint}
             isEnd={discoverIsEnd}
-            totalCount={discoverTotal}
             layout="list"
             emptyTitle=""
             emptyBody=""

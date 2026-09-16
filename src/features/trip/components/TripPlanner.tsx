@@ -6,9 +6,9 @@ import { AppShell } from "@/components/layout/AppShell";
 import { DatePickerButton } from "@/components/shared/DatePickerButton";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { AIPlanEditor } from "@/features/ai/components/AIPlanEditor";
+import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { ActivityPanel } from "@/features/collaboration/components/ActivityPanel";
 import { VersionHistory } from "@/features/collaboration/components/VersionHistory";
-import { loadPlanVersions } from "@/features/collaboration/actions";
 import { getActiveTripDay, getDraftPlanMeta, getDraftTripItems, setActiveTripDay, setDraftPlanMeta, setDraftTripItems, subscribeDraftTrip } from "@/features/planning/draftTrip";
 import { getDemoPlaces, subscribeDemoPlaces } from "@/features/places/demoPlaces";
 import type { Place } from "@/features/places/types/place";
@@ -29,14 +29,15 @@ function mergeDay(all: PlanItem[], dayIndex: number, nextDay: PlanItem[]) {
 }
 
 export function TripPlanner() {
+  const session = useAppSession();
   const [items, setItems] = useState<PlanItem[]>([]);
   const [title, setTitle] = useState("우리가 고른 여행");
   const [notes, setNotes] = useState("");
   const [startDate, setStartDate] = useState("");
   const [dayCount, setDayCount] = useState(1);
   const [selectedDay, setSelectedDay] = useState(0);
-  const [loaded, setLoaded] = useState(false);
-  const [panel, setPanel] = useState<Panel>("history");
+  const [loaded, setLoaded] = useState(true);
+  const [panel, setPanel] = useState<Panel>("activity");
   const [tab, setTab] = useState<Tab>("schedule");
   const [version, setVersion] = useState(0);
   const [saved, setSaved] = useState(true);
@@ -52,12 +53,35 @@ export function TripPlanner() {
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([loadCouplePlan("trip"), loadPlanVersions("trip")]).then(([result, versions]) => {
+    const stored = getDraftTripItems();
+    const localMeta = getDraftPlanMeta("trip");
+    const storedDays = stored.reduce((max, item) => Math.max(max, (item.dayIndex ?? 0) + 1), 1);
+    const localDayCount = Math.max(1, localMeta.dayCount, storedDays);
+    const active = Math.min(getActiveTripDay(), localDayCount - 1);
+    setItems(stored);
+    setTitle(localMeta.title);
+    setNotes(localMeta.notes);
+    setStartDate(localMeta.startDate);
+    setDayCount(localDayCount);
+    setSelectedDay(active);
+    setActiveTripDay(active);
+    setDemoPlaces(getDemoPlaces());
+    setLoaded(true);
+
+    const unsubscribe = subscribeDraftTrip(() => setItems(getDraftTripItems()));
+    const unsubscribePlaces = subscribeDemoPlaces(() => setDemoPlaces(getDemoPlaces()));
+
+    if (session.mode !== "authenticated") {
+      return () => {
+        cancelled = true;
+        unsubscribe();
+        unsubscribePlaces();
+      };
+    }
+
+    void loadCouplePlan("trip").then(result => {
       if (cancelled) return;
-      setVersion(versions.latest);
       revisionRef.current = result.revision;
-      const stored = getDraftTripItems();
-      const localMeta = getDraftPlanMeta("trip");
       if (result.persist && result.items.length) {
         setItems(result.items);
         setDraftTripItems(result.items);
@@ -75,26 +99,18 @@ export function TripPlanner() {
       setTitle(result.title || localMeta.title);
       setNotes(result.notes || localMeta.notes);
       setStartDate(result.startDate || localMeta.startDate);
-      const storedDays = stored.reduce((max, item) => Math.max(max, (item.dayIndex ?? 0) + 1), 1);
       const nextDayCount = Math.max(1, result.dayCount || 1, localMeta.dayCount, storedDays);
       setDayCount(nextDayCount);
       const active = Math.min(getActiveTripDay(), nextDayCount - 1);
       setSelectedDay(active);
       setActiveTripDay(active);
-      if (!result.persist) setDemoPlaces(getDemoPlaces());
-      setLoaded(true);
     });
-    const unsubscribe = subscribeDraftTrip(() => {
-      const next = getDraftTripItems();
-      if (next.length) setItems(next);
-    });
-    const unsubscribePlaces = subscribeDemoPlaces(() => setDemoPlaces(getDemoPlaces()));
     return () => {
       cancelled = true;
       unsubscribe();
       unsubscribePlaces();
     };
-  }, []);
+  }, [session.mode]);
 
   const persist = (next: PlanItem[], extra?: { title?: string; subtitle?: string; startDate?: string | null; dayCount?: number }) => {
     setSaved(false);

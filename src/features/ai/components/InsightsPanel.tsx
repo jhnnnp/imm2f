@@ -39,8 +39,8 @@ export function InsightsPanel({ initial }: { initial: PreferenceInsight | null }
       {!insight ? (
         <div className="empty-soft">
           <span>∿</span>
-          <h1>아직 분석할 기록이 없어요</h1>
-          <p>Places에 장소를 저장하면 둘의 취향 요약을 만들 수 있어요.</p>
+          <h1>둘의 취향을 분석해 볼까요?</h1>
+          <p>저장한 장소를 바탕으로 공통 취향과 서로 다른 매력을 정리해 드려요.</p>
           <button className="primary-button" type="button" onClick={refresh} disabled={pending}>
             {pending ? "분석 중..." : "지금 분석하기"}
           </button>

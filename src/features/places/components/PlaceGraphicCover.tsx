@@ -6,20 +6,23 @@ function coverVariant(value: string) {
   return hash % 6;
 }
 
-function monogram(name: string) {
-  const compact = name.replace(/[^\p{L}\p{N}]/gu, "");
-  return compact.slice(0, 2).toUpperCase() || "OU";
+function coverTitle(name: string) {
+  const title = name.trim() || "ONLY US";
+  const length = title.replace(/\s/gu, "").length;
+  const size = length <= 8 ? "short" : length <= 16 ? "medium" : "long";
+  return { title, size };
 }
 
 export function PlaceGraphicCover({ place }: { place: Pick<Place, "name" | "category" | "categoryLabel" | "district" | "address"> }) {
   const variant = coverVariant(`${place.name}-${place.district || place.address || ""}`);
+  const title = coverTitle(place.name);
   return (
     <span className={`place-graphic-cover is-${place.category} variant-${variant}`} aria-hidden="true">
       <i className="place-graphic-shape shape-one" />
       <i className="place-graphic-shape shape-two" />
       <span className="place-graphic-grid" />
       <span className="place-graphic-copy">
-        <b>{monogram(place.name)}</b>
+        <b className={`is-${title.size}`}>{title.title}</b>
         <small>{place.categoryLabel} · ONLY US</small>
       </span>
     </span>
