@@ -1,0 +1,20 @@
+---
+description: Keep border radii consistent across the project UI
+globs: src/**/*.{css,tsx}
+alwaysApply: false
+---
+
+# UI radius system
+
+- Use `12px` for outer surfaces such as cards, panels, toolbars, dialogs, menus, and grouped controls.
+- Use `9px` for controls nested inside those surfaces, including buttons, inputs, menu rows, tabs, and media frames.
+- Prefer shared CSS custom properties instead of repeating raw values:
+
+```css
+--radius-outer: 12px;
+--radius-inner: 9px;
+```
+
+- Preserve circles (`50%`) for avatars, status dots, map markers, and icon-only controls whose circular shape carries meaning.
+- Preserve a pill radius only when the component is intentionally a semantic chip, tag, or compact status badge.
+- When editing an existing UI, normalize nearby mismatched radii to this system when it is safe and within scope.

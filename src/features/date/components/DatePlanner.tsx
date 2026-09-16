@@ -15,6 +15,7 @@ import type { Place } from "@/features/places/types/place";
 import { loadCouplePlan, saveCouplePlan } from "@/features/planning/actions";
 import type { PlanChange, PlanItem } from "@/features/planning/types/plan";
 import { formatKoDate } from "@/lib/dates";
+import { archiveDate, getArchivedDates, subscribeDateArchive, type DateMemory } from "@/features/date/dateArchive";
 
 type Panel = "ai" | "history" | null;
 
@@ -30,6 +31,9 @@ export function DatePlanner() {
   const [saveError, setSaveError] = useState("");
   const [demoPlaces, setDemoPlaces] = useState<Place[]>([]);
   const [notesSaveState, setNotesSaveState] = useState<"saved" | "typing" | "saving">("saved");
+  const [showArchive, setShowArchive] = useState(false);
+  const [archivedDates, setArchivedDates] = useState<DateMemory[]>([]);
+  const [archiveNotice, setArchiveNotice] = useState("");
   const revisionRef = useRef(0);
   const notesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -42,18 +46,21 @@ export function DatePlanner() {
     setNotes(localMeta.notes);
     setStartDate(localMeta.startDate);
     setDemoPlaces(getDemoPlaces());
+    setArchivedDates(getArchivedDates());
     setLoaded(true);
 
     const unsubscribe = subscribeDraftTrip(() => {
       setItems(getDraftDateItems());
     });
     const unsubscribePlaces = subscribeDemoPlaces(() => setDemoPlaces(getDemoPlaces()));
+    const unsubscribeArchive = subscribeDateArchive(() => setArchivedDates(getArchivedDates()));
 
     if (session.mode !== "authenticated") {
       return () => {
         cancelled = true;
         unsubscribe();
         unsubscribePlaces();
+        unsubscribeArchive();
         if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
       };
     }
@@ -83,6 +90,7 @@ export function DatePlanner() {
       cancelled = true;
       unsubscribe();
       unsubscribePlaces();
+      unsubscribeArchive();
       if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
     };
   }, [session.mode]);
@@ -146,6 +154,13 @@ export function DatePlanner() {
     setPanel("history");
   };
 
+  const finishDate = () => {
+    if (!items.length) return;
+    archiveDate({ title, date: startDate, notes, items });
+    setArchiveNotice("현재 데이트를 지난 데이트에 저장했어요.");
+    setShowArchive(true);
+  };
+
   const context = panel === "ai"
     ? <AIPlanEditor kind="date" items={items} places={demoPlaces.length ? demoPlaces : undefined} onApply={apply} onReplace={replace} />
     : panel === "history"
@@ -154,7 +169,7 @@ export function DatePlanner() {
 
   return (
     <AppShell context={context}>
-      <div className="page-title-row">
+      <div className="page-title-row date-planner-header">
         <div>
           <span className="eyebrow">DATE PLANNER</span>
           {loaded && items.length ? (
@@ -162,15 +177,11 @@ export function DatePlanner() {
           ) : (
             <h1>{!loaded ? "일정을 불러오는 중이에요" : "다음 데이트를 아직 안 잡았어요"}</h1>
           )}
-          <p>
-            {!loaded
-              ? "저장된 오후 일정을 가져오고 있어요."
-              : items.length
-                ? `${items.length}곳${startDate ? ` · ${formatKoDate(startDate)}` : ""}`
-                : "장소를 담고 AI로 3안을 고를 수 있어요."}
-          </p>
+          {!items.length && (
+            <p>{!loaded ? "저장된 오후 일정을 가져오고 있어요." : "장소를 담고 AI로 3안을 고를 수 있어요."}</p>
+          )}
         </div>
-        <div className="page-actions date-planner-actions">
+        <div className="page-actions date-planner-actions date-toolbar">
           <DatePickerButton
             value={startDate}
             emptyLabel="날짜 고르기"
@@ -180,8 +191,14 @@ export function DatePlanner() {
               persist(items, { startDate: value || null });
             }}
           />
+          <div className="save-status"><i /> {saveError || "저장됨"}</div>
           {(items.length > 0 || demoPlaces.length > 0) && (
             <div className="date-action-group">
+              <button className={`date-action-button is-archive ${showArchive ? "is-active" : ""}`} type="button" onClick={() => setShowArchive(value => !value)}>
+                <HeaderActionIcon name="archive" />
+                <span>지난 데이트</span>
+                <b>{archivedDates.length}</b>
+              </button>
               {items.length > 0 && (
                 <button className={`date-action-button is-history ${panel === "history" ? "is-active" : ""}`} type="button" onClick={() => setPanel(panel === "history" ? null : "history")}>
                   <HeaderActionIcon name="history" />
@@ -203,7 +220,23 @@ export function DatePlanner() {
         </div>
       </div>
       {saveError && <p className="form-hint">{saveError}</p>}
-      {!loaded ? (
+      {showArchive ? (
+        <section className="date-archive paper-card">
+          <div className="date-archive-head">
+            <div><span className="eyebrow">PAST DATES</span><h2>함께 보낸 데이트</h2><p>사라지지 않고 둘의 기록으로 차곡차곡 남아요.</p></div>
+            {items.length > 0 && <button className="date-action-button is-primary" type="button" onClick={finishDate}><HeaderActionIcon name="archive" /><span>현재 데이트 기록하기</span></button>}
+          </div>
+          {archiveNotice && <p className="date-archive-notice">{archiveNotice}</p>}
+          <div className="date-archive-grid">
+            {archivedDates.map((date, index) => (
+              <article key={date.id}>
+                <div className={`date-archive-art variant-${index % 3}`}><span>{date.date ? formatKoDate(date.date) : "날짜 미정"}</span><b>{date.items.length}</b><small>PLACES</small></div>
+                <div><span>{date.date || "날짜 미정"}</span><h3>{date.title}</h3><p>{date.notes || date.items.map(item => item.placeName).join(" · ")}</p><div>{date.items.slice(0, 3).map(item => <b key={item.id}>{item.placeName}</b>)}</div></div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : !loaded ? (
         <p className="form-hint">일정을 불러오는 중이에요.</p>
       ) : !items.length ? (
         <div className="empty-soft">

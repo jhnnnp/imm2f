@@ -1,10 +1,47 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { GeoJSONSource, Map as MapLibreMap, Marker } from "maplibre-gl";
+import type { GeoJSONSource, Map as MapLibreMap, Marker, StyleSpecification } from "maplibre-gl";
 import type { PlanItem } from "@/features/planning/types/plan";
 
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+const MAP_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    basemap: {
+      type: "raster",
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: "© OpenStreetMap contributors",
+    },
+  },
+  layers: [
+    { id: "paper", type: "background", paint: { "background-color": "#e8e9e2" } },
+    {
+      id: "basemap",
+      type: "raster",
+      source: "basemap",
+      paint: {
+        "raster-opacity": 0.78,
+        "raster-saturation": -0.42,
+        "raster-contrast": -0.1,
+        "raster-brightness-min": 0.12,
+        "raster-brightness-max": 0.96,
+      },
+    },
+  ],
+};
+
+function hasValidCoordinates(item: PlanItem): item is PlanItem & { coordinates: [number, number] } {
+  const coordinates = item.coordinates;
+  return Boolean(
+    coordinates
+      && Number.isFinite(coordinates[0])
+      && Number.isFinite(coordinates[1])
+      && Math.abs(coordinates[0]) <= 180
+      && Math.abs(coordinates[1]) <= 90,
+  );
+}
 
 export function PlanMap({ items, dayLabel }: { items: PlanItem[]; dayLabel?: string }) {
   const container = useRef<HTMLDivElement>(null);
@@ -12,19 +49,37 @@ export function PlanMap({ items, dayLabel }: { items: PlanItem[]; dayLabel?: str
   const markersRef = useRef<Marker[]>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(false);
-  const located = items.filter((item): item is PlanItem & { coordinates: [number, number] } => Boolean(item.coordinates));
+  const located = items.filter(hasValidCoordinates);
 
   useEffect(() => {
     if (!container.current || mapRef.current || !located.length) return;
     let disposed = false;
-    void import("maplibre-gl").then(maplibregl => {
-      if (disposed || !container.current) return;
-      const map = new maplibregl.Map({ container: container.current, style: MAP_STYLE, center: located[0].coordinates, zoom: 13, pitch: 28, attributionControl: false });
-      map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
-      map.once("load", () => { if (!disposed) setReady(true); });
-      map.on("error", event => { if (!event.error?.message.includes("404")) setError(true); });
-      mapRef.current = map;
-    });
+    setReady(false);
+    setError(false);
+    void import("maplibre-gl")
+      .then(maplibregl => {
+        if (disposed || !container.current) return;
+        try {
+          const map = new maplibregl.Map({
+            container: container.current,
+            style: MAP_STYLE,
+            center: located[0].coordinates,
+            zoom: 13,
+            pitch: 28,
+            attributionControl: false,
+          });
+          mapRef.current = map;
+          map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
+          map.once("load", () => {
+            if (!disposed) setReady(true);
+          });
+        } catch {
+          if (!disposed) setError(true);
+        }
+      })
+      .catch(() => {
+        if (!disposed) setError(true);
+      });
     return () => {
       disposed = true;
       markersRef.current.forEach(marker => marker.remove());

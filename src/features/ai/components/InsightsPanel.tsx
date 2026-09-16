@@ -27,7 +27,6 @@ export function InsightsPanel({ initial }: { initial: PreferenceInsight | null }
         <div>
           <span className="eyebrow">OUR TASTE</span>
           <h1>우리의 취향</h1>
-          <p>쌓인 기록 속에서 둘이 좋아하는 여행의 리듬을 발견해요.</p>
         </div>
         <div className="page-actions insight-actions">
           <button

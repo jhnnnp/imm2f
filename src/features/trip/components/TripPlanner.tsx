@@ -9,7 +9,7 @@ import { AIPlanEditor } from "@/features/ai/components/AIPlanEditor";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { ActivityPanel } from "@/features/collaboration/components/ActivityPanel";
 import { VersionHistory } from "@/features/collaboration/components/VersionHistory";
-import { getActiveTripDay, getDraftPlanMeta, getDraftTripItems, setActiveTripDay, setDraftPlanMeta, setDraftTripItems, subscribeDraftTrip } from "@/features/planning/draftTrip";
+import { ensureDemoGunsanTrip, getActiveTripDay, getDraftPlanMeta, getDraftTripItems, setActiveTripDay, setDraftPlanMeta, setDraftTripItems, subscribeDraftTrip } from "@/features/planning/draftTrip";
 import { getDemoPlaces, subscribeDemoPlaces } from "@/features/places/demoPlaces";
 import type { Place } from "@/features/places/types/place";
 import { loadCouplePlan, saveCouplePlan } from "@/features/planning/actions";
@@ -17,9 +17,10 @@ import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import type { PlanChange, PlanItem } from "@/features/planning/types/plan";
 import { addDays, formatKoDate, formatKoShort } from "@/lib/dates";
 import { PlanMap } from "./PlanMap";
+import { archiveTrip, getArchivedTrips, subscribeTripArchive, type TripJourney } from "@/features/trip/tripArchive";
 
 type Panel = "ai" | "history" | "activity";
-type Tab = "schedule" | "map" | "notes";
+type Tab = "schedule" | "map" | "notes" | "archive";
 
 function mergeDay(all: PlanItem[], dayIndex: number, nextDay: PlanItem[]) {
   const others = all.filter(item => (item.dayIndex ?? 0) !== dayIndex);
@@ -43,6 +44,8 @@ export function TripPlanner() {
   const [saved, setSaved] = useState(true);
   const [saveError, setSaveError] = useState("");
   const [demoPlaces, setDemoPlaces] = useState<Place[]>([]);
+  const [archivedTrips, setArchivedTrips] = useState<TripJourney[]>([]);
+  const [archiveNotice, setArchiveNotice] = useState("");
   const revisionRef = useRef(0);
   const dayItems = useMemo(
     () => items.filter(item => (item.dayIndex ?? 0) === selectedDay),
@@ -53,6 +56,7 @@ export function TripPlanner() {
 
   useEffect(() => {
     let cancelled = false;
+    if (session.mode !== "authenticated") ensureDemoGunsanTrip();
     const stored = getDraftTripItems();
     const localMeta = getDraftPlanMeta("trip");
     const storedDays = stored.reduce((max, item) => Math.max(max, (item.dayIndex ?? 0) + 1), 1);
@@ -66,16 +70,19 @@ export function TripPlanner() {
     setSelectedDay(active);
     setActiveTripDay(active);
     setDemoPlaces(getDemoPlaces());
+    setArchivedTrips(getArchivedTrips());
     setLoaded(true);
 
     const unsubscribe = subscribeDraftTrip(() => setItems(getDraftTripItems()));
     const unsubscribePlaces = subscribeDemoPlaces(() => setDemoPlaces(getDemoPlaces()));
+    const unsubscribeArchive = subscribeTripArchive(() => setArchivedTrips(getArchivedTrips()));
 
     if (session.mode !== "authenticated") {
       return () => {
         cancelled = true;
         unsubscribe();
         unsubscribePlaces();
+        unsubscribeArchive();
       };
     }
 
@@ -109,8 +116,16 @@ export function TripPlanner() {
       cancelled = true;
       unsubscribe();
       unsubscribePlaces();
+      unsubscribeArchive();
     };
   }, [session.mode]);
+
+  function finishTrip() {
+    if (!items.length) return;
+    archiveTrip({ title, startDate, dayCount, items });
+    setArchiveNotice("지난 여행에 보관했어요.");
+    setTab("archive");
+  }
 
   const persist = (next: PlanItem[], extra?: { title?: string; subtitle?: string; startDate?: string | null; dayCount?: number }) => {
     setSaved(false);
@@ -198,13 +213,9 @@ export function TripPlanner() {
           ) : (
             <h1>{!loaded ? "일정을 불러오는 중이에요" : "아직 잡아 둔 여행이 없어요"}</h1>
           )}
-          <p>
-            {!loaded
-              ? "저장된 하루를 가져오고 있어요."
-              : items.length
-                ? `${dayCount}일 · ${items.length}곳${startDate ? ` · ${formatKoDate(startDate)}부터` : ""}`
-                : "장소를 담고, 필요하면 AI가 하루 순서를 잡아 줘요."}
-          </p>
+          {!items.length && (
+            <p>{!loaded ? "저장된 하루를 가져오고 있어요." : "장소를 담고, 필요하면 AI가 하루 순서를 잡아 줘요."}</p>
+          )}
         </div>
         <div className="page-actions date-planner-actions trip-planner-actions">
           <DatePickerButton
@@ -217,6 +228,7 @@ export function TripPlanner() {
             }}
           />
           <div className="save-status"><i /> {saveError || (saved ? "저장됨" : "저장 중...")}</div>
+          {items.length > 0 && <button className="outline-button trip-finish-button" type="button" onClick={finishTrip}>지난 여행</button>}
           <div className="date-action-group">
             <button className={`date-action-button is-history ${panel === "activity" ? "is-active" : ""}`} type="button" onClick={() => setPanel("activity")}>
               <HeaderActionIcon name="activity" /><span>최근 활동</span>
@@ -231,10 +243,16 @@ export function TripPlanner() {
         <button className={tab === "schedule" ? "is-active" : ""} type="button" onClick={() => setTab("schedule")}>일정</button>
         <button className={tab === "map" ? "is-active" : ""} type="button" onClick={() => setTab("map")}>지도</button>
         <button className={tab === "notes" ? "is-active" : ""} type="button" onClick={() => setTab("notes")}>여행 노트</button>
+        <button className={tab === "archive" ? "is-active" : ""} type="button" onClick={() => setTab("archive")}>지난 여행</button>
         <button type="button" onClick={() => setPanel("history")}>변경 기록</button>
       </div>
 
-      {tab === "notes" ? (
+      {tab === "archive" ? (
+        <section className="trip-archive paper-card">
+          <div className="trip-archive-head"><div><span className="eyebrow">PAST JOURNEYS</span><h2>함께 다녀온 여행</h2></div>{archiveNotice && <p>{archiveNotice}</p>}</div>
+          <div className="trip-archive-grid">{archivedTrips.map(journey => <article key={journey.id}><span>{journey.startDate || "날짜 미정"}</span><h3>{journey.title}</h3><p>{journey.dayCount}일 · {journey.items.length}곳</p><Link href="/our-map">기억 지도에서 보기 →</Link></article>)}</div>
+        </section>
+      ) : tab === "notes" ? (
         <section className="plan-notes paper-card">
           <span className="eyebrow">TRIP NOTES</span>
           <h2>둘이 남기는 메모</h2>

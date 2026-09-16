@@ -320,7 +320,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     : discover;
 
   const copy = {
-    saved: { title: "둘의 장소", body: "저장한 장소만 여기에 모여 있어요." },
+    saved: { title: "둘의 장소", body: null },
     search: { title: "장소 검색", body: "이름을 알면 찾아서 저장해요." },
     browse: { title: "지역별 둘러보기", body: "넓은 지역을 고른 뒤, 데이트하고 싶은 동네를 고르면 돼요." },
     map: { title: "지도에서 찾기", body: "지도를 옮긴 뒤, 지금 화면의 주변 장소를 가져와요." },
@@ -331,7 +331,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
       <div>
         <span className="eyebrow">OUR PLACE ARCHIVE</span>
         <h1>{copy.title}</h1>
-        <p>{copy.body}</p>
+        {copy.body && <p>{copy.body}</p>}
       </div>
       <div className="page-actions header-action-group">
         {section !== "saved" && <button className="date-action-button is-history" type="button" onClick={() => handleSection("saved")}><HeaderActionIcon name="archive" /><span>저장한 장소</span></button>}

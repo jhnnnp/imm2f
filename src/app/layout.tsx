@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { SessionProvider } from "@/features/auth/components/SessionProvider";
 import { getAppSession } from "@/features/auth/session";
 import "./globals.css";
+import "./map-polish.css";
 
 export const metadata: Metadata = {
   title: { default: "ONLY US — 우리의 공간", template: "%s — ONLY US" },
