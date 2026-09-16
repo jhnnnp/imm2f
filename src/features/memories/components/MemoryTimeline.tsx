@@ -11,6 +11,7 @@ import type { Place } from "@/features/places/types/place";
 import { formatKoDate, toIsoDate } from "@/lib/dates";
 
 type MemoryTab = "timeline" | "album" | "map" | "trip" | "date";
+type CreateStep = "photo" | "story";
 
 export function MemoryTimeline({
   initialMemories,
@@ -25,6 +26,7 @@ export function MemoryTimeline({
   const [memories, setMemories] = useState(initialMemories);
   const [tab, setTab] = useState<MemoryTab>("timeline");
   const [open, setOpen] = useState(false);
+  const [createStep, setCreateStep] = useState<CreateStep>("photo");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [title, setTitle] = useState("");
@@ -34,6 +36,7 @@ export function MemoryTimeline({
   const [placeId, setPlaceId] = useState("");
   const [coverUrl, setCoverUrl] = useState("");
   const [fileName, setFileName] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState("");
   const [photoMetadata, setPhotoMetadata] = useState<PhotoMetadataInput | null>(null);
   const [latitude, setLatitude] = useState("");
@@ -59,6 +62,7 @@ export function MemoryTimeline({
   }, [photoPreview]);
 
   async function inspectPhoto(file?: File) {
+    setSelectedFile(file ?? null);
     setFileName(file?.name ?? "");
     setPhotoMetadata(null);
     setLatitude("");
@@ -125,6 +129,17 @@ export function MemoryTimeline({
   const featured = visible[0] ?? null;
   const secondary = visible[1] ?? null;
 
+  function openComposer() {
+    setCreateStep("photo");
+    setError("");
+    setOpen(true);
+  }
+
+  function continueToStory() {
+    setTitle(current => current || (locationLabel && locationLabel !== "사진의 촬영 위치" ? `${locationLabel}에서의 우리` : "우리의 하루"));
+    setCreateStep("story");
+  }
+
   function beginEdit(memory: Memory) {
     setEditTitle(memory.title);
     setEditDate(memory.happenedOn);
@@ -184,9 +199,7 @@ export function MemoryTimeline({
     const selected = sortedPlaces.find(place => place.id === placeId);
     let photoUrl = coverUrl || selected?.image || "";
     let uploadedPath: string | null = null;
-    const form = event.currentTarget;
-    const fileInput = form.querySelector<HTMLInputElement>('input[type="file"]');
-    const file = fileInput?.files?.[0];
+    const file = selectedFile;
     if (file) {
       if (session.mode !== "authenticated") {
         setPending(false);
@@ -255,6 +268,7 @@ export function MemoryTimeline({
     setPlaceId("");
     setCoverUrl("");
     setFileName("");
+    setSelectedFile(null);
     setPhotoPreview("");
     setPhotoMetadata(null);
     setLatitude("");
@@ -267,7 +281,7 @@ export function MemoryTimeline({
         <div className="empty-soft">
           <h1>이 보기에 추억이 없어요</h1>
           <p>남긴 장면이 있으면 Timeline · Album에서 다시 볼 수 있어요.</p>
-          <button className="primary-button" type="button" onClick={() => setOpen(true)}>추억 남기기</button>
+          <button className="primary-button" type="button" onClick={openComposer}>추억 남기기</button>
         </div>
       );
     }
@@ -344,7 +358,7 @@ export function MemoryTimeline({
           <h1>함께여서 기억나는 장면들</h1>
           <p>사진보다 먼저 떠오르는 마음까지 천천히 모아두었어요.</p>
         </div>
-        <button className="date-action-button is-primary" type="button" onClick={() => setOpen(true)}><HeaderActionIcon name="plus" /><span>추억 남기기</span></button>
+        <button className="date-action-button is-primary" type="button" onClick={openComposer}><HeaderActionIcon name="plus" /><span>추억 남기기</span></button>
       </div>
       <div className="memory-tabs">
         {([
@@ -387,7 +401,7 @@ export function MemoryTimeline({
             <h1>지도에 올릴 좌표가 없어요</h1>
             <p>추억을 남길 때 저장한 장소를 고르면 Our Map에 핀이 생겨요.</p>
             <div className="dialog-actions">
-              <button className="primary-button" type="button" onClick={() => setOpen(true)}>추억 남기기</button>
+              <button className="primary-button" type="button" onClick={openComposer}>추억 남기기</button>
               <Link className="outline-button" href="/our-map">Our Map 열기</Link>
             </div>
           </div>
@@ -396,7 +410,7 @@ export function MemoryTimeline({
         <div className="empty-soft">
           <h1>아직 남긴 추억이 없어요</h1>
           <p>다녀온 장소를 고르거나, 그날의 장면을 직접 적어 보세요.</p>
-          <button className="primary-button" type="button" onClick={() => setOpen(true)}>첫 추억 남기기</button>
+          <button className="primary-button" type="button" onClick={openComposer}>첫 추억 남기기</button>
         </div>
       ) : renderList(visible)}
 
@@ -405,77 +419,32 @@ export function MemoryTimeline({
           <form className="place-create-dialog memory-dialog" onClick={event => event.stopPropagation()} onSubmit={event => void submit(event)}>
             <div className="dialog-head">
               <div>
-                <span className="eyebrow">NEW MEMORY</span>
-                <h2>추억으로 남기기</h2>
+                <span className="eyebrow">NEW MEMORY · {createStep === "photo" ? "1 / 2" : "2 / 2"}</span>
+                <h2>{createStep === "photo" ? "먼저, 오늘의 장면을 골라요" : "이 장면에 이름을 붙여요"}</h2>
               </div>
               <button className="icon-button" type="button" aria-label="닫기" onClick={() => setOpen(false)}>×</button>
             </div>
-            <label className="field">
-              <span>제목</span>
-              <input value={title} onChange={event => setTitle(event.target.value)} placeholder="계획 없이 걷던 토요일" required />
-            </label>
-            <label className="field">
-              <span>날짜</span>
-              <input type="date" value={happenedOn} onChange={event => setHappenedOn(event.target.value)} required />
-            </label>
-            <label className="field">
-              <span>종류</span>
-              <select value={memoryType} onChange={event => setMemoryType(event.target.value as MemoryType)}>
-                <option value="free">그냥 그날</option>
-                <option value="trip">여행</option>
-                <option value="date">데이트</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>연결된 장소</span>
-              <select value={placeId} onChange={event => setPlaceId(event.target.value)}>
-                <option value="">직접 적기</option>
-                {sortedPlaces.map(place => (
-                  <option key={place.id} value={place.id}>{place.name} · {place.district}</option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>장소 이름</span>
-              <input value={locationLabel} onChange={event => setLocationLabel(event.target.value)} placeholder="성수 · 카페 골목" />
-            </label>
-            <label className="field">
-              <span>짧은 기록</span>
-              <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder="정해둔 곳은 없었는데, 오래 기억할 장면은 많았다." rows={4} />
-            </label>
-            <label className="field file-field">
-              <span>사진 올리기</span>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
-                onChange={event => void inspectPhoto(event.target.files?.[0])}
-              />
-              <small className="form-hint">{metadataPending ? "촬영 정보를 읽는 중..." : fileName || "선택하지 않으면 장소 사진이나 URL을 써요."}</small>
-            </label>
-            {photoPreview && (
-              <div className="photo-metadata-card">
-                <img src={photoPreview} alt="업로드할 사진 미리보기" />
-                <div>
-                  <b>{photoMetadata?.capturedAt ? `촬영 ${new Date(photoMetadata.capturedAt).toLocaleString("ko-KR")}` : "촬영일 정보 없음"}</b>
-                  <span>{[photoMetadata?.cameraMake, photoMetadata?.cameraModel].filter(Boolean).join(" ") || "카메라 정보 없음"}</span>
-                  <small>{photoMetadata?.width && photoMetadata?.height ? `${photoMetadata.width} × ${photoMetadata.height}` : "크기 분석 중"}{photoMetadata?.locationSource === "exif" ? " · GPS 발견" : " · GPS 없음"}</small>
-                </div>
-              </div>
-            )}
-            <div className="coordinate-fields">
-              <label className="field"><span>위도</span><input inputMode="decimal" value={latitude} onChange={event => { setLatitude(event.target.value); setPhotoMetadata(current => current ? { ...current, locationSource: "manual" } : current); }} placeholder="37.5665" /></label>
-              <label className="field"><span>경도</span><input inputMode="decimal" value={longitude} onChange={event => { setLongitude(event.target.value); setPhotoMetadata(current => current ? { ...current, locationSource: "manual" } : current); }} placeholder="126.9780" /></label>
-            </div>
-            <label className="field">
-              <span>또는 사진 URL</span>
-              <input value={coverUrl} onChange={event => setCoverUrl(event.target.value)} placeholder="https://..." />
-            </label>
-            {error && <p className="form-error" role="alert">{error}</p>}
-            <p className="form-hint">사진은 비공개 보관함에 저장되고 촬영일·카메라·GPS를 자동으로 읽어요. 위치는 직접 수정할 수 있어요. 20MB 이하 JPG, PNG, WEBP, HEIC.</p>
-            <div className="dialog-actions">
-              <button className="outline-button" type="button" onClick={() => setOpen(false)} disabled={pending}>취소</button>
-              <button className="primary-button" type="submit" disabled={pending}>{pending ? "저장 중..." : "추억 저장"}</button>
-            </div>
+            <div className="memory-step-track" aria-label="기억 만들기 진행 단계"><i className={createStep === "story" ? "is-complete" : ""} /><i /></div>
+            {createStep === "photo" ? <>
+              <label className={`memory-photo-drop ${photoPreview ? "has-photo" : ""}`}>
+                {photoPreview ? <img src={photoPreview} alt="선택한 장면" /> : <div><b>사진을 선택하세요</b><span>촬영 날짜와 위치를 자동으로 정리해드려요</span><small>JPG · PNG · WEBP · HEIC, 최대 20MB</small></div>}
+                <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif" onChange={event => void inspectPhoto(event.target.files?.[0])} />
+              </label>
+              {photoPreview && <div className="photo-analysis-result"><div><span className={metadataPending ? "is-reading" : ""}>{metadataPending ? "분석 중" : "분석 완료"}</span><b>{fileName}</b></div><ul><li><span>촬영일</span><b>{photoMetadata?.capturedAt ? new Date(photoMetadata.capturedAt).toLocaleString("ko-KR") : "정보 없음 · 다음 단계에서 입력"}</b></li><li><span>위치</span><b>{photoMetadata?.locationSource === "exif" ? `${latitude}, ${longitude}` : "GPS 없음 · 다음 단계에서 연결"}</b></li><li><span>카메라</span><b>{[photoMetadata?.cameraMake, photoMetadata?.cameraModel].filter(Boolean).join(" ") || "정보 없음"}</b></li></ul></div>}
+              <p className="memory-privacy-note">원본 사진은 둘만 접근할 수 있는 비공개 보관함에 저장됩니다.</p>
+              <div className="dialog-actions"><button className="outline-button" type="button" onClick={() => setOpen(false)}>취소</button><button className="text-button" type="button" onClick={continueToStory}>사진 없이 기록</button><button className="primary-button" type="button" onClick={continueToStory} disabled={metadataPending}>{photoPreview ? "이 장면으로 계속" : "다음"}</button></div>
+            </> : <>
+              <div className="memory-story-preview">{photoPreview ? <img src={photoPreview} alt="기억 대표 사진" /> : <div>NO PHOTO</div>}<button type="button" onClick={() => setCreateStep("photo")}>사진 변경</button></div>
+              <label className="field memory-title-field"><span>이 기억의 제목</span><input value={title} onChange={event => setTitle(event.target.value)} placeholder="계획 없이 걷던 토요일" required autoFocus /></label>
+              <label className="field"><span>한 줄 기록 <small>선택</small></span><textarea value={description} onChange={event => setDescription(event.target.value)} placeholder="그날 가장 오래 기억하고 싶은 순간은?" rows={3} /></label>
+              <div className="memory-fact-grid"><label className="field"><span>날짜</span><input type="date" value={happenedOn} onChange={event => setHappenedOn(event.target.value)} required /></label><label className="field"><span>기억 종류</span><select value={memoryType} onChange={event => setMemoryType(event.target.value as MemoryType)}><option value="free">우리의 일상</option><option value="trip">여행</option><option value="date">데이트</option></select></label></div>
+              <label className="field"><span>연결된 장소 <small>선택</small></span><select value={placeId} onChange={event => setPlaceId(event.target.value)}><option value="">직접 적기</option>{sortedPlaces.map(place => <option key={place.id} value={place.id}>{place.name} · {place.district}</option>)}</select></label>
+              <label className="field"><span>장소 이름</span><input value={locationLabel} onChange={event => setLocationLabel(event.target.value)} placeholder="성수 · 카페 골목" /></label>
+              <details className="memory-location-details"><summary>지도 위치 세밀하게 조정</summary><div className="coordinate-fields"><label className="field"><span>위도</span><input inputMode="decimal" value={latitude} onChange={event => { setLatitude(event.target.value); setPhotoMetadata(current => current ? { ...current, locationSource: "manual" } : current); }} /></label><label className="field"><span>경도</span><input inputMode="decimal" value={longitude} onChange={event => { setLongitude(event.target.value); setPhotoMetadata(current => current ? { ...current, locationSource: "manual" } : current); }} /></label></div></details>
+              {!selectedFile && <label className="field"><span>사진 URL <small>선택</small></span><input value={coverUrl} onChange={event => setCoverUrl(event.target.value)} placeholder="https://..." /></label>}
+              {error && <p className="form-error" role="alert">{error}</p>}
+              <div className="dialog-actions"><button className="outline-button" type="button" onClick={() => setCreateStep("photo")} disabled={pending}>이전</button><button className="primary-button" type="submit" disabled={pending}>{pending ? "둘의 보관함에 저장 중..." : "기억으로 남기기"}</button></div>
+            </>}
           </form>
         </div>
       )}
