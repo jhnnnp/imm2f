@@ -7,6 +7,32 @@ export type MemoryPhoto = {
   sortOrder: number;
   latitude: number | null;
   longitude: number | null;
+  capturedAt: string | null;
+  originalFilename: string;
+  mimeType: string;
+  fileSize: number | null;
+  width: number | null;
+  height: number | null;
+  cameraMake: string;
+  cameraModel: string;
+  locationSource: "none" | "exif" | "place" | "manual";
+};
+
+export type PhotoMetadataInput = {
+  storagePath?: string | null;
+  originalFilename?: string;
+  mimeType?: string;
+  fileSize?: number | null;
+  width?: number | null;
+  height?: number | null;
+  capturedAt?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  cameraMake?: string;
+  cameraModel?: string;
+  orientation?: number | null;
+  locationSource?: "none" | "exif" | "place" | "manual";
+  metadata?: Record<string, string | number | boolean | null>;
 };
 
 export type Memory = {
@@ -32,6 +58,18 @@ export type CreateMemoryInput = {
   memoryType?: MemoryType;
   placeId?: string | null;
   coverUrl?: string;
+  photo?: PhotoMetadataInput;
   lng?: number | null;
   lat?: number | null;
+};
+
+export type UpdateMemoryInput = {
+  id: string;
+  title: string;
+  happenedOn: string;
+  description: string;
+  locationLabel: string;
+  memoryType: MemoryType;
+  lng: number | null;
+  lat: number | null;
 };

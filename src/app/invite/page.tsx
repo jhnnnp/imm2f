@@ -1,11 +1,34 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { InviteManager } from "@/features/auth/components/InviteManager";
 import { getAppSession } from "@/features/auth/session";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 export default async function InvitePage() {
   const session = await getAppSession();
   if (session.mode === "guest") redirect("/login?next=/invite");
+  if (session.mode !== "authenticated") {
+    return (
+      <AppShell>
+        <div className="page-title-row">
+          <div>
+            <span className="eyebrow">TOGETHER</span>
+            <h1>파트너 초대</h1>
+            <p>계정을 만든 뒤 초대 링크를 전하면 둘이 같은 공간을 사용할 수 있어요.</p>
+          </div>
+        </div>
+        <article className="paper-card invite-connected">
+          <span className="eyebrow">START TOGETHER</span>
+          <h2>먼저 내 공간을 만들어 주세요</h2>
+          <p>로그인한 사용자에게만 안전한 일회용 초대 링크를 만들어요.</p>
+          <div className="invite-link-row">
+            <Link className="primary-button auth-button-link" href="/signup">공간 만들기</Link>
+            <Link className="outline-button auth-button-link" href="/login?next=/invite">로그인</Link>
+          </div>
+        </article>
+      </AppShell>
+    );
+  }
   if (session.mode === "authenticated" && session.partner) {
     return (
       <AppShell>

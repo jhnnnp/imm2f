@@ -9,6 +9,8 @@ export type ActivityAction =
   | "DATE_UPDATED"
   | "PARTNER_JOINED"
   | "MEMORY_ADDED"
+  | "MEMORY_UPDATED"
+  | "MEMORY_DELETED"
   | "VAULT_UPDATED"
   | "GIFT_UPDATED"
   | "BUCKET_UPDATED";
@@ -28,7 +30,7 @@ export function hrefForActivity(action: string) {
   if (action.startsWith("TRIP")) return "/trip";
   if (action.startsWith("DATE")) return "/date";
   if (action.startsWith("PLACE")) return "/places";
-  if (action === "MEMORY_ADDED") return "/memories";
+  if (action.startsWith("MEMORY_")) return "/memories";
   if (action === "VAULT_UPDATED") return "/vault";
   if (action === "GIFT_UPDATED") return "/gifts";
   if (action === "BUCKET_UPDATED") return "/bucket";

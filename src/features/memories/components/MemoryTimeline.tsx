@@ -5,8 +5,8 @@ import Link from "next/link";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { createClient } from "@/lib/supabase/client";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
-import { createMemory } from "../actions";
-import type { Memory, MemoryType } from "../types";
+import { createMemory, deleteMemory, updateMemory } from "../actions";
+import type { Memory, MemoryType, PhotoMetadataInput } from "../types";
 import type { Place } from "@/features/places/types/place";
 import { formatKoDate, toIsoDate } from "@/lib/dates";
 
@@ -34,12 +34,84 @@ export function MemoryTimeline({
   const [placeId, setPlaceId] = useState("");
   const [coverUrl, setCoverUrl] = useState("");
   const [fileName, setFileName] = useState("");
+  const [photoPreview, setPhotoPreview] = useState("");
+  const [photoMetadata, setPhotoMetadata] = useState<PhotoMetadataInput | null>(null);
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [metadataPending, setMetadataPending] = useState(false);
   const [viewer, setViewer] = useState<Memory | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDate, setEditDate] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editLocation, setEditLocation] = useState("");
+  const [editLatitude, setEditLatitude] = useState("");
+  const [editLongitude, setEditLongitude] = useState("");
+  const [editType, setEditType] = useState<MemoryType>("free");
   const [memoryType, setMemoryType] = useState<MemoryType>("free");
 
   useEffect(() => {
     setHappenedOn(current => current || toIsoDate(new Date()));
   }, []);
+
+  useEffect(() => () => {
+    if (photoPreview.startsWith("blob:")) URL.revokeObjectURL(photoPreview);
+  }, [photoPreview]);
+
+  async function inspectPhoto(file?: File) {
+    setFileName(file?.name ?? "");
+    setPhotoMetadata(null);
+    setLatitude("");
+    setLongitude("");
+    if (photoPreview.startsWith("blob:")) URL.revokeObjectURL(photoPreview);
+    setPhotoPreview(file ? URL.createObjectURL(file) : "");
+    if (!file) return;
+    setMetadataPending(true);
+    try {
+      const [{ parse }, bitmap] = await Promise.all([
+        import("exifr"),
+        createImageBitmap(file).catch(() => null),
+      ]);
+      const exif = await parse(file, [
+        "DateTimeOriginal", "CreateDate", "GPSLatitude", "GPSLongitude", "latitude", "longitude",
+        "Make", "Model", "LensModel", "Orientation", "Software",
+      ]).catch(() => null) as Record<string, unknown> | null;
+      const lat = Number(exif?.latitude ?? exif?.GPSLatitude);
+      const lng = Number(exif?.longitude ?? exif?.GPSLongitude);
+      const captured = exif?.DateTimeOriginal ?? exif?.CreateDate;
+      const capturedDate = captured instanceof Date ? captured : captured ? new Date(String(captured)) : null;
+      const hasCoordinates = Number.isFinite(lat) && Number.isFinite(lng);
+      if (hasCoordinates) {
+        setLatitude(lat.toFixed(6));
+        setLongitude(lng.toFixed(6));
+        setLocationLabel(current => current || "사진의 촬영 위치");
+      }
+      if (capturedDate && !Number.isNaN(capturedDate.getTime())) setHappenedOn(toIsoDate(capturedDate));
+      setPhotoMetadata({
+        originalFilename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        fileSize: file.size,
+        width: bitmap?.width ?? null,
+        height: bitmap?.height ?? null,
+        capturedAt: capturedDate && !Number.isNaN(capturedDate.getTime()) ? capturedDate.toISOString() : null,
+        latitude: hasCoordinates ? lat : null,
+        longitude: hasCoordinates ? lng : null,
+        cameraMake: String(exif?.Make ?? ""),
+        cameraModel: String(exif?.Model ?? ""),
+        orientation: Number.isFinite(Number(exif?.Orientation)) ? Number(exif?.Orientation) : null,
+        locationSource: hasCoordinates ? "exif" : "none",
+        metadata: {
+          lens: String(exif?.LensModel ?? ""),
+          software: String(exif?.Software ?? ""),
+        },
+      });
+      bitmap?.close();
+    } catch {
+      setPhotoMetadata({ originalFilename: file.name, mimeType: file.type, fileSize: file.size });
+    } finally {
+      setMetadataPending(false);
+    }
+  }
 
   const sortedPlaces = useMemo(
     () => [...places].sort((a, b) => a.name.localeCompare(b.name, "ko")),
@@ -53,6 +125,54 @@ export function MemoryTimeline({
   const featured = visible[0] ?? null;
   const secondary = visible[1] ?? null;
 
+  function beginEdit(memory: Memory) {
+    setEditTitle(memory.title);
+    setEditDate(memory.happenedOn);
+    setEditDescription(memory.description);
+    setEditLocation(memory.locationLabel);
+    setEditLongitude(memory.coordinates?.[0]?.toString() ?? "");
+    setEditLatitude(memory.coordinates?.[1]?.toString() ?? "");
+    setEditType(memory.memoryType);
+    setError("");
+    setEditing(true);
+  }
+
+  async function saveEdit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!viewer) return;
+    setPending(true);
+    setError("");
+    const lat = editLatitude.trim() ? Number(editLatitude) : null;
+    const lng = editLongitude.trim() ? Number(editLongitude) : null;
+    const result = await updateMemory({
+      id: viewer.id,
+      title: editTitle,
+      happenedOn: editDate,
+      description: editDescription,
+      locationLabel: editLocation,
+      memoryType: editType,
+      lat: Number.isFinite(lat) ? lat : null,
+      lng: Number.isFinite(lng) ? lng : null,
+    });
+    setPending(false);
+    if ("error" in result) { setError(result.error); return; }
+    setMemories(current => current.map(memory => memory.id === result.memory.id ? result.memory : memory));
+    setViewer(result.memory);
+    setEditing(false);
+  }
+
+  async function removeCurrentMemory() {
+    if (!viewer || !window.confirm(`‘${viewer.title}’ 추억과 연결된 사진을 삭제할까요?`)) return;
+    setPending(true);
+    setError("");
+    const result = await deleteMemory(viewer.id);
+    setPending(false);
+    if ("error" in result) { setError(result.error); return; }
+    setMemories(current => current.filter(memory => memory.id !== viewer.id));
+    setViewer(null);
+    setEditing(false);
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!persist) {
@@ -63,6 +183,7 @@ export function MemoryTimeline({
     setError("");
     const selected = sortedPlaces.find(place => place.id === placeId);
     let photoUrl = coverUrl || selected?.image || "";
+    let uploadedPath: string | null = null;
     const form = event.currentTarget;
     const fileInput = form.querySelector<HTMLInputElement>('input[type="file"]');
     const file = fileInput?.files?.[0];
@@ -72,9 +193,9 @@ export function MemoryTimeline({
         setError("로그인 후 사진을 올릴 수 있어요.");
         return;
       }
-      if (file.size > 8 * 1024 * 1024) {
+      if (file.size > 20 * 1024 * 1024) {
         setPending(false);
-        setError("8MB 이하 이미지만 올릴 수 있어요.");
+        setError("20MB 이하 이미지만 올릴 수 있어요.");
         return;
       }
       const supabase = createClient();
@@ -91,8 +212,12 @@ export function MemoryTimeline({
         setError(uploaded.error.message);
         return;
       }
-      photoUrl = supabase.storage.from("memory-photos").getPublicUrl(path).data.publicUrl;
+      uploadedPath = path;
+      photoUrl = path;
     }
+    const parsedLat = latitude.trim() ? Number(latitude) : null;
+    const parsedLng = longitude.trim() ? Number(longitude) : null;
+    const hasManualCoordinates = Number.isFinite(parsedLat) && Number.isFinite(parsedLng);
     const result = await createMemory({
       title,
       happenedOn,
@@ -100,12 +225,25 @@ export function MemoryTimeline({
       locationLabel: locationLabel || selected?.district || selected?.name || "",
       placeId: placeId || null,
       coverUrl: photoUrl,
-      lng: selected?.coordinates?.[0] ?? null,
-      lat: selected?.coordinates?.[1] ?? null,
+      lng: selected?.coordinates?.[0] ?? (hasManualCoordinates ? parsedLng : null),
+      lat: selected?.coordinates?.[1] ?? (hasManualCoordinates ? parsedLat : null),
       memoryType,
+      photo: file ? {
+        ...photoMetadata,
+        storagePath: uploadedPath,
+        latitude: selected?.coordinates?.[1] ?? (hasManualCoordinates ? parsedLat : photoMetadata?.latitude ?? null),
+        longitude: selected?.coordinates?.[0] ?? (hasManualCoordinates ? parsedLng : photoMetadata?.longitude ?? null),
+        locationSource: selected ? "place" : hasManualCoordinates
+          ? photoMetadata?.locationSource === "exif" ? "exif" : "manual"
+          : "none",
+      } : undefined,
     });
     setPending(false);
     if ("error" in result) {
+      if (uploadedPath && session.mode === "authenticated") {
+        const supabase = createClient();
+        await supabase?.storage.from("memory-photos").remove([uploadedPath]);
+      }
       setError(result.error);
       return;
     }
@@ -117,6 +255,10 @@ export function MemoryTimeline({
     setPlaceId("");
     setCoverUrl("");
     setFileName("");
+    setPhotoPreview("");
+    setPhotoMetadata(null);
+    setLatitude("");
+    setLongitude("");
   }
 
   function renderList(list: Memory[]) {
@@ -305,17 +447,31 @@ export function MemoryTimeline({
               <span>사진 올리기</span>
               <input
                 type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
-                onChange={event => setFileName(event.target.files?.[0]?.name ?? "")}
+                accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
+                onChange={event => void inspectPhoto(event.target.files?.[0])}
               />
-              <small className="form-hint">{fileName || "선택하지 않으면 장소 사진이나 URL을 써요."}</small>
+              <small className="form-hint">{metadataPending ? "촬영 정보를 읽는 중..." : fileName || "선택하지 않으면 장소 사진이나 URL을 써요."}</small>
             </label>
+            {photoPreview && (
+              <div className="photo-metadata-card">
+                <img src={photoPreview} alt="업로드할 사진 미리보기" />
+                <div>
+                  <b>{photoMetadata?.capturedAt ? `촬영 ${new Date(photoMetadata.capturedAt).toLocaleString("ko-KR")}` : "촬영일 정보 없음"}</b>
+                  <span>{[photoMetadata?.cameraMake, photoMetadata?.cameraModel].filter(Boolean).join(" ") || "카메라 정보 없음"}</span>
+                  <small>{photoMetadata?.width && photoMetadata?.height ? `${photoMetadata.width} × ${photoMetadata.height}` : "크기 분석 중"}{photoMetadata?.locationSource === "exif" ? " · GPS 발견" : " · GPS 없음"}</small>
+                </div>
+              </div>
+            )}
+            <div className="coordinate-fields">
+              <label className="field"><span>위도</span><input inputMode="decimal" value={latitude} onChange={event => { setLatitude(event.target.value); setPhotoMetadata(current => current ? { ...current, locationSource: "manual" } : current); }} placeholder="37.5665" /></label>
+              <label className="field"><span>경도</span><input inputMode="decimal" value={longitude} onChange={event => { setLongitude(event.target.value); setPhotoMetadata(current => current ? { ...current, locationSource: "manual" } : current); }} placeholder="126.9780" /></label>
+            </div>
             <label className="field">
               <span>또는 사진 URL</span>
               <input value={coverUrl} onChange={event => setCoverUrl(event.target.value)} placeholder="https://..." />
             </label>
             {error && <p className="form-error" role="alert">{error}</p>}
-            <p className="form-hint">사진은 둘만 보는 보관함에 올라가요. 8MB 이하 JPG, PNG, WEBP.</p>
+            <p className="form-hint">사진은 비공개 보관함에 저장되고 촬영일·카메라·GPS를 자동으로 읽어요. 위치는 직접 수정할 수 있어요. 20MB 이하 JPG, PNG, WEBP, HEIC.</p>
             <div className="dialog-actions">
               <button className="outline-button" type="button" onClick={() => setOpen(false)} disabled={pending}>취소</button>
               <button className="primary-button" type="submit" disabled={pending}>{pending ? "저장 중..." : "추억 저장"}</button>
@@ -327,12 +483,22 @@ export function MemoryTimeline({
         <div className="dialog-backdrop" role="presentation" onClick={() => setViewer(null)}>
           <article className="memory-viewer" onClick={event => event.stopPropagation()}>
             {viewer.coverUrl ? <img src={viewer.coverUrl} alt={viewer.title} /> : <div className="abstract-photo large">{viewer.locationLabel || viewer.title}</div>}
-            <div>
+            {!editing ? <div>
               <span>{formatKoDate(viewer.happenedOn)}{viewer.locationLabel ? ` · ${viewer.locationLabel}` : ""}</span>
               <h2>{viewer.title}</h2>
               <p>{viewer.description || "둘만 아는 그날의 장면."}</p>
-              <button className="outline-button" type="button" onClick={() => setViewer(null)}>닫기</button>
-            </div>
+              {viewer.photos[0] && <div className="memory-photo-facts"><span>{viewer.photos[0].capturedAt ? `촬영 ${new Date(viewer.photos[0].capturedAt).toLocaleString("ko-KR")}` : "촬영일 정보 없음"}</span><span>{[viewer.photos[0].cameraMake, viewer.photos[0].cameraModel].filter(Boolean).join(" ") || "카메라 정보 없음"}</span>{viewer.coordinates && <Link href="/our-map">지도에서 보기 →</Link>}</div>}
+              {error && <p className="form-error" role="alert">{error}</p>}
+              <div className="dialog-actions memory-viewer-actions"><button className="danger-button" type="button" disabled={pending} onClick={() => void removeCurrentMemory()}>삭제</button><button className="outline-button" type="button" onClick={() => beginEdit(viewer)}>수정</button><button className="primary-button" type="button" onClick={() => setViewer(null)}>닫기</button></div>
+            </div> : <form className="memory-edit-form" onSubmit={event => void saveEdit(event)}>
+              <label className="field"><span>제목</span><input value={editTitle} onChange={event => setEditTitle(event.target.value)} required /></label>
+              <div className="coordinate-fields"><label className="field"><span>날짜</span><input type="date" value={editDate} onChange={event => setEditDate(event.target.value)} required /></label><label className="field"><span>종류</span><select value={editType} onChange={event => setEditType(event.target.value as MemoryType)}><option value="free">그냥 그날</option><option value="trip">여행</option><option value="date">데이트</option></select></label></div>
+              <label className="field"><span>장소 이름</span><input value={editLocation} onChange={event => setEditLocation(event.target.value)} /></label>
+              <label className="field"><span>기록</span><textarea rows={3} value={editDescription} onChange={event => setEditDescription(event.target.value)} /></label>
+              <div className="coordinate-fields"><label className="field"><span>위도</span><input inputMode="decimal" value={editLatitude} onChange={event => setEditLatitude(event.target.value)} /></label><label className="field"><span>경도</span><input inputMode="decimal" value={editLongitude} onChange={event => setEditLongitude(event.target.value)} /></label></div>
+              {error && <p className="form-error" role="alert">{error}</p>}
+              <div className="dialog-actions"><button className="outline-button" type="button" onClick={() => setEditing(false)} disabled={pending}>취소</button><button className="primary-button" type="submit" disabled={pending}>{pending ? "저장 중..." : "변경 저장"}</button></div>
+            </form>}
           </article>
         </div>
       )}

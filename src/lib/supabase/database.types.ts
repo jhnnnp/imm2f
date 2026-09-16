@@ -387,6 +387,18 @@ export type Database = {
           captured_at: string | null;
           caption: string;
           sort_order: number;
+          storage_path: string | null;
+          original_filename: string;
+          mime_type: string;
+          file_size: number | null;
+          width: number | null;
+          height: number | null;
+          camera_make: string;
+          camera_model: string;
+          orientation: number | null;
+          location_source: "none" | "exif" | "place" | "manual";
+          metadata: Json;
+          created_at: string;
         };
         Insert: {
           id?: string;
@@ -397,6 +409,18 @@ export type Database = {
           captured_at?: string | null;
           caption?: string;
           sort_order?: number;
+          storage_path?: string | null;
+          original_filename?: string;
+          mime_type?: string;
+          file_size?: number | null;
+          width?: number | null;
+          height?: number | null;
+          camera_make?: string;
+          camera_model?: string;
+          orientation?: number | null;
+          location_source?: "none" | "exif" | "place" | "manual";
+          metadata?: Json;
+          created_at?: string;
         };
         Update: {
           storage_url?: string;
@@ -405,6 +429,17 @@ export type Database = {
           captured_at?: string | null;
           caption?: string;
           sort_order?: number;
+          storage_path?: string | null;
+          original_filename?: string;
+          mime_type?: string;
+          file_size?: number | null;
+          width?: number | null;
+          height?: number | null;
+          camera_make?: string;
+          camera_model?: string;
+          orientation?: number | null;
+          location_source?: "none" | "exif" | "place" | "manual";
+          metadata?: Json;
         };
         Relationships: [];
       };
