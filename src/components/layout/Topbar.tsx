@@ -28,7 +28,7 @@ export function Topbar() {
   const notifyRef = useRef<HTMLDivElement>(null);
   const notifyLoadingRef = useRef(false);
   const session = useAppSession();
-  const label = session.mode === "authenticated" ? initialFromName(session.displayName) : "나";
+  const label = session.mode === "authenticated" || session.mode === "setup_error" ? initialFromName(session.displayName) : "나";
   const unread = useMemo(() => activities.filter(item => item.important).length, [activities]);
 
   useEffect(() => {
@@ -107,6 +107,11 @@ export function Topbar() {
                 <p>{session.displayName}</p>
                 <Link href="/invite" role="menuitem" onClick={() => setMenuOpen(false)}>{session.partner ? "연결 상태" : "파트너 초대"}</Link>
                 <button type="button" role="menuitem" onClick={() => void signOut()}>로그아웃</button>
+              </>
+            ) : session.mode === "setup_error" ? (
+              <>
+                <p>로그인은 됐지만 공간을 준비하지 못했어요.</p>
+                <button type="button" role="menuitem" onClick={() => void signOut()}>다시 로그인</button>
               </>
             ) : (
               <>

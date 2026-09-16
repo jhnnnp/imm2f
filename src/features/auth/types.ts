@@ -3,6 +3,11 @@ export type AppSession =
   | { mode: "demo" }
   | { mode: "guest" }
   | {
+      mode: "setup_error";
+      userId: string;
+      displayName: string;
+    }
+  | {
       mode: "authenticated";
       userId: string;
       displayName: string;

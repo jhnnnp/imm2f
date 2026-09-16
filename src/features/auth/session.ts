@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
@@ -20,6 +21,12 @@ function authErrorMessage(message: string) {
   return message;
 }
 
+function refreshSessionUI() {
+  // Authentication is read in the root layout. Purge the client router cache so
+  // the layout receives the newly written (or deleted) Supabase session cookie.
+  revalidatePath("/", "layout");
+}
+
 const loadAppSession = cache(async (): Promise<AppSession> => {
   const cookieStore = await cookies();
   if (cookieStore.get(DEMO_COOKIE_NAME)?.value === DEMO_COOKIE_VALUE) return { mode: "demo" };
@@ -31,13 +38,18 @@ const loadAppSession = cache(async (): Promise<AppSession> => {
   const userId = claimsData?.claims?.sub;
   if (!userId || typeof userId !== "string") return { mode: "guest" };
 
+  const { data: profile } = await supabase.from("profiles").select("id, display_name").eq("id", userId).maybeSingle();
   const { data: coupleId, error: coupleError } = await supabase.rpc("ensure_own_couple");
-  if (coupleError || !coupleId) return { mode: "guest" };
+  if (coupleError || !coupleId) {
+    console.error("Failed to initialize the authenticated user's space", coupleError);
+    return {
+      mode: "setup_error",
+      userId,
+      displayName: profile?.display_name || "나",
+    };
+  }
 
-  const [{ data: profile }, { data: members }] = await Promise.all([
-    supabase.from("profiles").select("id, display_name").eq("id", userId).maybeSingle(),
-    supabase.from("couple_members").select("user_id, role").eq("couple_id", coupleId),
-  ]);
+  const { data: members } = await supabase.from("couple_members").select("user_id, role").eq("couple_id", coupleId);
 
   const memberIds = (members ?? []).map(member => member.user_id);
   const { data: profiles } = memberIds.length
@@ -72,6 +84,7 @@ export async function signIn(formData: FormData) {
 
   await supabase.rpc("ensure_own_couple");
   (await cookies()).delete(DEMO_COOKIE_NAME);
+  refreshSessionUI();
   redirect(safeNextPath(formData.get("next")));
 }
 
@@ -121,6 +134,7 @@ export async function signUp(formData: FormData) {
   }
 
   (await cookies()).delete(DEMO_COOKIE_NAME);
+  refreshSessionUI();
   redirect("/");
 }
 
@@ -128,6 +142,7 @@ export async function signOut() {
   const supabase = await createClient();
   if (supabase) await supabase.auth.signOut();
   (await cookies()).delete(DEMO_COOKIE_NAME);
+  refreshSessionUI();
   redirect("/login");
 }
 
@@ -191,5 +206,6 @@ export async function acceptCoupleInvite(token: string) {
       body: `${displayName}님이 초대 링크를 수락했어요.`,
     });
   }
+  refreshSessionUI();
   redirect("/");
 }
