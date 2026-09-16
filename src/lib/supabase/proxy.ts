@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseKey, getSupabaseUrl, isSupabaseConfigured } from "./env";
 import { DEMO_COOKIE_NAME, DEMO_COOKIE_VALUE } from "@/features/auth/demo";
 
-const PUBLIC_PREFIXES = ["/login", "/signup", "/invite", "/auth", "/demo", "/api/kakao-map-key"];
+const PUBLIC_PREFIXES = ["/login", "/signup", "/invite", "/auth", "/demo", "/api/kakao-map-key", "/api/map-tiles"];
 
 function isPublicPath(pathname: string) {
   return PUBLIC_PREFIXES.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`));
