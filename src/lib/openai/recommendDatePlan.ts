@@ -170,14 +170,15 @@ function buildReply(
   const size = courseSize(state);
   const routeMeters = recommendations.reduce((sum, place) => sum + (place.distanceFromPreviousMeters ?? 0), 0);
   const region = condition.region || "오늘";
-  const festival = recommendations.find(place => byId.get(place.id)?.category === "festival");
+  const festivalRec = recommendations.find(place => byId.get(place.id)?.category === "festival");
+  const festivalMeta = festivalRec ? byId.get(festivalRec.id) : undefined;
   const headline = size.days > 1
     ? `${region} ${size.days - 1}박${size.days}일`
-    : festival
-      ? `${region} · ${festival.name}`
+    : festivalRec
+      ? `${region} · ${festivalRec.name}`
       : `${region} ${recommendations.length}곳`;
-  const line = festival?.openingHours
-    ? `${honestMessage(region, recommendations.length, routeMeters)} · ${festival.openingHours}`
+  const line = festivalMeta?.openingHours
+    ? `${honestMessage(region, recommendations.length, routeMeters)} · ${festivalMeta.openingHours}`
     : honestMessage(region, recommendations.length, routeMeters);
 
   return {

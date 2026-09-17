@@ -332,6 +332,8 @@ export type Database = {
         Update: {
           title?: string;
           detail?: string;
+          before_value?: Json | null;
+          after_value?: Json | null;
         };
         Relationships: [];
       };
