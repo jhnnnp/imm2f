@@ -107,6 +107,10 @@ export function getDraftDateItems() {
   return read("date");
 }
 
+export function hasStoredDraftPlan(kind: PlanKind) {
+  return typeof window !== "undefined" && window.localStorage.getItem(STORAGE_KEYS[kind]) !== null;
+}
+
 export function subscribeDraftTrip(listener: Listener) {
   listeners.add(listener);
   return () => { listeners.delete(listener); };

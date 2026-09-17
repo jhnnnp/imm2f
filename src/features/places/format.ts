@@ -31,3 +31,11 @@ export function naverPlaceSearchUrl(name: string, address?: string) {
   const query = [name, address].filter(Boolean).join(" ");
   return `https://map.naver.com/p/search/${encodeURIComponent(query)}`;
 }
+
+export function kakaoPlaceUrl(name: string, coordinates?: [number, number] | null) {
+  if (coordinates) {
+    const [lng, lat] = coordinates;
+    return `https://map.kakao.com/link/map/${encodeURIComponent(name)},${lat},${lng}`;
+  }
+  return `https://map.kakao.com/?q=${encodeURIComponent(name)}`;
+}

@@ -67,6 +67,12 @@ export const PLACE_AREA_GROUPS: ReadonlyArray<PlaceAreaGroup> = [
       area("euljiro", "을지로/명동", "을지로", [126.997, 37.566], 1, { sigunguCode: 24, radius: 2500 }),
       area("yeouido", "여의도/영등포", "여의도", [126.9245, 37.5219], 1, { sigunguCode: 20, radius: 3000 }),
       area("gundae", "건대/광진", "건대", [127.069, 37.5405], 1, { sigunguCode: 6, radius: 2500 }),
+      area("wangsimni", "왕십리/행당", "왕십리", [127.037, 37.5615], 1, { sigunguCode: 16, radius: 2600 }),
+      area("chungmuro", "충무로/필동", "충무로", [126.994, 37.561], 1, { sigunguCode: 24, radius: 2300 }),
+      area("sinchon", "신촌/이대", "신촌", [126.9368, 37.5585], 1, { sigunguCode: 13, radius: 2600 }),
+      area("apgujeong", "압구정/청담", "압구정", [127.028, 37.527], 1, { sigunguCode: 1, radius: 2800 }),
+      area("dongdaemun", "동대문/신설동", "동대문", [127.009, 37.571], 1, { sigunguCode: 6, radius: 2600 }),
+      area("seodaemun", "서대문/홍제", "서대문", [126.936, 37.579], 1, { sigunguCode: 13, radius: 3000 }),
     ],
   },
   {

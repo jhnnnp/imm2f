@@ -56,6 +56,8 @@ export function mapPlaceRow(row: PlaceRow, userId: string, partnerId: string | n
       : visualToneForCategory(category),
     userStatus: asStatus(userPref?.status),
     partnerStatus: asStatus(partnerPref?.status),
+    userRated: Boolean(userPref),
+    partnerRated: Boolean(partnerPref),
     userFit: userPref?.fit ?? 0,
     partnerFit: partnerPref?.fit ?? 0,
     externalSource: row.external_source === "kakao" || row.external_source === "tourapi" ? row.external_source : "manual",

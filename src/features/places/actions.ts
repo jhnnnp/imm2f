@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
@@ -222,6 +223,7 @@ export async function saveKakaoPlace(input: SaveKakaoPlaceInput): Promise<{ plac
     subject: `[ONLY US] ${session.displayName}님이 장소를 저장했어요`,
     body: `${data.name} · ${data.district || data.category_label}`,
   });
+  revalidatePath("/");
   const prefs = await loadPreferences([data.id]);
   return { place: toPlace(data, prefs, session.userId, session.partner?.userId ?? null) };
 }
@@ -275,6 +277,7 @@ export async function createPlace(input: CreatePlaceInput): Promise<{ place: Pla
     subject: `[ONLY US] ${session.displayName}님이 장소를 저장했어요`,
     body: `${data.name} · ${data.district || data.category_label}`,
   });
+  revalidatePath("/");
   const prefs = await loadPreferences([data.id]);
   return { place: toPlace(data, prefs, session.userId, session.partner?.userId ?? null) };
 }
@@ -304,5 +307,6 @@ export async function updateMyPlaceStatus(placeId: string, status: PlacePreferen
       detail: place?.name ? `${place.name} · ${status}` : status,
     });
   }
+  revalidatePath("/");
   return { ok: true };
 }

@@ -52,7 +52,9 @@ export function mapKakaoCategory(groupCode: string, categoryName: string): { id:
   if (groupCode === "AT4") return { id: "nature", label: "자연" };
   if (groupCode === "CT1") return { id: "photo", label: "문화" };
   const last = categoryName.split(">").map(part => part.trim()).filter(Boolean).at(-1);
-  return { id: "cafe", label: last || "장소" };
+  // Unknown Kakao categories must never inherit cafe semantics. The date planner
+  // validates these separately and only admits a small set of safe exceptions.
+  return { id: "tourist", label: last || "장소" };
 }
 
 export function districtFromAddress(address: string) {
@@ -82,6 +84,7 @@ function toCandidate(document: KakaoKeywordDocument): KakaoPlaceCandidate | null
     mapUrl: document.place_url ?? "",
     coordinates: [lng, lat],
     detailedCategory: categoryName,
+    kakaoCategoryGroupCode: document.category_group_code ?? "",
     distanceMeters: document.distance ? Number(document.distance) : undefined,
   };
 }

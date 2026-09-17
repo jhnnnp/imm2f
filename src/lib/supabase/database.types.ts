@@ -174,6 +174,30 @@ export type Database = {
         };
         Relationships: [];
       };
+      couple_insights: {
+        Row: {
+          id: string;
+          couple_id: string;
+          input_hash: string;
+          analysis_version: string;
+          model: string;
+          result: Json;
+          created_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          couple_id: string;
+          input_hash: string;
+          analysis_version?: string;
+          model?: string;
+          result: Json;
+          created_by?: string | null;
+          created_at?: string;
+        };
+        Update: { result?: Json };
+        Relationships: [];
+      };
       plans: {
         Row: {
           id: string;

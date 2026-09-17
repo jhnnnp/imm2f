@@ -7,7 +7,7 @@ import { DatePickerButton } from "@/components/shared/DatePickerButton";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { AIPlanEditor } from "@/features/ai/components/AIPlanEditor";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
-import { VersionHistory } from "@/features/collaboration/components/VersionHistory";
+import { preloadPlanVersions, VersionHistory } from "@/features/collaboration/components/VersionHistory";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import { getDraftDateItems, getDraftPlanMeta, setDraftDateItems, setDraftPlanMeta, subscribeDraftTrip } from "@/features/planning/draftTrip";
 import { getDemoPlaces, subscribeDemoPlaces } from "@/features/places/demoPlaces";
@@ -64,6 +64,8 @@ export function DatePlanner() {
         if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
       };
     }
+
+    void preloadPlanVersions("date").catch(() => undefined);
 
     void loadCouplePlan("date").then(result => {
       if (cancelled) return;
@@ -178,7 +180,7 @@ export function DatePlanner() {
             <h1>{!loaded ? "일정을 불러오는 중이에요" : "다음 데이트를 아직 안 잡았어요"}</h1>
           )}
           {!items.length && (
-            <p>{!loaded ? "저장된 오후 일정을 가져오고 있어요." : "장소를 담고 AI로 3안을 고를 수 있어요."}</p>
+            <p>{!loaded ? "저장된 오후 일정을 가져오고 있어요." : "원하는 조건을 말하면 AI가 실제 장소를 찾아 코스로 이어 드려요."}</p>
           )}
         </div>
         <div className="page-actions date-planner-actions date-toolbar">
@@ -192,13 +194,14 @@ export function DatePlanner() {
             }}
           />
           <div className="save-status"><i /> {saveError || "저장됨"}</div>
-          {(items.length > 0 || demoPlaces.length > 0) && (
-            <div className="date-action-group">
+          <div className="date-action-group">
+              {(items.length > 0 || archivedDates.length > 0) && (
               <button className={`date-action-button is-archive ${showArchive ? "is-active" : ""}`} type="button" onClick={() => setShowArchive(value => !value)}>
                 <HeaderActionIcon name="archive" />
                 <span>지난 데이트</span>
                 <b>{archivedDates.length}</b>
               </button>
+              )}
               {items.length > 0 && (
                 <button className={`date-action-button is-history ${panel === "history" ? "is-active" : ""}`} type="button" onClick={() => setPanel(panel === "history" ? null : "history")}>
                   <HeaderActionIcon name="history" />
@@ -207,7 +210,7 @@ export function DatePlanner() {
               )}
               <button className={`date-action-button is-ai ${panel === "ai" ? "is-active" : ""}`} type="button" onClick={() => setPanel(panel === "ai" ? null : "ai")}>
                 <HeaderActionIcon name="sparkles" />
-                <span>AI로 다듬기</span>
+                <span>AI 추천</span>
               </button>
               {items.length > 0 && (
                 <Link className="date-action-button is-primary" href="/places?from=date">
@@ -215,8 +218,7 @@ export function DatePlanner() {
                   <span>장소 더 담기</span>
                 </Link>
               )}
-            </div>
-          )}
+          </div>
         </div>
       </div>
       {saveError && <p className="form-hint">{saveError}</p>}
@@ -241,10 +243,10 @@ export function DatePlanner() {
       ) : !items.length ? (
         <div className="empty-soft">
           <h1>데이트 초안이 비어 있어요</h1>
-          <p>{demoPlaces.length ? `저장한 장소 ${demoPlaces.length}곳으로 일정을 만들거나, 새 장소를 더 골라 보세요.` : "가고 싶은 장소를 먼저 고르면 오후 일정으로 이어 드려요."}</p>
+          <p>{demoPlaces.length ? `저장한 장소 ${demoPlaces.length}곳과 새로운 후보를 함께 비교해 드릴게요.` : "지역·시간·예산을 말하면 실제 장소를 찾아 하루 코스로 이어 드려요."}</p>
           <div className="dialog-actions">
-            <Link className="primary-button" href="/places?from=date">첫 장소 찾기</Link>
-            {demoPlaces.length > 0 && <button className="outline-button" type="button" onClick={() => setPanel("ai")}>저장한 장소로 3안 만들기</button>}
+            <button className="primary-button" type="button" onClick={() => setPanel("ai")}>AI에게 데이트 추천받기</button>
+            <Link className="outline-button" href="/places?from=date">직접 장소 찾기</Link>
           </div>
         </div>
       ) : (

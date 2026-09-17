@@ -6,6 +6,19 @@ import { restorePlanVersion } from "@/features/planning/actions";
 import type { PlanItem, PlanKind } from "@/features/planning/types/plan";
 import type { PlanVersion } from "../types";
 
+type VersionResult = Awaited<ReturnType<typeof loadPlanVersions>>;
+const versionRequests = new Map<PlanKind, Promise<VersionResult>>();
+
+export function preloadPlanVersions(kind: PlanKind, refresh = false) {
+  if (refresh || !versionRequests.has(kind)) {
+    versionRequests.set(kind, loadPlanVersions(kind).catch(error => {
+      versionRequests.delete(kind);
+      throw error;
+    }));
+  }
+  return versionRequests.get(kind)!;
+}
+
 export function VersionHistory({
   kind = "trip",
   latest,
@@ -23,11 +36,16 @@ export function VersionHistory({
 
   useEffect(() => {
     let cancelled = false;
-    void loadPlanVersions(kind).then(result => {
+    setLoaded(false);
+    setError("");
+    void preloadPlanVersions(kind, Boolean(latest)).then(result => {
       if (cancelled) return;
       setVersions(result.versions);
-      setLoaded(true);
       setSelectedId(result.versions[0]?.id ?? null);
+    }).catch(() => {
+      if (!cancelled) setError("변경 기록을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
+    }).finally(() => {
+      if (!cancelled) setLoaded(true);
     });
     return () => {
       cancelled = true;
@@ -54,10 +72,15 @@ export function VersionHistory({
     <div>
       <span className="eyebrow">PLAN HISTORY</span>
       <h2>변경 기록</h2>
-      {!loaded && <p className="form-hint">버전을 불러오는 중이에요.</p>}
+      {!loaded && <div className="panel-loading" aria-label="변경 기록 불러오는 중"><i /><i /><i /></div>}
       {loaded && !versions.length && (
-        <p className="form-hint">아직 저장된 버전이 없어요. 일정을 바꾸면 v1부터 쌓여요.</p>
+        <div className="panel-empty-state">
+          <span aria-hidden="true">↺</span>
+          <b>아직 변경 기록이 없어요</b>
+          <p>장소를 추가하거나 순서를 바꾸면<br />첫 번째 버전부터 차곡차곡 남아요.</p>
+        </div>
       )}
+      {error && <p className="panel-error" role="alert">{error}</p>}
       <div className="version-list">
         {versions.map(item => (
           <article key={item.id} className={selected?.id === item.id ? "is-selected" : ""}>

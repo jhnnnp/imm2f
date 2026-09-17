@@ -49,7 +49,7 @@ export function CoupleNotesBoard({
   }
 
   return (
-    <>
+    <div className={`notes-board notes-board-${kind}`}>
       <div className="page-title-row">
         <div>
           <span className="eyebrow">{copy.eyebrow}</span>
@@ -67,8 +67,9 @@ export function CoupleNotesBoard({
         </div>
       ) : (
         <ul className="note-list">
-          {notes.map(note => (
+          {notes.map((note, index) => (
             <li key={note.id}>
+              <span className="note-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
               <div>
                 <span>{statuses.find(item => item.id === note.status)?.label ?? note.status}</span>
                 <h2>{note.title}</h2>
@@ -78,6 +79,7 @@ export function CoupleNotesBoard({
               </div>
               <div className="note-actions">
                 <select
+                  className="note-status-select"
                   value={note.status}
                   aria-label={`${note.title} 상태`}
                   onChange={event => {
@@ -121,7 +123,7 @@ export function CoupleNotesBoard({
             </label>
             <label className="field">
               <span>상태</span>
-              <select value={status} onChange={event => setStatus(event.target.value)}>
+              <select className="note-status-select" value={status} onChange={event => setStatus(event.target.value)}>
                 {statuses.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}
               </select>
             </label>
@@ -133,6 +135,6 @@ export function CoupleNotesBoard({
           </form>
         </div>
       )}
-    </>
+    </div>
   );
 }

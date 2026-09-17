@@ -37,6 +37,7 @@ export function candidateToPlace(candidate: DiscoverCandidate, extras?: { userFi
     externalPlaceId: candidate.externalPlaceId,
     recommendReason: extras?.recommendReason,
     detailedCategory: candidate.detailedCategory,
+    kakaoCategoryGroupCode: candidate.kakaoCategoryGroupCode,
     distanceMeters: candidate.distanceMeters,
     openingHours: candidate.openingHours ?? null,
   };
@@ -58,6 +59,7 @@ export function placeToCandidate(place: Place): DiscoverCandidate | null {
     coordinates: place.coordinates,
     image: place.image,
     detailedCategory: place.detailedCategory,
+    kakaoCategoryGroupCode: place.kakaoCategoryGroupCode,
     distanceMeters: place.distanceMeters,
     openingHours: place.openingHours ?? undefined,
   };

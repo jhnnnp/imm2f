@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail } from "@/features/collaboration/actions";
@@ -207,6 +208,8 @@ export async function saveCouplePlan(
     subject: `[ONLY US] ${titleText}`,
     body: `${session.displayName}님이 ${summary}`,
   });
+
+  revalidatePath("/");
 
   return { ok: true, version: result.version, revision: result.revision };
 }

@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
@@ -217,6 +218,8 @@ export async function createMemory(input: CreateMemoryInput): Promise<{ memory: 
     body: `${memory.title}${memory.locationLabel ? ` · ${memory.locationLabel}` : ""}`,
   });
 
+  revalidatePath("/");
+
   return { memory };
 }
 
@@ -262,6 +265,7 @@ export async function updateMemory(input: UpdateMemoryInput): Promise<{ memory: 
     title: "추억을 다듬었어요",
     detail: memory.title,
   });
+  revalidatePath("/");
   return { memory };
 }
 
@@ -287,5 +291,6 @@ export async function deleteMemory(memoryId: string): Promise<{ ok: true } | { e
     title: "추억을 정리했어요",
     detail: memory.title,
   });
+  revalidatePath("/");
   return { ok: true };
 }

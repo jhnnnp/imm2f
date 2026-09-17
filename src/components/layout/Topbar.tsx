@@ -6,7 +6,7 @@ import { CommandPalette } from "@/components/shared/CommandPalette";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { initialFromName } from "@/features/auth/types";
 import { signOut } from "@/features/auth/session";
-import { loadCoupleActivities } from "@/features/collaboration/actions";
+import { preloadCoupleActivities } from "@/features/collaboration/activityClient";
 import { hrefForActivity, type CoupleActivity } from "@/features/collaboration/types";
 
 function todayLabel() {
@@ -33,7 +33,20 @@ export function Topbar() {
 
   useEffect(() => {
     setToday(todayLabel());
-  }, []);
+    if (session.mode === "authenticated") {
+      notifyLoadingRef.current = true;
+      void preloadCoupleActivities(8).then(next => {
+        setActivities(next);
+        setNotifyLoaded(true);
+      }).catch(() => {
+        setNotifyLoaded(true);
+      }).finally(() => {
+        notifyLoadingRef.current = false;
+      });
+    } else {
+      setNotifyLoaded(true);
+    }
+  }, [session.mode]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -51,7 +64,7 @@ export function Topbar() {
     setMenuOpen(false);
     if (notifyLoaded || notifyLoadingRef.current) return;
     notifyLoadingRef.current = true;
-    void loadCoupleActivities(8).then(next => {
+    void preloadCoupleActivities(8).then(next => {
       setActivities(next);
       setNotifyLoaded(true);
       notifyLoadingRef.current = false;

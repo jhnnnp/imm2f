@@ -74,6 +74,14 @@ function compactDate(value: string | undefined) {
   return digits.length === 8 ? `${digits.slice(0, 4)}.${digits.slice(4, 6)}.${digits.slice(6)}` : cleanText(value);
 }
 
+function isPastFestival(item: TourItem) {
+  if (!item.eventenddate && !item.eventstartdate) return false;
+  const end = (item.eventenddate || item.eventstartdate || "").replace(/\D/g, "");
+  if (end.length !== 8) return false;
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  return end < today;
+}
+
 function detailFacts(item: TourItem | undefined, category: PlaceCategoryId) {
   if (!item) return [];
   const facts: Array<{ label: string; value: string }> = [];
@@ -227,6 +235,7 @@ export async function searchTourPlacesRemote(input: KakaoSearchInput): Promise<K
   if (!fetched.ok) return fetched;
   const totalCount = fetched.payload.response?.body?.totalCount ?? 0;
   const places = asItems(fetched.payload.response)
+    .filter(item => category !== "festival" || !isPastFestival(item))
     .map(item => toCandidate(item, category))
     .filter((item): item is DiscoverCandidate => item !== null);
   return {

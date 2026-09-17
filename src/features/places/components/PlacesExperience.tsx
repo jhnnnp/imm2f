@@ -58,7 +58,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   const [searchCategory, setSearchCategory] = useState<PlaceCategoryId | "all">("all");
   const [browseGroup, setBrowseGroup] = useState("seoul");
   const [browseArea, setBrowseArea] = useState("all");
-  const [browseCategories, setBrowseCategories] = useState<PlaceCategoryId[]>(["cafe"]);
+  const [browseCategories, setBrowseCategories] = useState<PlaceCategoryId[]>([]);
   const [browseRegionQuery, setBrowseRegionQuery] = useState("");
   const [browseResultQuery, setBrowseResultQuery] = useState("");
   const [regionSuggestionsOpen, setRegionSuggestionsOpen] = useState(false);
@@ -210,7 +210,6 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
       setDiscover([]);
       setDiscoverError("");
       setSearched(false);
-      if (next === "browse") void runDiscover({ ...browseInput(browseGroup, browseArea), categories: browseCategories, page: 1 });
     }
   }
 
@@ -256,9 +255,11 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     const categories = next.categories ?? browseCategories;
     if (!group || !area) return;
     setBrowseResultQuery("");
-    void runDiscover(categories.length
-      ? { ...browseInput(group, area), categories, page: 1 }
-      : { ...browseInput(group, area), category: "all", page: 1 });
+    void runDiscover(
+      categories.length
+        ? { ...browseInput(group, area), categories, page: 1 }
+        : { ...browseInput(group, area), category: "all", page: 1 },
+    );
   }
 
   function toggleBrowseCategory(category: PlaceCategoryId) {
@@ -302,14 +303,6 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   }
 
   const selectedBrowseGroup = areaGroupById(browseGroup);
-  const selectedBrowseAreaLabel = browseArea.startsWith("custom:")
-    ? browseArea.slice("custom:".length)
-    : browseArea === "all"
-    ? `${selectedBrowseGroup?.label ?? "지역"} 전체`
-    : selectedBrowseGroup?.areas.find(item => item.id === browseArea)?.label ?? "동네 선택";
-  const selectedBrowseCategoryLabel = browseCategories.length
-    ? PLACE_CATEGORIES.filter(item => browseCategories.includes(item.id)).map(item => item.label).join(" · ")
-    : "전체";
   const regionSuggestions = (PLACE_ADMINISTRATIVE_AREAS[browseGroup] ?? [])
     .filter(area => !browseRegionQuery.trim() || area.toLowerCase().includes(browseRegionQuery.trim().toLowerCase()))
     .slice(0, 8);
@@ -402,7 +395,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
         <div className="region-browser" aria-label="지역 선택">
           <div className="region-browser-head">
             <div><span>지역 둘러보기</span><strong>어디에서 함께 시간을 보낼까요?</strong></div>
-            <p>지역과 장소 종류를 고르면 바로 후보를 보여드려요.</p>
+            <p>지역과 장소 종류를 고르면 후보를 바로 보여드려요.</p>
           </div>
           <div className="region-tabs" role="tablist" aria-label="넓은 지역">
             {PLACE_AREA_GROUPS.map(group => (
@@ -434,6 +427,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
                     onClick={() => {
                       setBrowseArea("all");
                       setBrowseRegionQuery("");
+                      runBrowse({ group: selectedBrowseGroup.id, area: "all" });
                       runBrowse({ group: selectedBrowseGroup.id, area: "all" });
                   }}
                 >
@@ -506,10 +500,6 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
                 <button className={browseCategories.includes(item.id) ? "is-active" : ""} type="button" key={item.id} aria-pressed={browseCategories.includes(item.id)} disabled={discoverPending} onClick={() => toggleBrowseCategory(item.id)}><PlaceCategoryIcon category={item.id} />{item.label}</button>
               ))}
             </div>
-          </div>
-          <div className={`browse-selection ${discoverPending ? "is-loading" : ""}`} aria-live="polite">
-            <span><i />{discoverPending ? "후보를 찾는 중" : "선택한 조건"}</span>
-            <b>{selectedBrowseAreaLabel} · {selectedBrowseCategoryLabel}{discoverPending ? " · 검색 중" : ""}</b>
           </div>
         </div>
       </div>

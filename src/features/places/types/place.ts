@@ -29,12 +29,16 @@ export type Place = {
   visualTone: "photo" | "blue" | "brown" | "green";
   userStatus: PlacePreferenceStatus;
   partnerStatus: PlacePreferenceStatus;
+  userRated?: boolean;
+  partnerRated?: boolean;
   userFit: number;
   partnerFit: number;
   externalSource?: PlaceExternalSource;
   externalPlaceId?: string;
   recommendReason?: string;
   detailedCategory?: string;
+  kakaoCategoryGroupCode?: string;
+  searchRegion?: string;
   distanceMeters?: number;
   homepage?: string;
   detailFacts?: Array<{ label: string; value: string }>;
@@ -55,6 +59,8 @@ export type DiscoverCandidate = {
   coordinates: [number, number];
   image?: string;
   detailedCategory?: string;
+  kakaoCategoryGroupCode?: string;
+  searchRegion?: string;
   distanceMeters?: number;
   openingHours?: string;
 };

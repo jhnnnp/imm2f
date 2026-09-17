@@ -2,7 +2,7 @@ import type { Place, PlacePreferenceStatus } from "../types/place";
 import { isDiscoverPlace } from "../discover";
 import { STATUS_META } from "../config/statusMeta";
 import { PlaceStatusBadge } from "./PlaceStatusBadge";
-import { naverPlaceSearchUrl } from "../format";
+import { kakaoPlaceUrl, naverPlaceSearchUrl } from "../format";
 import { PlaceGraphicCover } from "./PlaceGraphicCover";
 import { PlaceLocationMap } from "./PlaceLocationMap";
 
@@ -25,7 +25,9 @@ export function PlaceDetailPanel({
 }) {
   const preview = isDiscoverPlace(place);
   const address = place.roadAddress || place.address || place.district;
-  const sourceLabel = place.externalSource === "tourapi" ? "대한민국 구석구석에서 보기" : "카카오맵에서 보기";
+  const kakaoUrl = place.externalSource === "kakao" && place.mapUrl
+    ? place.mapUrl
+    : kakaoPlaceUrl(place.name, place.coordinates);
   return <div className="place-detail-panel">
     <div className={`detail-photo tone-${place.visualTone} ${place.image ? "" : "is-empty"}`}>{place.image ? <img src={place.image} alt={place.name} /> : <PlaceGraphicCover place={place} />}<span>{place.categoryLabel.toUpperCase()} · {preview ? "CANDIDATE" : "PLACE"}</span></div>
     <div className="place-detail-head"><div><span className="eyebrow">{preview ? "PLACE PREVIEW" : "PLACE NOTE"}</span><h2>{place.name}</h2><p>{address}</p></div>{!preview && <button className="detail-heart is-on" type="button" aria-label="가고 싶어요 해제" onClick={() => onSave?.()}>♥</button>}</div>
@@ -37,9 +39,17 @@ export function PlaceDetailPanel({
       {place.detailFacts?.map(fact => <div key={`${fact.label}-${fact.value}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
     </dl>}
     <div className="external-place-links">
-      {place.mapUrl && <a className="quiet-link" href={place.mapUrl} target="_blank" rel="noreferrer">{sourceLabel} ↗</a>}
-      <a className="quiet-link naver-link" href={naverPlaceSearchUrl(place.name, address)} target="_blank" rel="noreferrer">네이버 지도에서 보기 ↗</a>
-      {place.homepage && <a className="quiet-link" href={place.homepage} target="_blank" rel="noreferrer">공식 홈페이지 ↗</a>}
+      <span className="external-place-links-label">지도 앱으로 열기</span>
+      <div className="map-app-grid">
+        <a className="map-app-link is-kakao" href={kakaoUrl} target="_blank" rel="noreferrer" aria-label="카카오맵에서 장소 보기">
+          <span className="map-service-lockup"><b className="kakao-wordmark">kakao map</b><small>지도에서 보기</small></span><em aria-hidden="true">↗</em>
+        </a>
+        <a className="map-app-link is-naver" href={naverPlaceSearchUrl(place.name, address)} target="_blank" rel="noreferrer" aria-label="네이버 지도에서 장소 보기">
+          <span className="map-service-lockup"><b className="naver-wordmark">NAVER</b><small>지도에서 보기</small></span><em aria-hidden="true">↗</em>
+        </a>
+      </div>
+      {place.externalSource === "tourapi" && place.mapUrl && <a className="place-source-link" href={place.mapUrl} target="_blank" rel="noreferrer">대한민국 구석구석 상세정보 <span>↗</span></a>}
+      {place.homepage && <a className="place-source-link" href={place.homepage} target="_blank" rel="noreferrer">공식 홈페이지 <span>↗</span></a>}
     </div>
     {preview ? (
       <button className={preferredPlan ? "outline-button full" : "primary-button full"} type="button" onClick={onSave}>나중을 위해 저장</button>

@@ -63,16 +63,20 @@ export function InsightsPanel({ initial }: { initial: PreferenceInsight | null }
                 <span className="eyebrow">OUR MATCH</span>
                 <h2>우리 취향의 겹치는 지점</h2>
                 <p>{insight.summary}</p>
+                <small>
+                  나 {insight.evidence.youRatedCount}곳 · 파트너 {insight.evidence.partnerRatedCount}곳 응답
+                  {` · 함께 긍정 ${insight.evidence.sharedPositivePlaceCount}곳 · 분석 신뢰도 ${insight.confidence}%`}
+                </small>
                 <small>{insight.note}</small>
               </div>
             </article>
             <article className="paper-card common-taste-card">
               <span className="eyebrow">COMMON TASTE</span>
-              <h2>둘 다 좋아해요</h2>
+              <h2>둘의 긍정 기록에서 겹쳐요</h2>
               <div className="taste-tags">
-                {insight.commonTastes.map(item => (
+                {insight.commonTastes.length ? insight.commonTastes.map(item => (
                   <span key={item.label}><b>{item.label}</b><small>{item.score}</small></span>
-                ))}
+                )) : <p>아직 공통으로 긍정 표시한 카테고리가 없어요.</p>}
               </div>
             </article>
           </section>

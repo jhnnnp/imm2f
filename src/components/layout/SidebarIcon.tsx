@@ -36,10 +36,12 @@ export function SidebarIcon({ name }: { name: SidebarIconName }) {
 export function BrandMark() {
   return (
     <svg className="brand-symbol" viewBox="0 0 48 48" fill="none" aria-hidden="true">
-      <rect x="1" y="1" width="46" height="46" rx="14" />
-      <circle className="brand-symbol-o" cx="24" cy="24" r="12" />
-      <path className="brand-symbol-u" d="M18.5 18.5v6.8c0 3.5 2.1 5.7 5.5 5.7s5.5-2.2 5.5-5.7v-6.8" />
-      <circle className="brand-symbol-dot" cx="24" cy="13" r="1.35" />
+      <rect className="brand-symbol-bg" x="1" y="1" width="46" height="46" rx="14" />
+      <circle className="brand-symbol-ring brand-symbol-ring-left" cx="20" cy="24" r="8.25" />
+      <circle className="brand-symbol-ring brand-symbol-ring-right" cx="28" cy="24" r="8.25" />
+      <path className="brand-symbol-link" d="M24 17.35c2.72 1.47 4.25 3.7 4.25 6.65S26.72 29.18 24 30.65C21.28 29.18 19.75 26.95 19.75 24S21.28 18.82 24 17.35Z" />
+      <path className="brand-symbol-spark" d="M35.6 11.2v4.4M33.4 13.4h4.4" />
+      <circle className="brand-symbol-dot" cx="13.2" cy="35.2" r="1.15" />
     </svg>
   );
 }
