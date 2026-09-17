@@ -14,6 +14,7 @@ type NoteRow = {
   status: string;
   extra: string;
   created_at: string;
+  created_by: string;
 };
 
 function toNote(row: NoteRow): CoupleNote {
@@ -25,6 +26,7 @@ function toNote(row: NoteRow): CoupleNote {
     status: row.status,
     extra: row.extra,
     createdAt: row.created_at,
+    createdBy: row.created_by,
   };
 }
 
@@ -35,7 +37,7 @@ export async function listNotes(kind: NoteKind): Promise<{ persist: boolean; not
   if (!supabase) return { persist: false, notes: [] };
   const { data } = await supabase
     .from("couple_notes")
-    .select("id, kind, title, detail, status, extra, created_at")
+    .select("id, kind, title, detail, status, extra, created_at, created_by")
     .eq("couple_id", session.coupleId)
     .eq("kind", kind)
     .order("sort_order", { ascending: true })
@@ -63,7 +65,7 @@ export async function createNote(kind: NoteKind, input: { title: string; detail:
       status: allowed,
       created_by: session.userId,
     })
-    .select("id, kind, title, detail, status, extra, created_at")
+    .select("id, kind, title, detail, status, extra, created_at, created_by")
     .single();
   if (error || !data) return { error: error?.message ?? "저장하지 못했어요." };
   const action = kind === "vault" ? "VAULT_UPDATED" : kind === "gift" ? "GIFT_UPDATED" : "BUCKET_UPDATED";

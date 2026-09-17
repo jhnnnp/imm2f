@@ -1,24 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import { signIn } from "../session";
+import { useActionState } from "react";
+import { signIn, type AuthActionState } from "../session";
+
+const initialState: AuthActionState = null;
 
 export function LoginForm({ nextPath }: { nextPath: string }) {
-  const [error, setError] = useState("");
-  const [pending, setPending] = useState(false);
-
-  async function onSubmit(formData: FormData) {
-    setPending(true);
-    setError("");
-    const result = await signIn(formData);
-    if (result?.error) {
-      setError(result.error);
-      setPending(false);
-    }
-  }
+  const [state, formAction, pending] = useActionState(signIn, initialState);
 
   return (
-    <form className="auth-form" action={onSubmit}>
+    <form className="auth-form" action={formAction}>
       <input type="hidden" name="next" value={nextPath} />
       <label className="field">
         <span>이메일</span>
@@ -28,7 +19,7 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
         <span>비밀번호</span>
         <input type="password" name="password" autoComplete="current-password" required minLength={8} />
       </label>
-      {error && <p className="form-error" role="alert">{error}</p>}
+      {state?.error && <p className="form-error" role="alert" aria-live="polite">{state.error}</p>}
       <button className="primary-button full" type="submit" disabled={pending}>{pending ? "들어가는 중..." : "우리 공간으로"}</button>
     </form>
   );

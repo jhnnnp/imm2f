@@ -15,10 +15,15 @@ function safeNextPath(value: FormDataEntryValue | string | null) {
 }
 
 function authErrorMessage(message: string) {
-  if (message.toLowerCase().includes("invalid login")) return "이메일 또는 비밀번호가 올바르지 않아요.";
-  if (message.toLowerCase().includes("already registered")) return "이미 가입된 이메일이에요.";
-  if (message.toLowerCase().includes("email not confirmed")) return "이메일 인증을 먼저 완료해 주세요.";
-  return message;
+  const normalized = message.toLowerCase();
+  if (normalized.includes("invalid login")) return "이메일 또는 비밀번호가 올바르지 않아요.";
+  if (normalized.includes("already registered") || normalized.includes("already been registered")) return "이미 가입된 이메일이에요.";
+  if (normalized.includes("email not confirmed")) return "이메일 인증을 먼저 완료해 주세요.";
+  if (normalized.includes("invite not found")) return "초대 링크를 찾지 못했어요.";
+  if (normalized.includes("invite expired")) return "초대 링크가 만료됐어요.";
+  if (normalized.includes("already in a couple")) return "이미 다른 파트너와 연결되어 있어요.";
+  if (normalized.includes("couple already has two members")) return "이미 연결이 완료된 초대예요.";
+  return "요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.";
 }
 
 function refreshSessionUI() {
@@ -71,7 +76,9 @@ export async function getAppSession(): Promise<AppSession> {
   return loadAppSession();
 }
 
-export async function signIn(formData: FormData) {
+export type AuthActionState = { error: string } | null;
+
+export async function signIn(_previousState: AuthActionState, formData: FormData): Promise<AuthActionState> {
   const supabase = await createClient();
   if (!supabase) return { error: "Supabase 환경 변수가 아직 없어요." };
 
@@ -82,13 +89,17 @@ export async function signIn(formData: FormData) {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { error: authErrorMessage(error.message) };
 
-  await supabase.rpc("ensure_own_couple");
+  const { error: coupleError } = await supabase.rpc("ensure_own_couple");
+  if (coupleError) {
+    await supabase.auth.signOut();
+    return { error: "계정 공간을 불러오지 못했어요. 잠시 후 다시 시도해 주세요." };
+  }
   (await cookies()).delete(DEMO_COOKIE_NAME);
   refreshSessionUI();
   redirect(safeNextPath(formData.get("next")));
 }
 
-export async function signUp(formData: FormData) {
+export async function signUp(_previousState: AuthActionState, formData: FormData): Promise<AuthActionState> {
   const supabase = await createClient();
   if (!supabase) return { error: "Supabase 환경 변수가 아직 없어요." };
 
@@ -100,37 +111,46 @@ export async function signUp(formData: FormData) {
     return { error: "이름, 이메일, 8자 이상 비밀번호가 필요해요." };
   }
 
-  const origin = process.env.NEXT_PUBLIC_SITE_URL ?? "http://127.0.0.1:3000";
   const service = createServiceClient();
-  if (service) {
-    const created = await service.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: { display_name: displayName },
-    });
-    if (created.error) return { error: authErrorMessage(created.error.message) };
-  } else {
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { display_name: displayName },
-        emailRedirectTo: `${origin}/auth/callback`,
-      },
-    });
-    if (error) return { error: authErrorMessage(error.message) };
+  if (!service) return { error: "즉시 가입에 필요한 Supabase 서버 키가 설정되지 않았어요." };
+  const adminService = service;
+
+  const created = await adminService.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { display_name: displayName },
+  });
+  if (created.error || !created.data.user) {
+    return { error: authErrorMessage(created.error?.message ?? "계정을 만들지 못했어요.") };
+  }
+  const createdUserId = created.data.user.id;
+
+  async function rollbackCreatedUser() {
+    const { error } = await adminService.auth.admin.deleteUser(createdUserId);
+    if (error) console.error("Failed to roll back incomplete signup", error);
   }
 
   const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-  if (signInError) return { error: authErrorMessage(signInError.message) };
+  if (signInError) {
+    await rollbackCreatedUser();
+    return { error: authErrorMessage(signInError.message) };
+  }
 
   if (inviteToken) {
     const { error: inviteError } = await supabase.rpc("accept_couple_invite", { invite_token: inviteToken });
-    if (inviteError) return { error: inviteError.message };
+    if (inviteError) {
+      await supabase.auth.signOut();
+      await rollbackCreatedUser();
+      return { error: authErrorMessage(inviteError.message) };
+    }
   } else {
     const { error: coupleError } = await supabase.rpc("ensure_own_couple");
-    if (coupleError) return { error: coupleError.message };
+    if (coupleError) {
+      await supabase.auth.signOut();
+      await rollbackCreatedUser();
+      return { error: "계정 공간을 준비하지 못했어요. 잠시 후 다시 시도해 주세요." };
+    }
   }
 
   (await cookies()).delete(DEMO_COOKIE_NAME);

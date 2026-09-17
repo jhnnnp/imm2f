@@ -13,16 +13,16 @@ type SidebarIconName =
 
 const paths: Record<SidebarIconName, React.ReactNode> = {
   home: <><path d="M3.5 10.5 12 3l8.5 7.5"/><path d="M5.7 9v11h12.6V9M9.2 20v-6.2h5.6V20"/></>,
-  date: <><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z"/><path d="M12 7.5v5l3.4 2"/></>,
-  trip: <><path d="M4 19h16M7 19V8.2A2.2 2.2 0 0 1 9.2 6h5.6A2.2 2.2 0 0 1 17 8.2V19M9.5 6V4h5v2M8.5 11.5h7"/></>,
+  date: <><path d="M12 20.2S4.2 15.7 4.2 9.5a4.2 4.2 0 0 1 7.8-2.2 4.2 4.2 0 0 1 7.8 2.2c0 6.2-7.8 10.7-7.8 10.7Z"/><path d="M18.2 3.2v3.2M16.6 4.8h3.2"/></>,
+  trip: <><rect x="4" y="7" width="16" height="12.5" rx="2.5"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M8 7v12.5M16 7v12.5M4 12h16"/><path d="M7 22h.01M17 22h.01"/></>,
   calendar: <><rect x="3.5" y="5.5" width="17" height="15" rx="2.5"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17M8 14h.01M12 14h.01M16 14h.01M8 17.5h.01M12 17.5h.01"/></>,
   places: <><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.3"/></>,
   map: <><path d="m3.5 6 5-2.5 7 2.5 5-2.5v14l-5 2.5-7-2.5-5 2.5V6Z"/><path d="M8.5 3.5v14M15.5 6v14"/></>,
-  memories: <><rect x="4" y="3.5" width="16" height="17" rx="2.5"/><circle cx="9" cy="9" r="1.5"/><path d="m5.5 17 4.3-4.3 3 3 2.2-2.2 3.5 3.5"/></>,
-  vault: <><rect x="3.5" y="4" width="17" height="16" rx="2.5"/><circle cx="12" cy="12" r="3"/><path d="M12 9v6M9 12h6M7 4V2.8M17 4V2.8"/></>,
+  memories: <><rect x="5" y="3.5" width="15" height="16" rx="2.3"/><path d="M5 7H3.8A1.8 1.8 0 0 0 2 8.8v10.4A1.8 1.8 0 0 0 3.8 21H16a2 2 0 0 0 2-1.5"/><circle cx="10" cy="8.5" r="1.4"/><path d="m6.5 16 3.7-3.8 2.7 2.6 2-2 3.6 3.2"/></>,
+  vault: <><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="12" cy="12" r="4"/><path d="M12 8v2.2M15.8 12H14M12 15.8V14M8.2 12H10M17.5 6.5h.01M17.5 17.5h.01"/></>,
   gifts: <><path d="M3.5 9h17v11h-17zM2.5 6h19v3h-19zM12 6v14"/><path d="M12 6H8.8A2.3 2.3 0 1 1 11 3.1L12 6Zm0 0h3.2A2.3 2.3 0 1 0 13 3.1L12 6Z"/></>,
-  bucket: <><path d="M6 9.5V6a6 6 0 0 1 12 0v3.5M4 8h16l-1 13H5L4 8Z"/><path d="M9 12v4M15 12v4"/></>,
-  insights: <><path d="M5 19V9M12 19V4M19 19v-7"/><path d="m3.5 7.5 6-3 5 4 6-4.5"/></>,
+  bucket: <><rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="m7.5 9 1.4 1.4 2.5-2.8M7.5 15l1.4 1.4 2.5-2.8M13.5 9h3M13.5 15h3"/></>,
+  insights: <><path d="M12 3.5a7.5 7.5 0 0 0-4.4 13.6c.8.6 1.2 1.2 1.3 2h6.2c.1-.8.5-1.4 1.3-2A7.5 7.5 0 0 0 12 3.5Z"/><path d="M9 22h6M9.5 13.5l2-2 1.7 1.7 2.3-3"/></>,
 };
 
 export function SidebarIcon({ name }: { name: SidebarIconName }) {

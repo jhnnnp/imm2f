@@ -49,7 +49,8 @@ export default async function InvitePage() {
   }
   return (
     <AppShell>
-      <div className="page-title-row">
+      <div className="invite-page">
+      <div className="page-title-row invite-page-head">
         <div>
           <span className="eyebrow">TOGETHER</span>
           <h1>파트너 초대</h1>
@@ -57,6 +58,7 @@ export default async function InvitePage() {
         </div>
       </div>
       <InviteManager />
+      </div>
     </AppShell>
   );
 }
