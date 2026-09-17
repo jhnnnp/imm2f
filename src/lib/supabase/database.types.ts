@@ -273,6 +273,8 @@ export type Database = {
           sort_order: number;
           memo: string;
           day_index: number;
+          lng: number | null;
+          lat: number | null;
         };
         Insert: {
           id?: string;
@@ -287,6 +289,8 @@ export type Database = {
           sort_order?: number;
           memo?: string;
           day_index?: number;
+          lng?: number | null;
+          lat?: number | null;
         };
         Update: {
           client_id?: string;
@@ -299,6 +303,8 @@ export type Database = {
           sort_order?: number;
           memo?: string;
           day_index?: number;
+          lng?: number | null;
+          lat?: number | null;
         };
         Relationships: [];
       };

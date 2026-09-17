@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import type { Place } from "@/features/places/types/place";
 import type { Memory } from "@/features/memories/types";
 import type { PlanItem } from "@/features/planning/types/plan";
 import { type CoupleActivity } from "@/features/collaboration/types";
 import type { PlaceCategoryId } from "@/features/places/types/place";
 import { PLACE_CATEGORIES } from "@/features/places/config/placeCategories";
+import { PlaceCategoryIcon } from "@/features/places/components/PlaceCategoryIcon";
 import { addDays, formatKoDate, formatKoShort, toIsoDate } from "@/lib/dates";
 import { RecentActivityPreview } from "@/features/collaboration/components/RecentActivityPreview";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
@@ -102,8 +104,10 @@ function MiniCal({ startDate, dayCount }: { startDate: string | null; dayCount: 
   });
   const lastWeek = cells.slice(35);
   const days = lastWeek.every(cell => cell.outside) ? cells.slice(0, 35) : cells;
+  const monthLabel = `${year}년 ${month + 1}월`;
   return (
     <div className="home-mini-cal" aria-hidden="true">
+      <p className="home-mini-cal-month">{monthLabel}</p>
       <div className="home-mini-cal-weekdays">
         {WEEKDAYS.map(day => <span key={day}>{day}</span>)}
       </div>
@@ -156,12 +160,18 @@ function StopMark({ category }: { category: PlaceCategoryId }) {
   );
 }
 
-const PASS_SPINE_HOLES = 11;
+const PASS_SPINE_HOLES = 12;
 
 function PassSpine() {
   return (
     <div className="home-pass-spine" aria-hidden="true">
-      {Array.from({ length: PASS_SPINE_HOLES }, (_, index) => <span key={index} />)}
+      {Array.from({ length: PASS_SPINE_HOLES }, (_, index) => (
+        <div className="home-pass-spine-ring" key={index}>
+          <span className="home-pass-spine-wire is-rear" />
+          <span className="home-pass-spine-hole" />
+          <span className="home-pass-spine-wire is-front" />
+        </div>
+      ))}
     </div>
   );
 }
@@ -202,6 +212,14 @@ function EmptyRoute() {
   );
 }
 
+function tripDayGroups(items: PlanItem[], dayCount: number) {
+  const span = Math.max(1, dayCount, ...items.map(item => (item.dayIndex ?? 0) + 1));
+  return Array.from({ length: span }, (_, dayIndex) => ({
+    dayIndex,
+    items: items.filter(item => (item.dayIndex ?? 0) === dayIndex),
+  }));
+}
+
 function RouteList({
   items,
   places,
@@ -210,11 +228,11 @@ function RouteList({
 }: {
   items: PlanItem[];
   places: Place[];
-  limit: number;
+  limit?: number;
   showDays?: boolean;
 }) {
   const byId = new Map(places.map(place => [place.id, place]));
-  const stops = items.slice(0, limit);
+  const stops = limit != null ? items.slice(0, limit) : items;
   return (
     <ol className="home-route">
       {stops.map((item, index) => {
@@ -227,14 +245,199 @@ function RouteList({
             {showDay ? <span className="home-route-day">{item.dayIndex + 1}일차</span> : null}
             <StopMark category={stopCategory(item, place)} />
             <span className="home-stop-copy">
-              <b>{item.placeName}</b>
+              <span className="home-stop-head">
+                <b>{item.placeName}</b>
+                {item.startTime ? <time dateTime={item.startTime}>{item.startTime}</time> : null}
+              </span>
               {meta ? <small>{meta}</small> : null}
             </span>
-            {item.startTime ? <time dateTime={item.startTime}>{item.startTime}</time> : null}
           </li>
         );
       })}
     </ol>
+  );
+}
+
+const PASS_SWITCH_MS = 420;
+
+function PassBookFace({
+  pageIndex,
+  dayStops,
+  places,
+  multiDay,
+  pageCount,
+  transitioning,
+  onPrev,
+  onNext,
+}: {
+  pageIndex: number;
+  dayStops: PlanItem[];
+  places: Place[];
+  multiDay: boolean;
+  pageCount: number;
+  transitioning: boolean;
+  onPrev?: () => void;
+  onNext?: () => void;
+}) {
+  const stopLabel = `${dayStops.length} STOP${dayStops.length === 1 ? "" : "S"}`;
+  return (
+    <div className="home-pass-page-face">
+      <div className="home-pass-route-head">
+        <span className="eyebrow">ITINERARY</span>
+        <b>{stopLabel}</b>
+      </div>
+      <p className="home-pass-route-day">{multiDay ? `${pageIndex + 1}일차` : "오늘의 코스"}</p>
+      {dayStops.length ? (
+        <RouteList items={dayStops} places={places} />
+      ) : (
+        <ol className="home-route is-empty">
+          <li>
+            <span className="home-stop-mark is-ghost">+</span>
+            <span className="home-stop-copy">
+              <b>이 날 일정이 비어 있어요</b>
+              <small>여행에서 장소를 담아 보세요</small>
+            </span>
+          </li>
+        </ol>
+      )}
+      <div className="home-pass-route-foot">
+        {multiDay ? (
+          <div className="home-pass-route-nav" role="group" aria-label="일차 넘기기">
+            <button
+              type="button"
+              className="home-pass-route-turn"
+              disabled={transitioning || pageIndex <= 0}
+              aria-label="이전 날짜"
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                onPrev?.();
+              }}
+            >
+              이전
+            </button>
+            <span className="home-pass-route-dots" aria-hidden="true">
+              {Array.from({ length: pageCount }, (_, index) => (
+                <i key={index} className={index === pageIndex ? "is-active" : ""} />
+              ))}
+            </span>
+            <button
+              type="button"
+              className="home-pass-route-turn"
+              disabled={transitioning || pageIndex >= pageCount - 1}
+              aria-label="다음 날짜"
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                onNext?.();
+              }}
+            >
+              다음
+            </button>
+          </div>
+        ) : null}
+        <Link
+          className="home-pass-more"
+          href="/trip"
+          onClick={event => event.stopPropagation()}
+        >
+          {multiDay && pageIndex < pageCount - 1 ? `${pageCount - pageIndex - 1}일 더 보기` : "일정 열기"}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function PassItineraryRoute({
+  items,
+  places,
+  dayCount,
+}: {
+  items: PlanItem[];
+  places: Place[];
+  dayCount: number;
+}) {
+  const groups = useMemo(() => tripDayGroups(items, dayCount), [items, dayCount]);
+  const [page, setPage] = useState(0);
+  const [slide, setSlide] = useState<{ from: number; to: number; dir: "forward" | "back" } | null>(null);
+  const touchStartX = useRef<number | null>(null);
+
+  useEffect(() => {
+    setPage(0);
+    setSlide(null);
+  }, [items, dayCount]);
+
+  useEffect(() => {
+    if (!slide) return;
+    const timer = window.setTimeout(() => {
+      setPage(slide.to);
+      setSlide(null);
+    }, PASS_SWITCH_MS);
+    return () => window.clearTimeout(timer);
+  }, [slide]);
+
+  const pageCount = groups.length;
+  const safePage = Math.min(page, Math.max(0, pageCount - 1));
+  const multiDay = pageCount > 1;
+
+  const goPage = useCallback((next: number, dir: "forward" | "back") => {
+    if (slide || next < 0 || next >= pageCount || next === safePage) return;
+    setSlide({ from: safePage, to: next, dir });
+  }, [slide, pageCount, safePage]);
+
+  const onTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    touchStartX.current = event.changedTouches[0]?.clientX ?? null;
+  };
+
+  const onTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const start = touchStartX.current;
+    touchStartX.current = null;
+    if (start == null) return;
+    const end = event.changedTouches[0]?.clientX ?? start;
+    const delta = end - start;
+    if (delta <= -48) goPage(safePage + 1, "forward");
+    if (delta >= 48) goPage(safePage - 1, "back");
+  };
+
+  const faceFor = (index: number, interactive: boolean) => ({
+    pageIndex: index,
+    dayStops: groups[index]?.items ?? [],
+    places,
+    multiDay,
+    pageCount,
+    transitioning: Boolean(slide),
+    onPrev: interactive ? () => goPage(index - 1, "back") : undefined,
+    onNext: interactive ? () => goPage(index + 1, "forward") : undefined,
+  });
+
+  return (
+    <div
+      className={`home-pass-route${slide ? " is-switching" : ""}`}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+    >
+      <div className="home-pass-book">
+        <article className="home-pass-page">
+          {slide ? (
+            <>
+              <div
+                className={`home-pass-page-pane is-leave is-${slide.dir}`}
+                aria-hidden="true"
+              >
+                <PassBookFace {...faceFor(slide.from, false)} />
+              </div>
+              <div className={`home-pass-page-pane is-enter is-${slide.dir}`}>
+                <PassBookFace {...faceFor(slide.to, false)} />
+              </div>
+            </>
+          ) : (
+            <div className="home-pass-page-pane is-settled">
+              <PassBookFace {...faceFor(safePage, true)} />
+            </div>
+          )}
+        </article>
+      </div>
+    </div>
   );
 }
 
@@ -251,7 +454,9 @@ function PlaceIndexCard({
 }) {
   return (
     <Link className={`home-index tilt-${index % 3} tone-${place.visualTone}`} href={href} style={{ animationDelay: `${index * 70}ms` }}>
-      <span className="home-index-stamp" aria-hidden="true">{place.categoryLabel.slice(0, 1)}</span>
+      <span className="home-index-mark" aria-hidden="true">
+        <PlaceCategoryIcon category={place.category} variant="mark" />
+      </span>
       <small>{place.categoryLabel} · {place.district}</small>
       <h3>{place.name}</h3>
       <p>{note}</p>
@@ -297,8 +502,6 @@ export function HomeDashboard({
   const memory = memories[0] ?? null;
   const cover = memory ? memoryCover(memory) : null;
   const heading = journeyHeadline(liveTrip.title, liveTrip.items, livePlaces, liveTrip.dayCount);
-  const tripShown = Math.min(5, liveTrip.items.length);
-  const tripMore = Math.max(0, liveTrip.items.length - tripShown);
   const dateStops = liveDate.items.map(item => item.placeName).slice(0, 3).join(" - ");
 
   return (
@@ -311,12 +514,12 @@ export function HomeDashboard({
         <p className="hand-note">just us.</p>
       </div>
       <div className="home-layout">
-        <Link
-          className={`home-pass${liveTrip.items.length ? "" : " is-empty"}`}
-          href="/trip"
-          aria-label={liveTrip.items.length ? `다음 여행, ${heading}` : "여행 일정 열기"}
-        >
-          <div className="home-pass-stub">
+        <article className={`home-pass${liveTrip.items.length ? "" : " is-empty"}`}>
+          <Link
+            className="home-pass-stub"
+            href="/trip"
+            aria-label={liveTrip.items.length ? `다음 여행, ${heading}` : "여행 일정 열기"}
+          >
             <span className="light-label">NEXT JOURNEY</span>
             {liveTrip.items.length ? (
               <>
@@ -325,41 +528,53 @@ export function HomeDashboard({
                   <b>{dayLabel(liveTrip.startDate)}</b>
                   <small>{liveTrip.startDate ? formatKoShort(liveTrip.startDate) : "날짜 미정"}</small>
                 </div>
-                <MiniCal startDate={liveTrip.startDate} dayCount={liveTrip.dayCount} />
-                <span className="home-pass-count">{liveTrip.dayCount > 1 ? `${liveTrip.dayCount}일 · ${liveTrip.items.length}곳` : `${liveTrip.items.length}곳으로 떠난 하루`}</span>
+                <div className="home-pass-cal-wrap">
+                  <MiniCal startDate={liveTrip.startDate} dayCount={liveTrip.dayCount} />
+                </div>
+                <div className="home-pass-stub-foot">
+                  <span className="home-pass-count">{liveTrip.dayCount > 1 ? `${liveTrip.dayCount}일 · ${liveTrip.items.length}곳` : `${liveTrip.items.length}곳으로 떠난 하루`}</span>
+                </div>
               </>
             ) : (
               <>
                 <h2>아직 잡아 둔 여행이 없어요</h2>
                 <p>저장한 장소로 첫날을 만들어 보세요.</p>
-                <MiniCal startDate={seoulDateIso()} dayCount={0} />
-                <span className="home-pass-count">일정 없음</span>
+                <div className="home-pass-cal-wrap">
+                  <MiniCal startDate={seoulDateIso()} dayCount={0} />
+                </div>
+                <div className="home-pass-stub-foot">
+                  <span className="home-pass-count">일정 없음</span>
+                </div>
               </>
             )}
-          </div>
+          </Link>
           <PassSpine />
-          <div className="home-pass-route">
-            {liveTrip.items.length ? (
-              <>
-                <div className="home-pass-route-head">
-                  <span className="eyebrow">ITINERARY</span>
-                  <b>{liveTrip.items.length} STOP{liveTrip.items.length > 1 ? "S" : ""}</b>
-                </div>
-                <RouteList items={liveTrip.items} places={livePlaces} limit={tripShown} showDays={liveTrip.dayCount > 1} />
-                <span className="home-pass-more">{tripMore ? `${tripMore}곳 더 보기` : "일정 열기"}</span>
-              </>
-            ) : (
-              <>
-                <div className="home-pass-route-head">
-                  <span className="eyebrow">ITINERARY</span>
-                  <b>0 STOPS</b>
-                </div>
-                <EmptyRoute />
-                <span className="home-pass-more">여행 만들기</span>
-              </>
-            )}
-          </div>
-        </Link>
+          {liveTrip.items.length ? (
+            <PassItineraryRoute items={liveTrip.items} places={livePlaces} dayCount={liveTrip.dayCount} />
+          ) : (
+            <div className="home-pass-route">
+              <div className="home-pass-book">
+                <article className="home-pass-page">
+                  <div className="home-pass-page-pane is-settled">
+                    <div className="home-pass-page-face">
+                      <div className="home-pass-route-head">
+                        <span className="eyebrow">ITINERARY</span>
+                        <b>0 STOPS</b>
+                      </div>
+                      <p className="home-pass-route-day">오늘의 코스</p>
+                      <EmptyRoute />
+                      <div className="home-pass-route-foot">
+                        <Link className="home-pass-more" href="/trip">
+                          여행 만들기
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          )}
+        </article>
         <div className="home-side-stack">
           <Link
             className="home-date paper-card"
@@ -399,7 +614,7 @@ export function HomeDashboard({
             </span>
             <div>
               <span className="eyebrow">A NOTE FOR US</span>
-              <h3>이번엔 둘 다 좋아할 장소를 찾아볼까요?</h3>
+              <h3>둘 다 좋아하는 장소를 찾아볼까요?</h3>
               <span className="text-link">장소 찾기 →</span>
             </div>
             <span className="note-heart" aria-hidden="true">

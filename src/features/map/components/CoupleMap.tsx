@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { GeoJSONSource, Map as MapLibreMap, Marker, StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { CouplePlan, PlanItem } from "@/features/planning/types/plan";
@@ -9,13 +9,19 @@ import type { ArchivedTripPlan } from "@/features/planning/actions";
 import type { Memory } from "@/features/memories/types";
 import type { Place, PlacePreferenceStatus } from "@/features/places/types/place";
 import { htmlMarkerPlacement, screenOffsetForStackedPins } from "@/features/map/htmlMarker";
+import { computeMemorySheetAnchor, pinScreenPoints, type MemorySheetAnchor } from "@/features/map/memorySheetAnchor";
+import { distanceMeters } from "@/features/places/geo";
+import { asPlanCoordinates } from "@/features/planning/planCoordinates";
+import { curveRoute } from "@/features/trip/planRoute";
+import { useRoadRoute } from "@/features/map/routing/useRoadRoute";
+import { MapRouteOverlay } from "./MapRouteOverlay";
 
 const MAP_STYLE: StyleSpecification = {
   version: 8,
   sources: {
     basemap: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, maxzoom: 19, attribution: "&copy; OpenStreetMap contributors" },
     memorymap: { type: "vector", tiles: ["/api/map-tiles/{z}/{x}/{y}"], minzoom: 0, maxzoom: 14, attribution: "&copy; OpenStreetMap contributors" },
-    "trip-route": { type: "geojson", data: { type: "FeatureCollection", features: [] } },
+    "trip-route": { type: "geojson", data: { type: "FeatureCollection", features: [] }, lineMetrics: true },
   },
   layers: [
     { id: "paper", type: "background", paint: { "background-color": "#e8e6dc" } },
@@ -26,10 +32,44 @@ const MAP_STYLE: StyleSpecification = {
     { id: "roads", type: "line", source: "memorymap", "source-layer": "streets", filter: ["!=", ["get", "tunnel"], true], layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": ["match", ["get", "kind"], ["motorway", "trunk", "primary"], "#d8c3a2", "#f5f1e8"], "line-width": ["interpolate", ["exponential", 1.35], ["zoom"], 11, 0.7, 15, 3.8, 18, 12], "line-opacity": 0.96 } },
     { id: "building-footprints", type: "fill", source: "memorymap", "source-layer": "buildings", minzoom: 12, paint: { "fill-color": "#d5d2c8", "fill-outline-color": "#c5c2b9", "fill-opacity": ["interpolate", ["linear"], ["zoom"], 12, 0.2, 15, 0.76] } },
     { id: "buildings-3d", type: "fill-extrusion", source: "memorymap", "source-layer": "buildings", minzoom: 13.2, paint: { "fill-extrusion-color": ["interpolate", ["linear"], ["coalesce", ["get", "height"], 12], 0, "#d9d8d0", 30, "#c7cec7", 100, "#aebdb4"], "fill-extrusion-height": ["coalesce", ["get", "height"], ["*", ["get", "levels"], 3.2], 12], "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0], "fill-extrusion-opacity": 0.84, "fill-extrusion-vertical-gradient": true } },
-    { id: "trip-route-shadow", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#fffaf0", "line-width": 13, "line-opacity": 1 } },
-    { id: "trip-route-line", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#b76f54", "line-width": 5, "line-opacity": 1 } },
+    { id: "trip-route-shadow", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#faf7e8", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 10, 12, 13, 16, 16], "line-opacity": 0.94 } },
+    { id: "trip-route-line", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#e3de96", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 7, 16, 9], "line-opacity": 0.9 } },
+    { id: "trip-route-inner", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#f3f0cc", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.2, 12, 3, 16, 3.6], "line-opacity": 0.82 } },
+    { id: "trip-route-flow", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#fffef5", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1, 12, 1.5, 16, 2], "line-opacity": 0.65, "line-dasharray": [1.1, 2.8] } },
   ],
 };
+
+const TRIP_ROUTE_LAYERS = ["trip-route-shadow", "trip-route-line", "trip-route-inner", "trip-route-flow"] as const;
+
+function tripRouteCollection(pins: TripPin[]) {
+  const coordinates = pins.flatMap(pin => {
+    const coords = asPlanCoordinates(pin.coordinates[0], pin.coordinates[1]);
+    return coords ? [coords] : [];
+  });
+  if (coordinates.length < 2) {
+    return { type: "FeatureCollection" as const, features: [] };
+  }
+  return {
+    type: "FeatureCollection" as const,
+    features: [{
+      type: "Feature" as const,
+      properties: {},
+      geometry: { type: "LineString" as const, coordinates: curveRoute(coordinates) },
+    }],
+  };
+}
+
+function syncCoupleTripRoute(map: MapLibreMap, pins: TripPin[], show: boolean) {
+  if (!map.isStyleLoaded()) return;
+  const routeSource = map.getSource("trip-route") as GeoJSONSource | undefined;
+  routeSource?.setData(tripRouteCollection(pins));
+  const visibility = show && pins.length >= 2 ? "visible" : "none";
+  for (const layerId of TRIP_ROUTE_LAYERS) {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, "visibility", visibility);
+    }
+  }
+}
 
 const DEFAULT_CENTER: [number, number] = [126.978, 37.5665];
 type PinLabel = "want" | "visited" | "revisit" | "memory";
@@ -56,6 +96,40 @@ function normalizedPlaceLabel(status: PlacePreferenceStatus): Exclude<PinLabel, 
 }
 
 function pinName(pin: MapPin) { return pin.kind === "place" ? pin.place.name : pin.kind === "memory" ? pin.memory.title : pin.item.placeName; }
+function sheetEyebrow(pin: MapPin) {
+  if (pin.kind === "place") return `${pin.place.categoryLabel} · ${pin.place.district}`;
+  if (pin.kind === "memory") return `${pin.memory.happenedOn} · ${pin.memory.locationLabel || "우리의 추억"}`;
+  return `${(pin.item.dayIndex ?? 0) + 1}일차 ${pin.item.startTime} · ${pin.item.category}`;
+}
+function sheetDescription(pin: MapPin, previousCoordinates?: [number, number]) {
+  if (pin.kind === "place") return pin.place.description || "우리의 장소로 저장했어요.";
+  if (pin.kind === "memory") return pin.memory.description || "우리만 아는 장면이에요.";
+  if (previousCoordinates) {
+    const meters = Math.round(distanceMeters(previousCoordinates, pin.coordinates));
+    if (meters < 80) return "앞에서 바로 옆";
+    if (meters < 1000) return `앞에서 ${meters}m`;
+    return `앞에서 ${(meters / 1000).toFixed(1)}km`;
+  }
+  return pin.item.memo || "여행 일정에 담아 둔 장소예요.";
+}
+function sheetHref(pin: MapPin) {
+  if (pin.kind === "place") return `/places?selected=${pin.place.id}`;
+  if (pin.kind === "memory") return "/memories";
+  return "/trip";
+}
+function sheetAction(pin: MapPin) {
+  if (pin.kind === "place") return "자세히";
+  if (pin.kind === "memory") return "추억";
+  return "일정";
+}
+function sheetActionLabel(pin: MapPin) {
+  if (pin.kind === "place") return "장소 자세히 보기";
+  if (pin.kind === "memory") return "추억 보러 가기";
+  return "여행 일정 보기";
+}
+function sheetChevron() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>`;
+}
 function formatJourneyRange(value: string, dayCount: number) {
   if (!value) return "날짜 미정";
   const start = new Date(`${value}T00:00:00`);
@@ -84,6 +158,33 @@ function markerColor(label: PinLabel | "trip") {
   if (label === "memory") return "169,126,67";
   if (label === "trip") return "63,95,80";
   return "95,143,166";
+}
+
+type MapViewportSnapshot = {
+  center: [number, number];
+  zoom: number;
+  bearing: number;
+  pitch: number;
+};
+
+function captureMapViewport(map: MapLibreMap): MapViewportSnapshot {
+  const center = map.getCenter();
+  return {
+    center: [center.lng, center.lat],
+    zoom: map.getZoom(),
+    bearing: map.getBearing(),
+    pitch: map.getPitch(),
+  };
+}
+
+function restoreMapViewport(map: MapLibreMap, snapshot: MapViewportSnapshot, duration = 620) {
+  map.easeTo({
+    center: snapshot.center,
+    zoom: snapshot.zoom,
+    bearing: snapshot.bearing,
+    pitch: snapshot.pitch,
+    duration,
+  });
 }
 
 function framePins(map: MapLibreMap, pins: MapPin[], viewMode: ViewMode, duration = 0) {
@@ -116,9 +217,13 @@ function framePins(map: MapLibreMap, pins: MapPin[], viewMode: ViewMode, duratio
   });
 }
 export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, archivedTrips: initialArchivedTrips }: { places: Place[]; memories: Memory[]; trip: CouplePlan; archivedTrips: ArchivedTripPlan[] }) {
+  const mapHostRef = useRef<HTMLDivElement>(null);
   const container = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
+  const selectionViewportRef = useRef<MapViewportSnapshot | null>(null);
+  const clearMapSelectionRef = useRef<(restoreView?: boolean) => void>(() => {});
   const [places, setPlaces] = useState(initialPlaces);
   const [tripItems, setTripItems] = useState(initialTrip.items);
   const [tripTitle, setTripTitle] = useState(initialTrip.title || "우리가 고른 여행");
@@ -127,8 +232,10 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
   const [selectedJourneyId, setSelectedJourneyId] = useState("current");
   const [journeyMenuOpen, setJourneyMenuOpen] = useState(false);
   const [mapState, setMapState] = useState<MapState>("loading");
+  const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
   const [mapAttempt, setMapAttempt] = useState(0);
   const [selected, setSelected] = useState<MapPin | null>(null);
+  const [sheetAnchor, setSheetAnchor] = useState<MemorySheetAnchor | null>(null);
   const [mode, setMode] = useState<MapMode>("places");
   const [viewMode, setViewMode] = useState<ViewMode>("3d");
   const [activeLabels, setActiveLabels] = useState<Set<PinLabel>>(() => new Set(FILTERS.map(item => item.id)));
@@ -172,9 +279,29 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     return next;
   }, [displayPlaces, memories]);
   const tripPins = useMemo<TripPin[]>(() => journeyItems
-    .filter(item => item.coordinates)
-    .sort((a, b) => (a.dayIndex ?? 0) - (b.dayIndex ?? 0) || a.startTime.localeCompare(b.startTime) || a.order - b.order)
-    .map((item, index) => ({ kind: "trip", id: `trip:${item.id}`, label: "trip", item, dayOrder: index + 1, coordinates: item.coordinates as [number, number] })), [journeyItems]);
+    .flatMap(item => {
+      const coordinates = asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]);
+      return coordinates ? [{ item, coordinates }] : [];
+    })
+    .sort((a, b) => (a.item.dayIndex ?? 0) - (b.item.dayIndex ?? 0) || a.item.startTime.localeCompare(b.item.startTime) || a.item.order - b.item.order)
+    .map(({ item, coordinates }, index) => ({
+      kind: "trip" as const,
+      id: `trip:${item.id}`,
+      label: "trip" as const,
+      item,
+      dayOrder: index + 1,
+      coordinates,
+    })), [journeyItems]);
+
+  const tripCoordinateList = useMemo(
+    () => tripPins.map(pin => pin.coordinates),
+    [tripPins],
+  );
+  const { path: tripRoadPath } = useRoadRoute(
+    tripCoordinateList,
+    mapState === "ready" && mode === "trips" && tripCoordinateList.length >= 2,
+    "driving",
+  );
 
   const years = useMemo(() => {
     const memoryYears = memories.map(memory => Number(memory.happenedOn.slice(0, 4))).filter(Number.isFinite);
@@ -192,15 +319,89 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
   }), [pins, mode, selectedYear]);
   const visiblePins = useMemo<MapPin[]>(() => mode === "trips" ? tripPins : modePins.filter(pin => pin.label !== "trip" && activeLabels.has(pin.label)), [mode, modePins, tripPins, activeLabels]);
   const visiblePinsRef = useRef(visiblePins);
+  const tripPinsRef = useRef(tripPins);
+  const modeRef = useRef(mode);
   const selectedRef = useRef(selected);
   const viewModeRef = useRef(viewMode);
   visiblePinsRef.current = visiblePins;
+  tripPinsRef.current = tripPins;
+  modeRef.current = mode;
   selectedRef.current = selected;
   viewModeRef.current = viewMode;
   const counts = useMemo(() => FILTERS.reduce<Record<PinLabel, number>>((result, filter) => {
     result[filter.id] = pins.filter(pin => pin.label === filter.id).length;
     return result;
   }, { want: 0, visited: 0, revisit: 0, memory: 0 }), [pins]);
+
+  const clearMapSelection = useCallback((restoreView = true) => {
+    markersRef.current.forEach(marker => marker.getElement().classList.remove("is-selected"));
+    const map = mapRef.current;
+    const saved = restoreView ? selectionViewportRef.current : null;
+    selectionViewportRef.current = null;
+    setSelected(null);
+    if (map && saved) restoreMapViewport(map, saved, 620);
+  }, []);
+
+  clearMapSelectionRef.current = clearMapSelection;
+
+  const updateSheetAnchor = useCallback(() => {
+    const map = mapRef.current;
+    const pin = selectedRef.current;
+    const mapContainer = container.current;
+    const mapHost = mapHostRef.current;
+    if (!map || !pin || !mapContainer || !mapHost) {
+      setSheetAnchor(null);
+      return;
+    }
+    const pins = visiblePinsRef.current;
+    const pinCoordinates = pins.map(item => item.coordinates);
+    const index = pins.findIndex(item => item.id === pin.id);
+    if (index < 0) {
+      setSheetAnchor(null);
+      return;
+    }
+    const screenOffsets = pinCoordinates.map((_, offsetIndex) => screenOffsetForStackedPins(pinCoordinates, offsetIndex));
+    const sheetEl = sheetRef.current;
+    const sheetWidth = sheetEl?.offsetWidth ?? 200;
+    const sheetHeight = sheetEl?.offsetHeight ?? 54;
+    const otherPinPoints = pinScreenPoints(map, mapContainer, mapHost, pins, screenOffsets, pin.id);
+    setSheetAnchor(computeMemorySheetAnchor({
+      map,
+      mapContainer,
+      mapHost,
+      coordinates: pin.coordinates,
+      screenOffset: screenOffsets[index],
+      sheetWidth,
+      sheetHeight,
+      otherPinPoints,
+    }));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!selected) {
+      setSheetAnchor(null);
+      return;
+    }
+    updateSheetAnchor();
+    const frame = window.requestAnimationFrame(updateSheetAnchor);
+    const map = mapRef.current;
+    const onMapChange = () => window.requestAnimationFrame(updateSheetAnchor);
+    map?.on("move", onMapChange);
+    map?.on("zoom", onMapChange);
+    map?.on("rotate", onMapChange);
+    map?.on("pitch", onMapChange);
+    map?.on("resize", onMapChange);
+    window.addEventListener("resize", onMapChange);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      map?.off("move", onMapChange);
+      map?.off("zoom", onMapChange);
+      map?.off("rotate", onMapChange);
+      map?.off("pitch", onMapChange);
+      map?.off("resize", onMapChange);
+      window.removeEventListener("resize", onMapChange);
+    };
+  }, [selected, updateSheetAnchor, visiblePins]);
   useEffect(() => {
     if (!container.current) return;
     let disposed = false;
@@ -226,6 +427,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
         canvasContextAttributes: { antialias: false },
       });
       mapRef.current = map;
+      setMapInstance(map);
       map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), "bottom-right");
       map.once("style.load", () => {
         if (disposed) return;
@@ -235,8 +437,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
         map.on("zoom", syncOverviewState);
         syncOverviewState();
         map.on("click", () => {
-          markersRef.current.forEach(marker => marker.getElement().classList.remove("is-selected"));
-          setSelected(null);
+          clearMapSelectionRef.current(true);
         });
         resizeObserver = new ResizeObserver(() => {
           window.cancelAnimationFrame(resizeFrame);
@@ -255,7 +456,13 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
           });
         });
         if (container.current) resizeObserver.observe(container.current);
+        for (const layerId of TRIP_ROUTE_LAYERS) {
+          if (map.getLayer(layerId)) map.moveLayer(layerId);
+        }
         setMapState("ready");
+      });
+      map.once("load", () => {
+        syncCoupleTripRoute(map, tripPinsRef.current, modeRef.current === "trips");
       });
     }).catch(() => { if (!disposed) setMapState("error"); });
     return () => {
@@ -267,6 +474,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
       markersRef.current = [];
       mapRef.current?.remove();
       mapRef.current = null;
+      setMapInstance(null);
     };
   }, [mapAttempt]);
 
@@ -274,24 +482,38 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     const map = mapRef.current;
     if (!map || mapState !== "ready") return;
     const is3d = viewMode === "3d";
-    const routeSource = map.getSource("trip-route") as GeoJSONSource | undefined;
-    routeSource?.setData({
-      type: "Feature",
-      properties: {},
-      geometry: { type: "LineString", coordinates: tripPins.map(pin => pin.coordinates) },
-    });
+    const showTripRoute = mode === "trips";
+    if (showTripRoute && tripRoadPath && tripRoadPath.length >= 2) {
+      const routeSource = map.getSource("trip-route") as GeoJSONSource | undefined;
+      routeSource?.setData({
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          properties: {},
+          geometry: { type: "LineString", coordinates: tripRoadPath },
+        }],
+      });
+      syncCoupleTripRoute(map, tripPins, false);
+      for (const layerId of TRIP_ROUTE_LAYERS) {
+        if (map.getLayer(layerId)) map.setLayoutProperty(layerId, "visibility", "visible");
+      }
+    } else {
+      syncCoupleTripRoute(map, tripPins, showTripRoute);
+    }
     map.setLayoutProperty("buildings-3d", "visibility", is3d ? "visible" : "none");
-    map.setLayoutProperty("trip-route-shadow", "visibility", mode === "trips" ? "visible" : "none");
-    map.setLayoutProperty("trip-route-line", "visibility", mode === "trips" ? "visible" : "none");
+    if (map.getLayer("buildings-3d")) {
+      map.setPaintProperty("buildings-3d", "fill-extrusion-opacity", showTripRoute && is3d ? 0.38 : 0.84);
+    }
     map.easeTo({ pitch: is3d ? 44 : 0, bearing: is3d ? -12 : 0, duration: 620 });
-  }, [viewMode, mapState, mode, tripPins]);
+    map.triggerRepaint();
+  }, [viewMode, mapState, mode, tripPins, tripRoadPath]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || mapState !== "ready") return;
     markersRef.current.forEach(marker => marker.remove());
     markersRef.current = [];
-    if (selected && !visiblePins.some(pin => pin.id === selected.id)) setSelected(null);
+    if (selected && !visiblePins.some(pin => pin.id === selected.id)) clearMapSelection(false);
     if (!visiblePins.length) { framePins(map, [], viewMode, 480); return; }
     void import("maplibre-gl").then(maplibregl => {
       const pinCoordinates = visiblePins.map(item => item.coordinates);
@@ -312,8 +534,9 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
           event.stopPropagation();
           markersRef.current.forEach(marker => marker.getElement().classList.remove("is-selected"));
           element.classList.add("is-selected");
+          if (!selectedRef.current) selectionViewportRef.current = captureMapViewport(map);
           setSelected(pin);
-          map.easeTo({ center: pin.coordinates, zoom: Math.max(map.getZoom(), 15.2), pitch: viewMode === "3d" ? 48 : 0, bearing: viewMode === "3d" ? -14 : 0, duration: 620, offset: [0, -48] });
+          map.easeTo({ center: pin.coordinates, zoom: Math.max(map.getZoom(), 15.2), pitch: viewMode === "3d" ? 48 : 0, bearing: viewMode === "3d" ? -14 : 0, duration: 620, offset: [0, -24] });
         });
         const offset = screenOffsetForStackedPins(pinCoordinates, index);
         return new maplibregl.Marker({
@@ -324,7 +547,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
       });
       framePins(map, visiblePins, viewMode, 620);
     });
-  }, [visiblePins, mapState, viewMode]);
+  }, [visiblePins, mapState, viewMode, clearMapSelection]);
 
   function toggleFilter(label: PinLabel) {
     setActiveLabels(current => {
@@ -334,22 +557,42 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     });
   }
 
-  return <div className={`couple-map-wrap memory-city ${viewMode === "3d" ? "is-3d" : "is-2d"}`}>
+  const tripRouteAnchors = useMemo(
+    () => {
+      const coordinates = tripPins.map(pin => pin.coordinates);
+      return tripPins.map((pin, index) => ({
+        coordinates: pin.coordinates,
+        screenOffset: screenOffsetForStackedPins(coordinates, index),
+      }));
+    },
+    [tripPins],
+  );
+
+  const selectedPinIndex = selected ? visiblePins.findIndex(pin => pin.id === selected.id) : -1;
+  const previousPinCoordinates = selectedPinIndex > 0 ? visiblePins[selectedPinIndex - 1]?.coordinates : undefined;
+
+  return <div ref={mapHostRef} className={`couple-map-wrap memory-city ${viewMode === "3d" ? "is-3d" : "is-2d"}`}>
     <div ref={container} className="maplibre-canvas" aria-label="우리의기억이 쌓인 3D 지도" />
+    <MapRouteOverlay
+      map={mapInstance}
+      anchors={tripRouteAnchors}
+      pinVariant="memory"
+      active={mapState === "ready" && mode === "trips" && tripRouteAnchors.length >= 2}
+    />
     {mapState === "loading" && <div className="map-loading" role="status"><span>우리의기억 도시를 만들고 있어요</span><i /></div>}
     {mapState === "error" && <div className="map-error" role="alert"><b>기억 지도를 불러오지 못했어요</b><span>잠시 후 다시 시도해 주세요.</span><button type="button" className="outline-button" onClick={() => setMapAttempt(value => value + 1)}>다시 불러오기</button></div>}
 
     <header className="memory-map-heading"><span className="eyebrow">OUR MAP</span><h1>우리의 기억 지도</h1></header>
     <div className={`memory-map-toolbar ${mode === "trips" ? "is-trip-mode" : ""}`}>
       <nav className="memory-map-modes" aria-label="지도 보기 방식">
-        {([['places', '장소'], ['memories', '추억'], ['time', '시간'], ['trips', '여행']] as const).map(([id, label]) => <button type="button" key={id} className={mode === id ? "is-active" : ""} aria-pressed={mode === id} onClick={() => { setMode(id); setSelected(null); }}>{label}</button>)}
+        {([['places', '장소'], ['memories', '추억'], ['time', '시간'], ['trips', '여행']] as const).map(([id, label]) => <button type="button" key={id} className={mode === id ? "is-active" : ""} aria-pressed={mode === id} onClick={() => { clearMapSelection(false); setMode(id); }}>{label}</button>)}
       </nav>
       <div className="memory-map-right-tools">
-        {mode === "time" && <div className="memory-year-picker" aria-label="연도 선택">{years.map(year => <button type="button" key={year} className={selectedYear === year ? "is-active" : ""} aria-pressed={selectedYear === year} onClick={() => { setSelectedYear(year); setSelected(null); }}>{year}</button>)}</div>}
+        {mode === "time" && <div className="memory-year-picker" aria-label="연도 선택">{years.map(year => <button type="button" key={year} className={selectedYear === year ? "is-active" : ""} aria-pressed={selectedYear === year} onClick={() => { clearMapSelection(false); setSelectedYear(year); }}>{year}</button>)}</div>}
         {mode === "trips" && selectedJourney && <div className="memory-trip-summary" aria-label={`${selectedJourney.title} 일정`}>
           <div className="memory-trip-picker" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setJourneyMenuOpen(false); }}>
             <button type="button" className="memory-trip-picker-trigger" aria-haspopup="listbox" aria-expanded={journeyMenuOpen} onClick={() => setJourneyMenuOpen(value => !value)}><span>{formatJourneyRange(selectedJourney.startDate, selectedJourney.dayCount)}</span><b>{selectedJourney.title}</b><i aria-hidden="true">⌄</i></button>
-            {journeyMenuOpen && <div className="memory-trip-picker-menu" role="listbox" aria-label="여행 선택">{tripJourneys.map(journey => <button type="button" role="option" aria-selected={journey.id === selectedJourneyId} key={journey.id} onClick={() => { setSelectedJourneyId(journey.id); setSelected(null); setJourneyMenuOpen(false); }}><span>{formatJourneyRange(journey.startDate, journey.dayCount)}</span><b>{journey.title}</b></button>)}</div>}
+            {journeyMenuOpen && <div className="memory-trip-picker-menu" role="listbox" aria-label="여행 선택">{tripJourneys.map(journey => <button type="button" role="option" aria-selected={journey.id === selectedJourneyId} key={journey.id} onClick={() => { clearMapSelection(false); setSelectedJourneyId(journey.id); setJourneyMenuOpen(false); }}><span>{formatJourneyRange(journey.startDate, journey.dayCount)}</span><b>{journey.title}</b></button>)}</div>}
           </div>
           <span>{journeyItems.length}곳</span>
         </div>}
@@ -365,16 +608,42 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     {mode !== "trips" && !pins.length && <div className="memory-map-empty"><b>첫 장소가 기억 도시의 시작이에요.</b><span>둘이 좋아하는 장소를 저장하면 지도 위에 흔적이 생겨요.</span><Link href="/places">장소 둘러보기 →</Link></div>}
     {mapState === "ready" && mode !== "trips" && visiblePins.length === 0 && pins.length > 0 && <div className="map-filter-empty">이 보기에는 아직 표시할 기억이 없어요.</div>}
 
-    {selected && <aside className="memory-sheet">
-      <button type="button" className="memory-sheet-close" onClick={() => { markersRef.current.forEach(marker => marker.getElement().classList.remove("is-selected")); setSelected(null); }} aria-label="선택한 장소 닫기">×</button>
-      <div className="memory-sheet-media">
-        {selected.kind === "place" && selected.place.image && <img src={selected.place.image} alt="" />}
-        {selected.kind === "memory" && selected.memory.coverUrl && <img src={selected.memory.coverUrl} alt="" />}
-        {selected.kind === "memory" && selected.memory.photos.slice(0, 1).map(photo => <img key={photo.id} src={photo.storageUrl} alt="" />)}
-        {((selected.kind === "place" && !selected.place.image) || (selected.kind === "memory" && !selected.memory.coverUrl) || selected.kind === "trip") && <div><span>{selected.kind === "trip" ? selected.dayOrder : "⌖"}</span><small>{selected.kind === "trip" ? selected.item.startTime : "OUR PLACE"}</small></div>}
+    {selected && <aside
+      ref={sheetRef}
+      className={`memory-sheet is-pin-anchored ${sheetAnchor?.placement === "bottom" ? "is-anchor-bottom" : "is-anchor-top"}`}
+      style={sheetAnchor ? ({ "--sheet-x": `${sheetAnchor.x}px`, "--sheet-y": `${sheetAnchor.y}px` } as CSSProperties) : undefined}
+      data-anchor-ready={sheetAnchor ? "true" : "false"}
+      role="dialog"
+      aria-labelledby="memory-sheet-title"
+    >
+      <button type="button" className="memory-sheet-close" onClick={() => clearMapSelection(true)} aria-label="선택한 장소 닫기">
+        <span aria-hidden="true" />
+      </button>
+      <div className="memory-sheet-card">
+        <div className="memory-sheet-media">
+          {selected.kind === "place" && selected.place.image && <img src={selected.place.image} alt="" />}
+          {selected.kind === "memory" && selected.memory.coverUrl && <img src={selected.memory.coverUrl} alt="" />}
+          {selected.kind === "memory" && !selected.memory.coverUrl && selected.memory.photos.slice(0, 1).map(photo => <img key={photo.id} src={photo.storageUrl} alt="" />)}
+          {((selected.kind === "place" && !selected.place.image) || (selected.kind === "memory" && !selected.memory.coverUrl && !selected.memory.photos.length) || selected.kind === "trip") && (
+            <div className={`memory-sheet-fallback is-${selected.kind === "trip" ? "trip" : selected.kind === "memory" ? "memory" : selected.label}`}>
+              {selected.kind === "trip"
+                ? <span className="memory-sheet-fallback-badge">{selected.dayOrder}</span>
+                : <span className="memory-sheet-fallback-icon" dangerouslySetInnerHTML={{ __html: markerIcon(selected.kind === "memory" ? "memory" : selected.label) }} />}
+            </div>
+          )}
+        </div>
+        <div className="memory-sheet-body">
+          <p className="memory-sheet-meta">{sheetEyebrow(selected)}</p>
+          <div className="memory-sheet-title-row">
+            <h2 id="memory-sheet-title">{pinName(selected)}</h2>
+            <Link className="memory-sheet-cta" href={sheetHref(selected)} aria-label={sheetActionLabel(selected)}>
+              <span aria-hidden="true">{sheetAction(selected)}</span>
+              <span className="memory-sheet-cta-icon" dangerouslySetInnerHTML={{ __html: sheetChevron() }} />
+            </Link>
+          </div>
+          <p className="memory-sheet-lead">{sheetDescription(selected, previousPinCoordinates)}</p>
+        </div>
       </div>
-      <div className="memory-sheet-copy"><span>{selected.kind === "place" ? `${selected.place.categoryLabel} · ${selected.place.district}` : selected.kind === "memory" ? `${selected.memory.happenedOn} · ${selected.memory.locationLabel || "우리의 추억"}` : `${(selected.item.dayIndex ?? 0) + 1}일차 ${selected.item.startTime} · ${selected.item.category}`}</span><h2>{pinName(selected)}</h2><p>{selected.kind === "place" ? selected.place.description || "우리의 장소로 저장했어요." : selected.kind === "memory" ? selected.memory.description || "우리의  아는 장면이에요." : selected.item.memo}</p></div>
-      <Link href={selected.kind === "place" ? `/places?selected=${selected.place.id}` : selected.kind === "memory" ? "/memories" : "/trip"}>{selected.kind === "place" ? "장소 자세히 보기" : selected.kind === "memory" ? "추억 보러 가기" : "여행 일정 보기"}<span>→</span></Link>
     </aside>}
   </div>;
 }

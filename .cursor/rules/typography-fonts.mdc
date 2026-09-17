@@ -1,0 +1,26 @@
+---
+description: Project typography — Nanum Barun Pen as the single UI font
+globs: src/**/*.{css,tsx}
+alwaysApply: false
+---
+
+# Typography
+
+The app uses **Nanum Barun Pen (나눔바른펜)** only for product UI copy. It is **not** Gaegu, Gowun Batang, or Noto Sans KR.
+
+- Loaded in `src/app/layout.tsx` via `next/font/local` (`@kfonts/nanum-barun-pen-otf`) → CSS variable `--font-hand`.
+- Tokens in `globals.css`:
+  - `--hand` / `--default` — use everywhere.
+  - `--serif` and `--sans` alias `--default` (legacy selectors only).
+
+## Rules
+
+- Set `html { font-family: var(--default); }` and rely on `font: inherit` on buttons, inputs, and textareas.
+- New styles: use `var(--default)` or `inherit`. Do not import other Korean UI fonts.
+- Allowed exceptions: `ui-monospace` / monospace for codes, `Arial` only where map SDK labels require it.
+- Do not reintroduce `font-family: "Noto Sans KR"` or `Gowun Batang` on screens the user sees.
+
+```css
+.page-title { font: 700 1.5rem/1.25 var(--default); }
+.meta { font: inherit; font-size: .72rem; color: var(--muted); }
+```

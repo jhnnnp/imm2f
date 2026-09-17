@@ -171,7 +171,7 @@ export function stopDisc(center: LngLat, radiusMeters: number, sides = 20): { ty
 
 type RouteFeature = {
   type: "Feature";
-  properties: { height?: number; base?: number };
+  properties: Record<string, unknown>;
   geometry: { type: "Polygon"; coordinates: number[][][] } | { type: "LineString"; coordinates: LngLat[] } | { type: "Point"; coordinates: LngLat };
 };
 
@@ -211,12 +211,13 @@ export function buildPlanRoute(coordinates: LngLat[]) {
   if (coordinates.length < 2) {
     return {
       line: empty,
+      segments: empty,
       aura: empty,
       body: empty,
       core: empty,
       stops: coordinates.length === 1 ? collection([extruded(stopDisc(coordinates[0], 18), 240)]) : empty,
       nodes: coordinates.length === 1
-        ? collection([{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: coordinates[0] } }])
+        ? collection([{ type: "Feature", properties: { order: 1 }, geometry: { type: "Point", coordinates: coordinates[0] } }])
         : empty,
     };
   }
@@ -228,13 +229,20 @@ export function buildPlanRoute(coordinates: LngLat[]) {
       properties: {},
       geometry: { type: "LineString", coordinates: path },
     }]),
+    segments: collection(
+      coordinates.slice(0, -1).map((start, index) => ({
+        type: "Feature" as const,
+        properties: { leg: index + 1, from: index + 1, to: index + 2 },
+        geometry: { type: "LineString" as const, coordinates: curveRoute([start, coordinates[index + 1]], 10) },
+      })),
+    ),
     aura: collection(coordinates.slice(0, -1).map((point, index) => extruded(hopBox(point, coordinates[index + 1], width * 2.4), 820))),
     body: collection(coordinates.slice(0, -1).map((point, index) => extruded(hopBox(point, coordinates[index + 1], width), 980))),
     core: collection(coordinates.slice(0, -1).map((point, index) => extruded(hopBox(point, coordinates[index + 1], width * 0.42), 1100, 420))),
     stops: collection(coordinates.map(point => extruded(stopDisc(point, Math.max(22, width * 0.28)), 520))),
-    nodes: collection(coordinates.map(point => ({
+    nodes: collection(coordinates.map((point, index) => ({
       type: "Feature" as const,
-      properties: {},
+      properties: { order: index + 1 },
       geometry: { type: "Point" as const, coordinates: point },
     }))),
   };

@@ -1,27 +1,31 @@
 import type { Metadata } from "next";
-import { Gowun_Batang, Nanum_Pen_Script, Noto_Sans_KR } from "next/font/google";
+import localFont from "next/font/local";
+import { Nanum_Pen_Script } from "next/font/google";
 import { SessionProvider } from "@/features/auth/components/SessionProvider";
 import { getAppSession } from "@/features/auth/session";
 import "./globals.css";
 import "./map-polish.css";
 
-const sans = Noto_Sans_KR({
+const accentScript = Nanum_Pen_Script({
+  weight: "400",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-sans",
+  variable: "--font-accent-script",
   display: "swap",
 });
 
-const serif = Gowun_Batang({
-  subsets: ["latin"],
-  weight: ["400", "700"],
-  variable: "--font-serif",
-  display: "swap",
-});
-
-const hand = Nanum_Pen_Script({
-  subsets: ["latin"],
-  weight: ["400"],
+const hand = localFont({
+  src: [
+    {
+      path: "../../node_modules/@kfonts/nanum-barun-pen-otf/NanumBarunpenR.woff2",
+      weight: "400",
+      style: "normal",
+    },
+    {
+      path: "../../node_modules/@kfonts/nanum-barun-pen-otf/NanumBarunpenB.woff2",
+      weight: "700",
+      style: "normal",
+    },
+  ],
   variable: "--font-hand",
   display: "swap",
 });
@@ -35,7 +39,7 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const session = await getAppSession();
   return (
-    <html lang="ko" className={`${sans.variable} ${serif.variable} ${hand.variable}`} data-scroll-behavior="smooth">
+    <html lang="ko" className={`${hand.variable} ${accentScript.variable}`} data-scroll-behavior="smooth">
       <body>
         <SessionProvider initialSession={session}>{children}</SessionProvider>
       </body>

@@ -7,6 +7,17 @@ export function discoverPlaceId(source: "kakao" | "tourapi", externalPlaceId: st
   return `${DISCOVER_ID_PREFIX}${source}:${externalPlaceId}`;
 }
 
+export function parseDiscoverPlaceId(id: string): { source: "kakao" | "tourapi"; externalPlaceId: string } | null {
+  if (!id.startsWith(DISCOVER_ID_PREFIX)) return null;
+  const rest = id.slice(DISCOVER_ID_PREFIX.length);
+  const sep = rest.indexOf(":");
+  if (sep <= 0) return null;
+  const source = rest.slice(0, sep);
+  const externalPlaceId = rest.slice(sep + 1).trim();
+  if ((source !== "kakao" && source !== "tourapi") || !externalPlaceId) return null;
+  return { source, externalPlaceId };
+}
+
 export function isDiscoverPlace(place: Place) {
   return place.id.startsWith(DISCOVER_ID_PREFIX);
 }

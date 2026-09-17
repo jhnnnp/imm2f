@@ -105,6 +105,7 @@ describe("buildPlanRoute", () => {
     expect(route.stops.features).toHaveLength(3);
     expect(route.nodes.features).toHaveLength(3);
     expect(route.line.features[0]?.geometry.type).toBe("LineString");
+    expect(route.segments.features).toHaveLength(2);
     expect(route.body.features[0]?.properties.height).toBeGreaterThan(100);
   });
 });

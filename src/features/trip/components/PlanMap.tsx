@@ -1,17 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { GeoJSONSource, Map as MapLibreMap, Marker, StyleSpecification } from "maplibre-gl";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Map as MapLibreMap, Marker, StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { PlanItem } from "@/features/planning/types/plan";
 import { htmlMarkerPlacement } from "@/features/map/htmlMarker";
-import { buildPlanRoute, cinematicBearing } from "../planRoute";
+import { cinematicBearing } from "../planRoute";
+import { MapRouteOverlay } from "@/features/map/components/MapRouteOverlay";
+import { useRoadRoute } from "@/features/map/routing/useRoadRoute";
+import { planItemsWithCoordinates, syncPlanMapRoadRoute, syncPlanMapRoute } from "./planMapRoute";
 
 const MAP_PITCH = 60;
 const EMPTY_ROUTE = () => ({ type: "FeatureCollection" as const, features: [] });
 
 const MAP_STYLE: StyleSpecification = {
   version: 8,
+  glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   light: {
     anchor: "viewport",
     color: "#fff1d6",
@@ -32,6 +36,7 @@ const MAP_STYLE: StyleSpecification = {
       attribution: "© OpenStreetMap contributors",
     },
     "plan-route": { type: "geojson", data: EMPTY_ROUTE(), lineMetrics: true, tolerance: 0 },
+    "plan-route-segments": { type: "geojson", data: EMPTY_ROUTE(), lineMetrics: true, tolerance: 0 },
     "plan-route-aura": { type: "geojson", data: EMPTY_ROUTE(), tolerance: 0 },
     "plan-route-body": { type: "geojson", data: EMPTY_ROUTE(), tolerance: 0 },
     "plan-route-core": { type: "geojson", data: EMPTY_ROUTE(), tolerance: 0 },
@@ -53,145 +58,93 @@ const MAP_STYLE: StyleSpecification = {
       },
     },
     {
-      id: "plan-route-shadow",
+      id: "plan-route-track-shadow",
       type: "line",
       source: "plan-route",
-      layout: { "line-cap": "round", "line-join": "round" },
+      layout: {
+        "line-cap": "round",
+        "line-join": "round",
+      },
       paint: {
-        "line-color": "#143528",
-        "line-opacity": 0.32,
-        "line-blur": 6,
-        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 12, 14, 20, 16, 26],
-        "line-translate": [0, 14],
-        "line-translate-anchor": "viewport",
+        "line-color": "#faf7e8",
+        "line-opacity": 0.94,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 8, 8, 12, 12, 16, 16],
       },
     },
     {
-      id: "plan-route-bloom",
+      id: "plan-route-track",
       type: "line",
       source: "plan-route",
-      layout: { "line-cap": "round", "line-join": "round" },
+      layout: {
+        "line-cap": "round",
+        "line-join": "round",
+      },
       paint: {
-        "line-color": "#4dffb0",
-        "line-blur": 16,
-        "line-opacity": 0.78,
-        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 18, 14, 32, 16, 44],
+        "line-color": "#e3de96",
+        "line-opacity": 0.9,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 8, 4.5, 12, 6.5, 16, 8.5],
       },
     },
     {
-      id: "plan-route-floor",
-      type: "fill",
-      source: "plan-route-body",
-      paint: {
-        "fill-color": "#2fd18a",
-        "fill-opacity": 0.72,
-      },
-    },
-    {
-      id: "plan-route-aura",
-      type: "fill-extrusion",
-      source: "plan-route-aura",
-      paint: {
-        "fill-extrusion-color": "#7af0c0",
-        "fill-extrusion-height": ["get", "height"],
-        "fill-extrusion-base": ["coalesce", ["get", "base"], 0],
-        "fill-extrusion-opacity": 0.32,
-        "fill-extrusion-vertical-gradient": true,
-      },
-    },
-    {
-      id: "plan-route-body",
-      type: "fill-extrusion",
-      source: "plan-route-body",
-      paint: {
-        "fill-extrusion-color": "#2fd18a",
-        "fill-extrusion-height": 980,
-        "fill-extrusion-base": 0,
-        "fill-extrusion-opacity": 0.9,
-        "fill-extrusion-vertical-gradient": true,
-      },
-    },
-    {
-      id: "plan-route-core",
-      type: "fill-extrusion",
-      source: "plan-route-core",
-      paint: {
-        "fill-extrusion-color": "#f3fff8",
-        "fill-extrusion-height": ["get", "height"],
-        "fill-extrusion-base": ["coalesce", ["get", "base"], 0],
-        "fill-extrusion-opacity": 0.92,
-        "fill-extrusion-vertical-gradient": false,
-      },
-    },
-    {
-      id: "plan-route-stops",
-      type: "fill-extrusion",
-      source: "plan-route-stops",
-      paint: {
-        "fill-extrusion-color": "#d9ffe9",
-        "fill-extrusion-height": ["get", "height"],
-        "fill-extrusion-base": ["coalesce", ["get", "base"], 0],
-        "fill-extrusion-opacity": 0.88,
-        "fill-extrusion-vertical-gradient": true,
-      },
-    },
-    {
-      id: "plan-nodes-glow",
-      type: "circle",
-      source: "plan-route-nodes",
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 14, 14, 22, 16, 28],
-        "circle-color": "#7af0c0",
-        "circle-opacity": 0.28,
-        "circle-blur": 0.85,
-        "circle-pitch-alignment": "map",
-      },
-    },
-    {
-      id: "plan-nodes-core",
-      type: "circle",
-      source: "plan-route-nodes",
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 4.5, 14, 6.5, 16, 8],
-        "circle-color": "#f7fffb",
-        "circle-stroke-width": 2,
-        "circle-stroke-color": "#3ecf8e",
-        "circle-pitch-alignment": "map",
-      },
-    },
-    {
-      id: "plan-route-halo",
+      id: "plan-route-track-inner",
       type: "line",
       source: "plan-route",
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: {
-        "line-color": "#e8fff3",
-        "line-blur": 0.4,
-        "line-opacity": 0.95,
-        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 5.5, 14, 8, 16, 11],
+      layout: {
+        "line-cap": "round",
+        "line-join": "round",
       },
-    },
-    {
-      id: "plan-route-edge",
-      type: "line",
-      source: "plan-route",
-      layout: { "line-cap": "round", "line-join": "round" },
       paint: {
-        "line-color": "#f7fffb",
-        "line-opacity": 1,
-        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 1.8, 14, 2.6, 16, 3.2],
+        "line-color": "#f3f0cc",
+        "line-opacity": 0.82,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2, 12, 2.8, 16, 3.4],
       },
     },
     {
       id: "plan-route-flow",
       type: "line",
       source: "plan-route",
-      layout: { "line-cap": "round", "line-join": "round" },
+      layout: {
+        "line-cap": "round",
+        "line-join": "round",
+      },
       paint: {
-        "line-color": "#ffffff",
-        "line-opacity": 0.7,
-        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 1.1, 14, 1.6, 16, 2],
-        "line-dasharray": [1.4, 3.8],
+        "line-color": "#fffef5",
+        "line-opacity": 0.65,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1, 12, 1.4, 16, 1.8],
+        "line-dasharray": [1.2, 2.8],
+      },
+    },
+    {
+      id: "plan-route-leg",
+      type: "line",
+      source: "plan-route-segments",
+      layout: {
+        "line-cap": "round",
+        "line-join": "round",
+      },
+      paint: {
+        "line-color": "#c8c088",
+        "line-opacity": 0.18,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 8, 8, 12, 11, 16, 14],
+      },
+    },
+    {
+      id: "plan-route-arrows",
+      type: "symbol",
+      source: "plan-route-segments",
+      layout: {
+        "symbol-placement": "line",
+        "symbol-spacing": 64,
+        "text-field": "›",
+        "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+        "text-size": 14,
+        "text-keep-upright": false,
+        "text-rotation-alignment": "map",
+      },
+      paint: {
+        "text-color": "#fffaf2",
+        "text-halo-color": "rgba(47, 70, 60, 0.92)",
+        "text-halo-width": 1.6,
       },
     },
   ],
@@ -201,24 +154,19 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] ?? char));
 }
 
-function hasValidCoordinates(item: PlanItem): item is PlanItem & { coordinates: [number, number] } {
-  const coordinates = item.coordinates;
-  return Boolean(
-    coordinates
-      && Number.isFinite(coordinates[0])
-      && Number.isFinite(coordinates[1])
-      && Math.abs(coordinates[0]) <= 180
-      && Math.abs(coordinates[1]) <= 90,
-  );
-}
-
 export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem[]; dayLabel?: string; expanded?: boolean }) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
+  const locatedRef = useRef<Array<PlanItem & { coordinates: [number, number] }>>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(false);
-  const located = items.filter(hasValidCoordinates);
+  const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
+  const located = planItemsWithCoordinates(items);
+  const routeKey = located.map(item => `${item.coordinates[0]},${item.coordinates[1]}`).join("|");
+  const coordinateList = useMemo(() => located.map(item => item.coordinates), [located]);
+  const { path: roadPath } = useRoadRoute(coordinateList, ready && coordinateList.length >= 2, "driving");
+  locatedRef.current = located;
 
   useEffect(() => {
     if (!container.current || mapRef.current || !located.length) return;
@@ -243,13 +191,16 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
             canvasContextAttributes: { antialias: true },
           });
           mapRef.current = map;
+          setMapInstance(map);
           map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
           resizeObserver = new ResizeObserver(() => {
             map.resize();
           });
           resizeObserver.observe(container.current);
-          map.once("style.load", () => {
+          const finishLoad = () => {
+            if (disposed) return;
             map.resize();
+            syncPlanMapRoute(map, locatedRef.current.map(item => item.coordinates));
             const dash = [
               [0.01, 4.2, 1.6, 0.01],
               [0.4, 4.2, 1.2, 0.4],
@@ -272,7 +223,11 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
               flowFrame = requestAnimationFrame(tick);
             };
             flowFrame = requestAnimationFrame(tick);
-            if (!disposed) setReady(true);
+            setReady(true);
+          };
+          map.once("load", finishLoad);
+          map.once("style.load", () => {
+            syncPlanMapRoute(map, locatedRef.current.map(item => item.coordinates));
           });
         } catch {
           if (!disposed) setError(true);
@@ -289,8 +244,9 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
       markersRef.current = [];
       mapRef.current?.remove();
       mapRef.current = null;
+      setMapInstance(null);
     };
-  }, [located.length]);
+  }, [routeKey]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -298,6 +254,8 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
     let disposed = false;
     void import("maplibre-gl").then(maplibregl => {
       if (disposed || !mapRef.current) return;
+      if (roadPath) syncPlanMapRoadRoute(map, roadPath);
+      else syncPlanMapRoute(map, located.map(item => item.coordinates));
       markersRef.current.forEach(marker => marker.remove());
       markersRef.current = located.map((item, index) => {
         const element = document.createElement("button");
@@ -307,13 +265,6 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
         element.setAttribute("aria-label", `${index + 1}. ${item.placeName}`);
         return new maplibregl.Marker({ element, ...htmlMarkerPlacement }).setLngLat(item.coordinates).addTo(map);
       });
-      const route = buildPlanRoute(located.map(item => item.coordinates));
-      (map.getSource("plan-route") as GeoJSONSource | undefined)?.setData(route.line);
-      (map.getSource("plan-route-aura") as GeoJSONSource | undefined)?.setData(route.aura);
-      (map.getSource("plan-route-body") as GeoJSONSource | undefined)?.setData(route.body);
-      (map.getSource("plan-route-core") as GeoJSONSource | undefined)?.setData(route.core);
-      (map.getSource("plan-route-stops") as GeoJSONSource | undefined)?.setData(route.stops);
-      (map.getSource("plan-route-nodes") as GeoJSONSource | undefined)?.setData(route.nodes);
       const bearing = cinematicBearing(located.map(item => item.coordinates));
       const frame = (center: [number, number], zoom: number) => {
         map.easeTo({ center, zoom, pitch: MAP_PITCH, bearing, duration: 850 });
@@ -336,14 +287,20 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
       }
     });
     return () => { disposed = true; };
-  }, [items, ready]);
+  }, [located, ready, routeKey, roadPath]);
 
   if (!located.length) return <section className="planner-map map-unavailable"><div><b>표시할 좌표가 없어요</b><span>장소를 담으면 실제 지도와 동선이 보여요.</span></div></section>;
 
   return <section className={`planner-map${expanded ? " is-expanded" : ""}`} aria-label={`${dayLabel ?? "여행"} 지도`}>
     <div ref={container} className="maplibre-canvas" />
+    <MapRouteOverlay
+      map={mapInstance}
+      anchors={located.map(item => ({ coordinates: item.coordinates }))}
+      pinVariant="planner"
+      active={ready && located.length >= 2}
+    />
     {!ready && !error && <div className="map-loading"><span>여행 지도를 펼치고 있어요.</span><i /></div>}
     {error && <div className="map-error"><b>지도를 불러오지 못했어요</b><span>장소와 일정은 그대로 저장되어 있어요.</span></div>}
-    <div className="map-summary"><span>{dayLabel ?? "DAY 1"}</span><b>{located.length}곳</b><small>저장한 순서대로 이어요</small></div>
+    <div className="map-summary"><span>{dayLabel ?? "DAY 1"}</span><b>{located.length}곳</b><small>번호 순서대로 동선이 이어져요</small></div>
   </section>;
 }

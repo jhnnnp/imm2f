@@ -6,7 +6,19 @@ import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
 import { summarizePlanChange } from "@/features/collaboration/summarize";
 import { applyDateSwitch, emptyDateDay, hasDateContent, type DateDaySnapshot } from "@/features/date/dateDays";
+import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
+import { searchTourPlacesRemote } from "@/lib/tourapi/client";
+import { parseDiscoverPlaceId } from "@/features/places/discover";
 import { isLegacyDemoTripTitle, stripLegacyDemoArchive, stripLegacyDemoPlan } from "./legacyDemo";
+import {
+  asPlanCoordinates,
+  isUuidPlaceId,
+  pickResolvedCoordinates,
+  placeCoordinateLookup,
+  planItemLngLat,
+  regionHintFromTitle,
+  withLookedUpCoordinates,
+} from "./planCoordinates";
 import type { CouplePlan, PlanItem, PlanKind } from "./types/plan";
 
 type PlanRow = {
@@ -30,6 +42,8 @@ type PlanItemRow = {
   sort_order: number;
   memo: string;
   day_index: number | null;
+  lng?: number | null;
+  lat?: number | null;
 };
 
 function normalizeDay(value: unknown) {
@@ -39,7 +53,7 @@ function normalizeDay(value: unknown) {
 }
 
 function normalizePlanItem(item: PlanItem): PlanItem {
-  return { ...item, dayIndex: normalizeDay(item.dayIndex) };
+  return { ...item, dayIndex: normalizeDay(item.dayIndex), coordinates: asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]) };
 }
 
 function toItem(row: PlanItemRow): PlanItem {
@@ -54,6 +68,7 @@ function toItem(row: PlanItemRow): PlanItem {
     order: row.sort_order,
     memo: row.memo,
     dayIndex: normalizeDay(row.day_index),
+    coordinates: asPlanCoordinates(row.lng, row.lat),
   };
 }
 
@@ -69,6 +84,76 @@ function isMissingSchemaObject(error: { code?: string; message?: string } | null
     Boolean(error.message?.includes("schema cache")) ||
     Boolean(error.message?.includes("does not exist"))
   );
+}
+
+type PlanningClient = NonNullable<Awaited<ReturnType<typeof createClient>>>;
+
+async function hydratePlanItemCoordinates(
+  supabase: PlanningClient,
+  coupleId: string,
+  planId: string,
+  title: string,
+  items: PlanItem[],
+) {
+  if (!items.length) return items;
+  const uuidIds = [...new Set(items.map(item => item.placeId).filter(isUuidPlaceId))];
+  const discoverIds = [...new Set(items.flatMap(item => {
+    const parsed = parseDiscoverPlaceId(item.placeId);
+    return parsed ? [parsed.externalPlaceId] : [];
+  }))];
+  const rows: Array<{ id: string; lng: number | null; lat: number | null; external_source?: string | null; external_place_id?: string | null }> = [];
+  if (uuidIds.length) {
+    const { data } = await supabase
+      .from("places")
+      .select("id, lng, lat, external_source, external_place_id")
+      .eq("couple_id", coupleId)
+      .in("id", uuidIds);
+    rows.push(...(data ?? []));
+  }
+  if (discoverIds.length) {
+    const { data } = await supabase
+      .from("places")
+      .select("id, lng, lat, external_source, external_place_id")
+      .eq("couple_id", coupleId)
+      .in("external_place_id", discoverIds);
+    rows.push(...(data ?? []));
+  }
+
+  let hydrated = withLookedUpCoordinates(items, placeCoordinateLookup(rows));
+  const missing = hydrated.filter(item => !asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]));
+  if (!missing.length) return hydrated;
+
+  const region = regionHintFromTitle(title);
+  const resolved = await Promise.all(missing.map(async item => {
+    const parsed = parseDiscoverPlaceId(item.placeId);
+    const query = [region, item.placeName].filter(Boolean).join(" ").trim() || item.placeName;
+    const search = parsed?.source === "tourapi"
+      ? (nextQuery: string) => searchTourPlacesRemote({ query: nextQuery, region: region || undefined })
+      : (nextQuery: string) => searchKakaoPlacesRemote({ query: nextQuery });
+    let result = await search(query);
+    if ((!result.ok || !result.places.length) && region && query !== item.placeName) {
+      result = await search(item.placeName);
+    }
+    if (!result.ok) return item;
+    const coords = pickResolvedCoordinates(item, result.places);
+    return coords ? { ...item, coordinates: coords } : item;
+  }));
+  const byId = new Map(resolved.map(item => [item.id, item]));
+  hydrated = hydrated.map(item => byId.get(item.id) ?? item);
+
+  const missingIds = new Set(missing.map(item => item.id));
+  for (const item of hydrated) {
+    if (!missingIds.has(item.id)) continue;
+    const coords = asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]);
+    if (!coords) continue;
+    const { error } = await supabase
+      .from("plan_items")
+      .update({ lng: coords[0], lat: coords[1] })
+      .eq("plan_id", planId)
+      .eq("client_id", item.id);
+    if (error) break;
+  }
+  return hydrated;
 }
 
 type PlanWritePayload = {
@@ -119,21 +204,31 @@ export async function loadCouplePlan(kind: PlanKind): Promise<CouplePlan> {
   if (!plan) return emptyPlan(true);
 
   let itemRows: Array<Partial<PlanItemRow> & { client_id: string; place_id: string; place_name: string; category: string; start_time: string; duration_minutes: number; expected_cost: number; sort_order: number; memo: string }> | null = null;
-  const withDay = await supabase
+  const withCoords = await supabase
     .from("plan_items")
-    .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index")
+    .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index, lng, lat")
     .eq("plan_id", plan.id)
     .order("day_index", { ascending: true })
     .order("sort_order", { ascending: true });
-  if (!withDay.error) {
-    itemRows = withDay.data;
+  if (!withCoords.error) {
+    itemRows = withCoords.data;
   } else {
-    const withoutDay = await supabase
+    const withDay = await supabase
       .from("plan_items")
-      .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo")
+      .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index")
       .eq("plan_id", plan.id)
+      .order("day_index", { ascending: true })
       .order("sort_order", { ascending: true });
-    itemRows = withoutDay.data;
+    if (!withDay.error) {
+      itemRows = withDay.data;
+    } else {
+      const withoutDay = await supabase
+        .from("plan_items")
+        .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo")
+        .eq("plan_id", plan.id)
+        .order("sort_order", { ascending: true });
+      itemRows = withoutDay.data;
+    }
   }
 
   let items = (itemRows ?? []).map(item => toItem(item as PlanItemRow));
@@ -162,14 +257,8 @@ export async function loadCouplePlan(kind: PlanKind): Promise<CouplePlan> {
     revalidatePath("/our-map");
     revalidatePath("/");
   }
-  const liveItems = stripped.items;
-  const placeIds = [...new Set(liveItems.map(item => item.placeId).filter(id => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)))];
-  if (placeIds.length) {
-    const { data: placeRows } = await supabase.from("places").select("id, lng, lat").in("id", placeIds);
-    const coordinates = new Map((placeRows ?? []).filter(row => row.lng != null && row.lat != null).map(row => [row.id, [Number(row.lng), Number(row.lat)] as [number, number]]));
-    return { ...stripped, items: liveItems.map(item => ({ ...item, coordinates: coordinates.get(item.placeId) ?? item.coordinates ?? null })) };
-  }
-  return stripped;
+  const liveItems = await hydratePlanItemCoordinates(supabase, session.coupleId, plan.id, plan.title ?? "", stripped.items);
+  return { ...stripped, items: liveItems };
 }
 
 export async function addItemToCouplePlan(kind: PlanKind, item: PlanItem): Promise<{ ok: true; duplicate: boolean; items: PlanItem[] } | { error: string }> {
@@ -265,6 +354,7 @@ export async function saveCouplePlan(
     sort_order: order,
     memo: item.memo,
     day_index: item.dayIndex,
+    ...planItemLngLat(item),
   }));
   const { data: saved, error: saveError } = await supabase.rpc("save_couple_plan_atomic", {
     target_kind: kind,
@@ -334,8 +424,12 @@ export async function saveCouplePlan(
       const withDay = payload.map(item => ({ ...item, plan_id: planId! }));
       let inserted = await supabase.from("plan_items").insert(withDay);
       if (inserted.error && isMissingSchemaObject(inserted.error)) {
-        const withoutDay = withDay.map(({ day_index: _dayIndex, ...item }) => item);
-        inserted = await supabase.from("plan_items").insert(withoutDay);
+        const withoutCoords = withDay.map(({ lng: _lng, lat: _lat, ...item }) => item);
+        inserted = await supabase.from("plan_items").insert(withoutCoords);
+        if (inserted.error && isMissingSchemaObject(inserted.error)) {
+          const withoutDay = withoutCoords.map(({ day_index: _dayIndex, ...item }) => item);
+          inserted = await supabase.from("plan_items").insert(withoutDay);
+        }
       }
       if (inserted.error) return { error: inserted.error.message };
     }
