@@ -11,12 +11,33 @@ import { proposePlanEditsWithOpenAi } from "@/lib/openai/editPlan";
 import { generatePlanOptionsWithOpenAi } from "@/lib/openai/generatePlan";
 import { recommendDatePlanWithOpenAi } from "@/lib/openai/recommendDatePlan";
 import { interpretDateRequest } from "@/lib/openai/interpretDateRequest";
+import { applyRanking } from "@/lib/openai/rank";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
+import { searchTourPlacesRemote } from "@/lib/tourapi/client";
+import { isTourApiConfigured } from "@/lib/tourapi/env";
+import { festivalPeriodCoversYmd } from "@/lib/tourapi/festivalSchedule";
 import { isDateCourseCandidate } from "@/lib/kakao/dateCandidate";
 import { distanceMeters } from "@/features/places/geo";
-import type { AIPlanCondition, AIPlannerResult, AIPlannerState } from "@/features/planning/types/plan";
-import type { PlaceCategoryId } from "@/features/places/types/place";
-import type { PlanChange, PlanItem, PlanKind, PlanOption } from "@/features/planning/types/plan";
+import { placeToCandidate } from "@/features/places/discover";
+import { listArchivedDatePlans } from "@/features/planning/actions";
+import {
+  areaScopeMeters,
+  assumedTimeWindow,
+  applyDateDefaults,
+  expandedSearchRegions,
+  matchesActivity,
+  missingSlot,
+  nearbyAreaSuggestions,
+  planDayYmd,
+  activitySearchIntents,
+  searchIntents,
+  selectedAreas,
+  slotQuestion,
+  uniqueStrings,
+} from "@/features/ai/dateBrief";
+import { allowsHarshDateMeal, applyCourseDelta, diversifyDateCatalog, isOffDateVenue, preferredSavedNames, recentPlaceNames, toDateRanking } from "@/features/ai/dateCourse";
+import { chatSituationFromMessage, dateChatCard, cardToText } from "@/lib/openai/composeDateChat";
+import type { AIChatCard, AIPlannerClarification, AIPlannerResult, AIPlannerState, DateChatTurn, DateIntakeSlot, DatePreviousStop, PlanChange, PlanItem, PlanKind, PlanOption } from "@/features/planning/types/plan";
 import type { Place } from "@/features/places/types/place";
 
 const INSIGHT_VERSION = "couple-taste-v2";
@@ -205,49 +226,6 @@ export async function analyzeCouplePreferences(): Promise<PreferenceInsight | { 
   return persisted;
 }
 
-function extractRegion(text: string) {
-  const knownRegion = [...text.matchAll(/성수|홍대|연남|잠실|한남|을지로|익선동|서울숲|강남|건대입구|뚝섬/g)].at(-1)?.[0];
-  const suffixedRegion = [...text.matchAll(/([가-힣]{2,12}?(?:역|동|구|로|길|시))(?=\s|에서|근처|주변|으로|$)/g)].at(-1)?.[1];
-  const conversationalRegion = [...text.matchAll(/([가-힣]{2,12}?)(?=\s*(?:데이트|코스|주변|근처))/g)]
-    .map(match => match[1])
-    .filter(value => !["주변", "근처", "조용한", "즐거운", "데이트"].includes(value))
-    .at(-1);
-  return knownRegion ?? suffixedRegion ?? conversationalRegion ?? "";
-}
-
-function extractRegions(text: string) {
-  const known = [...text.matchAll(/성수|홍대|연남|잠실|한남|을지로|익선동|서울숲|강남|건대입구|뚝섬/g)].map(match => match[0]);
-  const suffixed = [...text.matchAll(/([가-힣]{2,12}?(?:역|동|구|시))(?=\s|에서|근처|주변|으로|가서|$)/g)].map(match => match[1]);
-  return [...new Set([...known, ...suffixed])].slice(0, 3);
-}
-
-function inferCondition(prompt: string, fallbackPrompt = ""): AIPlanCondition {
-  const timeRange = prompt.match(/(\d{1,2})(?::(\d{2}))?\s*(?:시|:)?\s*(?:부터|~|〜|-)\s*(\d{1,2})(?::(\d{2}))?/);
-  const singleTime = prompt.match(/(?:오후\s*)?(\d{1,2})\s*시/);
-  const startHour = timeRange ? Number(timeRange[1]) : singleTime ? Number(singleTime[1]) + (prompt.includes("오후") && Number(singleTime[1]) < 12 ? 12 : 0) : 14;
-  const startMinute = timeRange?.[2] ? Number(timeRange[2]) : 0;
-  const endHour = timeRange ? Number(timeRange[3]) : 21;
-  const endMinute = timeRange?.[4] ? Number(timeRange[4]) : 0;
-  const budgetMatch = prompt.match(/(\d+(?:\.\d+)?)\s*(만|천)?\s*원/);
-  const budget = budgetMatch ? Math.round(Number(budgetMatch[1]) * (budgetMatch[2] === "만" ? 10000 : budgetMatch[2] === "천" ? 1000 : 1)) : null;
-  const region = extractRegion(prompt) || extractRegion(fallbackPrompt);
-  const dateLabel = prompt.match(/이번\s*주말|이번\s*(?:주\s*)?[월화수목금토일]요일|다음\s*(?:주\s*)?[월화수목금토일]요일/)?.[0] ?? "날짜 미정";
-  return {
-    dateLabel,
-    startTime: `${String(Math.min(23, startHour)).padStart(2, "0")}:${String(Math.min(59, startMinute)).padStart(2, "0")}`,
-    endTime: `${String(Math.min(23, endHour)).padStart(2, "0")}:${String(Math.min(59, endMinute)).padStart(2, "0")}`,
-    budget,
-    region,
-  };
-}
-
-function extractExplicitPlaces(prompt: string) {
-  return [...prompt.matchAll(/([가-힣A-Za-z0-9]{2,18}?(?:공원|미술관|박물관|전시관|시장|식당|카페|역))(?=\s|에서|으로|가고|들(?:러|렀)|도|$)/g)]
-    .map(match => match[1])
-    .filter((value, index, all) => all.indexOf(value) === index)
-    .slice(0, 3);
-}
-
 function presentCandidateName(name: string, requiredPlaces: string[]) {
   const park = requiredPlaces.find(place => place.endsWith("공원") && name.replace(/\s/g, "").includes(place.replace(/\s/g, "")));
   if (!park || !name.includes("진출입로")) return name;
@@ -255,113 +233,262 @@ function presentCandidateName(name: string, requiredPlaces: string[]) {
   return access ? `${park} ${access}` : park;
 }
 
-export async function recommendDatePlan(input: { prompt: string; latestPrompt?: string; previousPlaceNames?: string[]; previousState?: AIPlannerState }): Promise<AIPlannerResult | { error: string }> {
-  const prompt = input.prompt.trim().slice(0, 800);
-  const latestPrompt = (input.latestPrompt ?? input.prompt).trim().slice(0, 400);
-  if (prompt.length < 2) return { error: "원하는 지역이나 데이트를 조금 더 자세히 말해 주세요." };
-  const { places: saved } = await listPlaces();
-  const inferred = inferCondition(latestPrompt, prompt);
-  const interpretation = await interpretDateRequest({
-    message: latestPrompt,
-    fallbackRegion: inferred.region,
-    previousState: input.previousState,
-    previousPlaceNames: input.previousPlaceNames ?? [],
-  });
-  const mentionedRegions = extractRegions(latestPrompt);
-  const state = {
-    ...interpretation.state,
-    regions: [...new Set([...(interpretation.state.regions ?? []), ...mentionedRegions])].slice(0, 3),
-    requiredPlaces: interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|만화카페|VR(?:카페|\s*체험)?|실내 놀거리)$/.test(place)),
+function clarificationReply(slot: DateIntakeSlot, state: AIPlannerState, card: AIChatCard): AIPlannerClarification {
+  const question = slotQuestion(slot, state);
+  return {
+    status: "clarification",
+    message: cardToText(card),
+    card: { ...card, suggestions: card.suggestions ?? question.options.slice(0, 4) },
+    state: { ...state, pendingSlot: slot },
+    options: question.options,
+    multiple: slot === "area" ? false : question.multiple,
+    slot,
   };
-  const searchRegions = state.regions.length ? state.regions : [state.region || inferred.region].filter(Boolean);
-  const condition = { ...inferred, region: searchRegions.join(" · ") || state.region || inferred.region };
-  if (!condition.region) return { error: "지역을 찾지 못했어요. 역·동 이름을 포함해 주세요. 예: 왕십리역, 성수동, 잠실" };
-  const latestPlaces = extractExplicitPlaces(latestPrompt);
-  const hasActivityBetweenPlaces = /카페|커피|디저트|저녁|점심|아침|식사|밥|산책|전시|영화|공연/.test(latestPrompt);
-  const routeQuestion = input.previousState && latestPlaces.length >= 2 && !hasActivityBetweenPlaces
-    ? `${latestPlaces.at(-1)}에는 카페나 저녁 식사 후에 갈까요, 아니면 바로 이동할까요?`
-    : "";
-  const clarifyingQuestion = routeQuestion || interpretation.clarifyingQuestion;
-  if (clarifyingQuestion) {
-    const routeOptions = ["카페 후 이동", "저녁 식사 후 이동", "바로 이동"];
-    const activityOptions = ["카페", "식사", "산책", "전시", "실내 놀거리", "야경"];
-    const indoorPlayOptions = ["방탈출", "보드게임", "볼링", "오락실", "만화카페", "VR 체험"];
-    const cuisineOptions = ["한식", "일식", "중식", "양식", "상관없음"];
-    const asksCuisine = /어떤.*(?:음식|식당)|음식점|무엇을\s*먹|메뉴/.test(clarifyingQuestion);
-    const asksIndoorPlay = /실내|놀거리|방탈출|보드게임|볼링|오락실|만화카페|VR/.test(clarifyingQuestion)
-      && state.preferredCategories.includes("실내 놀거리");
-    return {
-      status: "clarification",
-      message: clarifyingQuestion,
-      state: { ...state, pendingQuestion: clarifyingQuestion },
-      options: routeQuestion ? routeOptions : asksCuisine ? cuisineOptions : asksIndoorPlay ? indoorPlayOptions : activityOptions,
-      multiple: !routeQuestion && !asksCuisine,
-    };
+}
+
+export async function recommendDatePlan(input: {
+  message?: string;
+  prompt?: string;
+  previousPlaceNames?: string[];
+  previousStops?: DatePreviousStop[];
+  previousState?: AIPlannerState;
+  dateLabel?: string;
+  conversation?: DateChatTurn[];
+}): Promise<AIPlannerResult | { error: string }> {
+  const message = (input.message ?? input.prompt ?? "").trim().slice(0, 800);
+  const previousState = input.previousState;
+  const previousStops = input.previousStops?.length
+    ? input.previousStops
+    : (input.previousPlaceNames ?? []).map(name => ({ name, category: "" }));
+  if (!message && missingSlot(previousState)) {
+    const slot = missingSlot(previousState)!;
+    const question = slotQuestion(slot, previousState);
+    const card = slot === "area"
+      ? dateChatCard({ situation: "need_area", userMessage: "", state: previousState! })
+      : { headline: "", lines: [question.message], suggestions: question.options };
+    return clarificationReply(slot, previousState!, card);
   }
 
-  const categories: PlaceCategoryId[] = ["cafe", "restaurant", "nature", "photo", "book"];
-  const explicitPlaces = [...new Set([...state.requiredPlaces, ...extractExplicitPlaces(latestPrompt)])];
-  const retainedPlaces = state.preserveExistingPlaces ? (input.previousPlaceNames ?? []).map(name => name.trim()).filter(Boolean).slice(0, 5) : [];
-  const directQueries = [...new Set([...explicitPlaces, ...retainedPlaces])].filter(name => !state.excludedPlaces.includes(name));
-  const wantsPlay = /놀거리|놀고|놀러|방탈출|볼링|보드게임|게임/.test(prompt) || state.preferredCategories.includes("실내 놀거리");
-  const playQueries = ["방탈출", "볼링", "보드게임", "오락실", "만화카페", "VR카페"];
-  const activityQueries = wantsPlay
-    ? searchRegions.slice(-1).flatMap(region => playQueries.map(query => searchKakaoPlacesRemote({ region, query, page: 1 })))
-    : [];
-  const [explicitSearches, areaSearches, categorySearches, activitySearches] = await Promise.all([
-    Promise.all(directQueries.map(query => searchKakaoPlacesRemote({ query, region: searchRegions.at(-1), page: 1 }))),
-    Promise.all(searchRegions.map(region => searchKakaoPlacesRemote({ query: region, page: 1 }))),
-    Promise.all(categories.flatMap(category => searchRegions.map(region => searchKakaoPlacesRemote({ region, category, page: 1 })))),
-    Promise.all(activityQueries),
+  const interpretation = message
+    ? await interpretDateRequest({
+      message,
+      previousState,
+      previousPlaceNames: previousStops.map(stop => stop.name),
+      dateLabel: input.dateLabel,
+      conversation: input.conversation,
+    })
+    : { state: { ...previousState!, dateLabel: input.dateLabel || previousState?.dateLabel || null, pendingSlot: missingSlot(previousState) }, slot: missingSlot(previousState), reply: "" };
+
+  const interpreted = applyCourseDelta({
+    message,
+    previousStops,
+    state: {
+      ...interpretation.state,
+      dateLabel: interpretation.state.dateLabel || input.dateLabel || null,
+      requiredPlaces: interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|만화카페|VR(?:카페|\s*체험)?|실내(?:\s*놀거리)?)$/.test(place)),
+    },
+  });
+  const slot = missingSlot(interpreted);
+  const situation = message ? chatSituationFromMessage(message) : null;
+  if (situation) {
+    const card = dateChatCard({ situation, userMessage: message, state: interpreted });
+    if (slot) return clarificationReply(slot, interpreted, card);
+    return { status: "chat", message: cardToText(card), card, state: interpreted, options: card.suggestions, multiple: false };
+  }
+  if (slot) {
+    const question = slotQuestion(slot, interpreted);
+    const card = slot === "area"
+      ? dateChatCard({ situation: "need_area", userMessage: message, state: interpreted })
+      : { headline: "", lines: [question.message], suggestions: question.options };
+    return clarificationReply(slot, interpreted, card);
+  }
+
+  const state = applyDateDefaults(interpreted);
+
+  const selectedRegions = selectedAreas(state);
+  const searchRegions = expandedSearchRegions(state);
+  const radius = areaScopeMeters(state);
+  const time = assumedTimeWindow(state);
+  const condition = {
+    dateLabel: state.dateLabel || "날짜 미정",
+    startTime: time.startTime,
+    endTime: time.endTime,
+    budget: null,
+    region: selectedRegions.join(" · "),
+    timeSpecified: time.specified,
+  };
+  if (!condition.region) {
+    return clarificationReply("area", state, dateChatCard({ situation: "need_area", userMessage: message, state }));
+  }
+
+  const [{ places: saved }, insight, archives] = await Promise.all([
+    listPlaces(),
+    loadLatestCoupleInsight(),
+    listArchivedDatePlans(),
   ]);
-  const searches = [...explicitSearches, ...categorySearches, ...activitySearches];
-  const unique = new Map<string, Extract<(typeof searches)[number], { ok: true }>["places"][number]>();
+  const recentlyVisited = [...recentPlaceNames(archives.dates)];
+  const retainedPlaces = state.preserveExistingPlaces ? previousStops.map(stop => stop.name.trim()).filter(Boolean).slice(0, 5) : [];
+  const directQueries = uniqueStrings([...state.requiredPlaces, ...retainedPlaces]).filter(name => !state.excludedPlaces.includes(name));
+  const keywordIntents = searchIntents(state);
+  const geoIntents = activitySearchIntents(state);
+  const allowHarsh = allowsHarshDateMeal(message, state.cuisine);
+  const searchKeyword = (page: number) => Promise.all(keywordIntents.map(intent => searchKakaoPlacesRemote({
+    region: intent.region,
+    category: intent.category,
+    query: intent.query,
+    page,
+  })));
+  const [explicitSearches, areaSearches, intentSearches] = await Promise.all([
+    Promise.all(directQueries.map(query => searchKakaoPlacesRemote({ query, region: searchRegions.at(-1), page: 1 }))),
+    Promise.all(selectedRegions.map(region => searchKakaoPlacesRemote({ query: region, page: 1 }))),
+    searchKeyword(1),
+  ]);
+
+  const unique = new Map<string, Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number]>();
+  const remember = (candidate: Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number], searchRegion?: string) => {
+    unique.set(`${candidate.externalSource}:${candidate.externalPlaceId}`, searchRegion ? { ...candidate, searchRegion } : candidate);
+  };
+  const ingestKeyword = (results: typeof intentSearches) => {
+    for (const [index, result] of results.entries()) {
+      if (!result.ok) continue;
+      for (const candidate of result.places.slice(0, 15)) remember(candidate, keywordIntents[index]?.region ?? searchRegions[0]);
+    }
+  };
   for (const result of explicitSearches) {
     if (!result.ok) continue;
-    for (const candidate of result.places) unique.set(`${candidate.externalSource}:${candidate.externalPlaceId}`, candidate);
+    for (const candidate of result.places) remember(candidate);
   }
-  for (const result of activitySearches) {
-    if (!result.ok) continue;
-    for (const candidate of result.places.slice(0, 3)) unique.set(`${candidate.externalSource}:${candidate.externalPlaceId}`, { ...candidate, searchRegion: searchRegions.at(-1) });
+  ingestKeyword(intentSearches);
+  for (const place of saved) {
+    if (["dislike", "not_interested"].includes(place.userStatus) && ["dislike", "not_interested"].includes(place.partnerStatus)) continue;
+    const candidate = placeToCandidate(place);
+    if (!candidate) continue;
+    if (state.activities.length && !state.activities.some(activity => matchesActivity(candidate, activity))) continue;
+    remember(candidate, searchRegions[0]);
   }
-  for (const [index, result] of categorySearches.entries()) {
-    if (!result.ok) continue;
-    const searchRegion = searchRegions[index % searchRegions.length];
-    for (const candidate of result.places.slice(0, 3)) unique.set(`${candidate.externalSource}:${candidate.externalPlaceId}`, { ...candidate, searchRegion });
-  }
+
   const locatedAnchors = areaSearches.flatMap((result, index) => {
     if (!result.ok) return [];
-    const needle = searchRegions[index]?.replace(/(?:역|동|구|시)$/, "").replace(/\s/g, "") ?? "";
+    const needle = selectedRegions[index]?.replace(/(?:역|동|구|시)$/, "").replace(/\s/g, "") ?? "";
     const exact = result.places.find(candidate => candidate.name.replace(/\s/g, "").includes(needle));
     const candidate = exact ?? result.places[0];
-    return candidate ? [{ candidate, region: searchRegions[index] }] : [];
+    return candidate ? [{ candidate, region: selectedRegions[index] }] : [];
   });
   const anchors = locatedAnchors.map(item => item.candidate);
-  const geographicallyScoped = (anchors.length
-    ? [...unique.values()].filter(candidate => anchors.some(anchor => distanceMeters(anchor.coordinates, candidate.coordinates) <= 6000))
-    : [...unique.values()])
-    .filter(candidate => isDateCourseCandidate(candidate, state.requiredPlaces))
-    .filter(candidate => !state.excludedPlaces.some(name => candidate.name.includes(name) || name.includes(candidate.name)))
-    .filter(candidate => !state.avoidedCategories.some(category => `${candidate.categoryLabel} ${candidate.detailedCategory ?? ""}`.includes(category)))
-    .map(candidate => {
-      const nearestAnchor = locatedAnchors
-        .map(anchor => ({ ...anchor, meters: distanceMeters(anchor.candidate.coordinates, candidate.coordinates) }))
-        .sort((a, b) => a.meters - b.meters)[0];
-      return {
-        ...candidate,
-        searchRegion: nearestAnchor?.region ?? candidate.searchRegion,
-        name: presentCandidateName(candidate.name, state.requiredPlaces),
-      };
-    });
-  const candidates = geographicallyScoped.slice(0, 30);
+  const ingestGeo = async (page: number, includeFestival: boolean) => {
+    if (!anchors.length) return;
+    const festivalRadius = Math.max(radius, 4000);
+    const geoSearches = await Promise.all([
+      ...anchors.flatMap(anchor => geoIntents.map(intent => searchKakaoPlacesRemote({
+        category: intent.category,
+        query: intent.query,
+        x: anchor.coordinates[0],
+        y: anchor.coordinates[1],
+        radius,
+        page,
+      }))),
+      ...(includeFestival && isTourApiConfigured()
+        ? [searchTourPlacesRemote({
+          category: "festival",
+          region: selectedRegions[0],
+          x: anchors[0].coordinates[0],
+          y: anchors[0].coordinates[1],
+          radius: festivalRadius,
+        })]
+        : []),
+    ]);
+    for (const result of geoSearches) {
+      if (!result.ok) continue;
+      for (const candidate of result.places.slice(0, 15)) remember(candidate, selectedRegions[0]);
+    }
+  };
+  await ingestGeo(1, true);
+  const decorate = (candidate: Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number]) => {
+    const nearestAnchor = locatedAnchors
+      .map(anchor => ({ ...anchor, meters: distanceMeters(anchor.candidate.coordinates, candidate.coordinates) }))
+      .sort((a, b) => a.meters - b.meters)[0];
+    return {
+      ...candidate,
+      searchRegion: nearestAnchor?.region ?? candidate.searchRegion,
+      name: presentCandidateName(candidate.name, state.requiredPlaces),
+      distanceMeters: nearestAnchor ? Math.round(nearestAnchor.meters) : candidate.distanceMeters,
+    };
+  };
+  const admit = (candidate: Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number]) => {
+    const required = state.requiredPlaces.some(name => candidate.name.includes(name) || name.includes(candidate.name));
+    return isDateCourseCandidate(candidate, state.requiredPlaces)
+      && !state.excludedPlaces.some(name => candidate.name.includes(name) || name.includes(candidate.name))
+      && (candidate.category !== "festival" || festivalPeriodCoversYmd(candidate.openingHours, planDayYmd(state)))
+      && (required || !isOffDateVenue(candidate, { allowHarsh, allowKaraoke: state.activities.includes("indoor") }));
+  };
+  const currentPool = () => {
+    const scoped = (anchors.length
+      ? [...unique.values()].filter(candidate => anchors.some(anchor => {
+        const hop = distanceMeters(anchor.coordinates, candidate.coordinates);
+        return hop <= (candidate.category === "festival" ? Math.max(radius, 4000) : radius);
+      }))
+      : [...unique.values()])
+      .filter(admit)
+      .map(decorate);
+    return scoped.length >= 2 ? scoped : [...unique.values()].filter(admit).map(decorate);
+  };
+  let pool = currentPool();
+  if (pool.length < 18) {
+    const extraPages = await Promise.all([searchKeyword(2), ingestGeo(2, false)]);
+    ingestKeyword(extraPages[0]);
+    pool = currentPool();
+  }
+  if (pool.length < 2) {
+    const extras = await Promise.all(selectedRegions.flatMap(region => [
+      searchKakaoPlacesRemote({ query: `${region} 카페`, page: 1 }),
+      searchKakaoPlacesRemote({ query: `${region} 맛집`, page: 1 }),
+      searchKakaoPlacesRemote({ query: `${region} 공원`, page: 1 }),
+    ]));
+    for (const result of extras) {
+      if (!result.ok) continue;
+      for (const candidate of result.places) remember(candidate, selectedRegions[0]);
+    }
+    pool = currentPool();
+  }
+  const rankContext = {
+    savedPositive: preferredSavedNames(saved),
+    recentlyVisited: new Set(recentlyVisited),
+    commonTastes: (insight?.commonTastes ?? []).map(item => item.label).filter(Boolean),
+    activities: state.activities,
+    allowHarsh,
+  };
+  const candidates = diversifyDateCatalog(applyRanking(pool, toDateRanking(pool, rankContext)), 40);
   if (candidates.length < 2) {
-    return { error: `${condition.region} 주변 후보를 충분히 찾지 못했어요. 지역명이나 요청을 조금 바꿔 주세요.` };
+    const suggestions = nearbyAreaSuggestions(state);
+    const card = dateChatCard({
+      situation: "no_places",
+      userMessage: message,
+      state,
+      extras: { region: condition.region, suggestions },
+    });
+    return {
+      status: "chat",
+      message: cardToText(card),
+      card,
+      state,
+      options: suggestions,
+      multiple: false,
+      slot: "area",
+    };
   }
   return recommendDatePlanWithOpenAi({
-    prompt: `${prompt}\n가장 최근 요청: ${latestPrompt}`,
+    prompt: message || `${condition.region}에서 ${state.activities.join(", ") || "하루"} 데이트`,
     condition,
     candidates,
     saved,
     state,
+    recentlyVisited,
+    conversation: input.conversation,
+    coupleTaste: insight ? {
+      summary: insight.summary,
+      commonTastes: insight.commonTastes,
+      youHighlights: insight.youHighlights,
+      partnerHighlights: insight.partnerHighlights,
+    } : null,
   });
 }

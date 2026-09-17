@@ -5,7 +5,6 @@ import Link from "next/link";
 import { saveCouplePlan } from "@/features/planning/actions";
 import type { CouplePlan } from "@/features/planning/types/plan";
 import { addDays, formatKoDate, toIsoDate } from "@/lib/dates";
-import { getDraftDateItems, getDraftPlanMeta, getDraftTripItems, setDraftPlanMeta } from "@/features/planning/draftTrip";
 
 type MemoryMark = { id: string; title: string; happenedOn: string };
 
@@ -43,18 +42,6 @@ export function CalendarBoard({
     const iso = toIsoDate(now);
     setTodayIso(iso);
     setSelected(iso);
-    if (!trip.persist) {
-      const meta = getDraftPlanMeta("trip");
-      const items = getDraftTripItems();
-      setTripPlan({ ...trip, items, title: meta.title, notes: meta.notes, startDate: meta.startDate || null, dayCount: meta.dayCount });
-      setTripStart(meta.startDate);
-    }
-    if (!date.persist) {
-      const meta = getDraftPlanMeta("date");
-      const items = getDraftDateItems();
-      setDatePlan({ ...date, items, title: meta.title, notes: meta.notes, startDate: meta.startDate || null, dayCount: 1 });
-      setDateStart(meta.startDate);
-    }
   }, []);
 
   useEffect(() => {
@@ -115,7 +102,6 @@ export function CalendarBoard({
     }
     if (kind === "trip") setTripStart(startDate);
     else setDateStart(startDate);
-    if (!plan.persist) setDraftPlanMeta(kind, { startDate });
     setNotice(kind === "trip" ? "여행 시작일을 붙였어요." : "데이트 날짜를 붙였어요.");
   }
 

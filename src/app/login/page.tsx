@@ -11,8 +11,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   return (
     <AuthScreen
       title="다시, 우리만의 공간으로"
-      description="둘만 들어갈 수 있는 기록 공간이에요."
-      footer={<><p>처음인가요? <Link href="/signup">공간 만들기</Link></p><Link className="demo-entry" href="/demo">로그인 없이 데모 둘러보기</Link></>}
+      description="우리의  들어갈 수 있는 기록 공간이에요."
+      footer={<p>처음인가요? <Link href="/signup">공간 만들기</Link></p>}
     >
       <LoginForm nextPath={nextPath} />
     </AuthScreen>

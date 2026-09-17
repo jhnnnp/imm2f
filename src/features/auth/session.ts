@@ -2,11 +2,9 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
 import { cache } from "react";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
-import { DEMO_COOKIE_NAME, DEMO_COOKIE_VALUE } from "./demo";
 import type { AppSession } from "./types";
 
 function safeNextPath(value: FormDataEntryValue | string | null) {
@@ -33,9 +31,7 @@ function refreshSessionUI() {
 }
 
 const loadAppSession = cache(async (): Promise<AppSession> => {
-  const cookieStore = await cookies();
-  if (cookieStore.get(DEMO_COOKIE_NAME)?.value === DEMO_COOKIE_VALUE) return { mode: "demo" };
-  if (!isSupabaseConfigured()) return { mode: "prototype" };
+  if (!isSupabaseConfigured()) return { mode: "guest" };
   const supabase = await createClient();
   if (!supabase) return { mode: "guest" };
 
@@ -43,15 +39,23 @@ const loadAppSession = cache(async (): Promise<AppSession> => {
   const userId = claimsData?.claims?.sub;
   if (!userId || typeof userId !== "string") return { mode: "guest" };
 
-  const { data: profile } = await supabase.from("profiles").select("id, display_name").eq("id", userId).maybeSingle();
-  const { data: coupleId, error: coupleError } = await supabase.rpc("ensure_own_couple");
-  if (coupleError || !coupleId) {
-    console.error("Failed to initialize the authenticated user's space", coupleError);
-    return {
-      mode: "setup_error",
-      userId,
-      displayName: profile?.display_name || "나",
-    };
+  const [{ data: profile }, { data: existingCoupleId }] = await Promise.all([
+    supabase.from("profiles").select("id, display_name").eq("id", userId).maybeSingle(),
+    supabase.rpc("my_couple_id"),
+  ]);
+
+  let coupleId = existingCoupleId;
+  if (!coupleId) {
+    const ensured = await supabase.rpc("ensure_own_couple");
+    coupleId = ensured.data;
+    if (ensured.error || !coupleId) {
+      console.error("Failed to initialize the authenticated user's space", ensured.error);
+      return {
+        mode: "setup_error",
+        userId,
+        displayName: profile?.display_name || "나",
+      };
+    }
   }
 
   const { data: members } = await supabase.from("couple_members").select("user_id, role").eq("couple_id", coupleId);
@@ -94,7 +98,6 @@ export async function signIn(_previousState: AuthActionState, formData: FormData
     await supabase.auth.signOut();
     return { error: "계정 공간을 불러오지 못했어요. 잠시 후 다시 시도해 주세요." };
   }
-  (await cookies()).delete(DEMO_COOKIE_NAME);
   refreshSessionUI();
   redirect(safeNextPath(formData.get("next")));
 }
@@ -153,7 +156,6 @@ export async function signUp(_previousState: AuthActionState, formData: FormData
     }
   }
 
-  (await cookies()).delete(DEMO_COOKIE_NAME);
   refreshSessionUI();
   redirect("/");
 }
@@ -161,7 +163,6 @@ export async function signUp(_previousState: AuthActionState, formData: FormData
 export async function signOut() {
   const supabase = await createClient();
   if (supabase) await supabase.auth.signOut();
-  (await cookies()).delete(DEMO_COOKIE_NAME);
   refreshSessionUI();
   redirect("/login");
 }

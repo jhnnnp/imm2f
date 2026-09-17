@@ -1,11 +1,15 @@
 import type { KakaoSearchErrorCode, KakaoSearchInput, KakaoSearchResult } from "@/lib/kakao/local";
-import { regionByQuery } from "@/features/places/config/regions";
+import { PLACE_AREA_GROUPS, regionByQuery, type PlaceArea } from "@/features/places/config/regions";
 import { districtFromAddress } from "@/lib/kakao/local";
 import type { DiscoverCandidate, PlaceCategoryId } from "@/features/places/types/place";
 import { getTourApiServiceKey } from "./env";
+import { compactEventYmd, formatEventPeriod, isEndedFestival, koreaTodayYmd, ldongRegnCdFromAreaCode } from "./festivalSchedule";
 
 const TOUR_BASE = "https://apis.data.go.kr/B551011/KorService2";
 const PAGE_SIZE = 15;
+const FESTIVAL_PAGE_SIZE = 30;
+const FESTIVAL_HYDRATE_CHUNK = 5;
+const FESTIVAL_SKIP_EMPTY_PAGES = 3;
 
 const CONTENT_TYPE: Record<"tourist" | "festival" | "stay", string> = {
   tourist: "12",
@@ -34,7 +38,9 @@ type TourItem = {
   parking?: string;
   chkpet?: string;
   eventstartdate?: string;
+  eventStartDate?: string;
   eventenddate?: string;
+  eventEndDate?: string;
   playtime?: string;
   spendtimefestival?: string;
   checkintime?: string;
@@ -69,17 +75,16 @@ function extractUrl(value: unknown) {
   return typeof value === "string" ? value.match(/https?:\/\/[^\s"'<>]+/)?.[0] : undefined;
 }
 
-function compactDate(value: string | undefined) {
-  const digits = value?.replace(/\D/g, "") ?? "";
-  return digits.length === 8 ? `${digits.slice(0, 4)}.${digits.slice(4, 6)}.${digits.slice(6)}` : cleanText(value);
+function festivalStart(item: TourItem) {
+  return item.eventstartdate || item.eventStartDate;
 }
 
-function isPastFestival(item: TourItem) {
-  if (!item.eventenddate && !item.eventstartdate) return false;
-  const end = (item.eventenddate || item.eventstartdate || "").replace(/\D/g, "");
-  if (end.length !== 8) return false;
-  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  return end < today;
+function festivalEnd(item: TourItem) {
+  return item.eventenddate || item.eventEndDate;
+}
+
+function festivalHasPeriod(item: TourItem) {
+  return Boolean(compactEventYmd(festivalEnd(item)) || compactEventYmd(festivalStart(item)));
 }
 
 function detailFacts(item: TourItem | undefined, category: PlaceCategoryId) {
@@ -90,8 +95,7 @@ function detailFacts(item: TourItem | undefined, category: PlaceCategoryId) {
     if (cleaned) facts.push({ label, value: cleaned });
   };
   if (category === "festival") {
-    const period = [compactDate(item.eventstartdate), compactDate(item.eventenddate)].filter(Boolean).join(" – ");
-    add("기간", period);
+    add("기간", formatEventPeriod(festivalStart(item), festivalEnd(item)));
     add("운영", item.playtime);
     add("관람 시간", item.spendtimefestival);
   } else if (category === "stay") {
@@ -142,6 +146,7 @@ function toCandidate(item: TourItem, category: PlaceCategoryId): DiscoverCandida
   if (!id || !name || !Number.isFinite(lng) || !Number.isFinite(lat)) return null;
   const address = item.addr1 ?? "";
   const label = category === "festival" ? "축제" : category === "stay" ? "숙박" : "관광지";
+  const period = category === "festival" ? formatEventPeriod(festivalStart(item), festivalEnd(item)) : "";
   return {
     externalSource: "tourapi",
     externalPlaceId: id,
@@ -155,6 +160,8 @@ function toCandidate(item: TourItem, category: PlaceCategoryId): DiscoverCandida
     mapUrl: `https://korean.visitkorea.or.kr/detail/ms_detail.do?cotid=${id}`,
     coordinates: [lng, lat],
     image: item.firstimage || item.firstimage2 || item.originimgurl || undefined,
+    openingHours: period || undefined,
+    detailedCategory: period ? `축제 > ${period}` : "축제",
   };
 }
 
@@ -196,53 +203,192 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
   }
 }
 
+async function hydrateFestivalDates(items: TourItem[]): Promise<TourItem[]> {
+  const missing = items.filter(item => !festivalHasPeriod(item));
+  if (!missing.length) return items;
+  const dates = new Map<string, { start?: string; end?: string }>();
+  for (let index = 0; index < missing.length; index += FESTIVAL_HYDRATE_CHUNK) {
+    const chunk = missing.slice(index, index + FESTIVAL_HYDRATE_CHUNK);
+    await Promise.all(chunk.map(async item => {
+      const id = String(item.contentid ?? item.contentId ?? "").trim();
+      if (!id) return;
+      const intro = await tourFetch("detailIntro2", { contentId: id, contentTypeId: CONTENT_TYPE.festival });
+      if (!intro.ok) return;
+      const introItem = asItems(intro.payload.response)[0];
+      if (!introItem) return;
+      dates.set(id, { start: festivalStart(introItem), end: festivalEnd(introItem) });
+    }));
+  }
+  return items.map(item => {
+    const id = String(item.contentid ?? item.contentId ?? "").trim();
+    const extra = dates.get(id);
+    if (!extra) return item;
+    return {
+      ...item,
+      eventstartdate: extra.start || item.eventstartdate,
+      eventenddate: extra.end || item.eventenddate,
+    };
+  });
+}
+
+function currentFestivalItems(items: TourItem[]) {
+  return items.filter(item => !isEndedFestival(festivalStart(item), festivalEnd(item)));
+}
+
+function haversineMeters(lng1: number, lat1: number, lng2: number, lat2: number) {
+  const toRad = (value: number) => (value * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * 6371000 * Math.asin(Math.sqrt(a)));
+}
+
+function nearestAreaGroup(lng: number, lat: number) {
+  return PLACE_AREA_GROUPS.reduce((best, group) => {
+    const distance = haversineMeters(lng, lat, group.coordinates[0], group.coordinates[1]);
+    const bestDistance = haversineMeters(lng, lat, best.coordinates[0], best.coordinates[1]);
+    return distance < bestDistance ? group : best;
+  });
+}
+
+function resolveFestivalRegion(input: KakaoSearchInput): PlaceArea | undefined {
+  const direct = regionByQuery(input.region);
+  if (direct) return direct;
+  const text = `${input.region ?? ""} ${input.query ?? ""}`.trim();
+  if (text) {
+    const parts = [text, ...text.split(/\s+/)].filter(Boolean);
+    for (const part of parts) {
+      const match = regionByQuery(part);
+      if (match) return match;
+    }
+    for (const group of PLACE_AREA_GROUPS) {
+      if (text.includes(group.label) || text.includes(group.query)) {
+        return { query: group.query, coordinates: group.coordinates, areaCode: group.areaCode };
+      }
+      const area = group.areas.find(item => text.includes(item.label) || text.includes(item.query));
+      if (area) {
+        return { query: area.query, coordinates: area.coordinates, areaCode: area.areaCode, sigunguCode: area.sigunguCode, radius: area.radius };
+      }
+    }
+  }
+  if (Number.isFinite(input.x) && Number.isFinite(input.y)) {
+    const group = nearestAreaGroup(Number(input.x), Number(input.y));
+    return { query: group.query, coordinates: group.coordinates, areaCode: group.areaCode };
+  }
+  return undefined;
+}
+
+function festivalSearchTokens(input: KakaoSearchInput, region?: PlaceArea) {
+  let text = `${input.query ?? ""} ${input.mood ?? ""}`;
+  text = text.replace(/축제|페스티벌|페스티발|\bfestival\b/gi, " ");
+  if (region?.query) text = text.split(region.query).join(" ");
+  for (const group of PLACE_AREA_GROUPS) {
+    text = text.split(group.label).join(" ").split(group.query).join(" ");
+  }
+  return [...new Set(text.split(/\s+/).map(part => part.trim()).filter(part => part.length >= 2))];
+}
+
+function festivalItemMatches(item: TourItem, tokens: string[], origin?: { x: number; y: number; radius: number }) {
+  if (tokens.length) {
+    const blob = `${item.title ?? ""} ${item.addr1 ?? ""} ${item.addr2 ?? ""}`;
+    if (!tokens.every(token => blob.includes(token))) return false;
+  }
+  if (!origin) return true;
+  const lng = Number(item.mapx ?? item.mapX);
+  const lat = Number(item.mapy ?? item.mapY);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return false;
+  return haversineMeters(origin.x, origin.y, lng, lat) <= origin.radius;
+}
+
+function withFestivalDistance(item: TourItem, origin?: { x: number; y: number; radius: number }): DiscoverCandidate | null {
+  const candidate = toCandidate(item, "festival");
+  if (!candidate || !origin) return candidate;
+  candidate.distanceMeters = haversineMeters(origin.x, origin.y, candidate.coordinates[0], candidate.coordinates[1]);
+  return candidate;
+}
+
 export async function searchTourPlacesRemote(input: KakaoSearchInput): Promise<KakaoSearchResult> {
-  const page = String(Math.min(45, Math.max(1, input.page ?? 1)));
+  const requestedPage = Math.min(45, Math.max(1, input.page ?? 1));
   const category = mappedCategory(input.category);
   const typeId = contentTypeId(category);
-  const region = regionByQuery(input.region);
+  const region = category === "festival" ? resolveFestivalRegion(input) : regionByQuery(input.region);
   const keyword = [input.region, input.query, input.mood].map(value => value?.trim() ?? "").filter(Boolean).join(" ").trim();
-  const common = { pageNo: page, contentTypeId: typeId };
+  const hasCoords = Number.isFinite(input.x) && Number.isFinite(input.y);
+  const hasTypedQuery = Boolean(input.query?.trim() || input.mood?.trim());
+  const rows = category === "festival" ? FESTIVAL_PAGE_SIZE : PAGE_SIZE;
+  const origin = hasCoords
+    ? { x: Number(input.x), y: Number(input.y), radius: Math.min(20000, Math.max(300, Math.round(input.radius ?? 2000))) }
+    : undefined;
+  const tokens = category === "festival" ? festivalSearchTokens(input, region) : [];
+  const namedFestivalSearch = category === "festival" && tokens.length > 0 && !region && !hasCoords;
 
-  let fetched;
-  if (Number.isFinite(input.x) && Number.isFinite(input.y)) {
-    fetched = await tourFetch("locationBasedList2", {
-      ...common,
-      mapX: String(input.x),
-      mapY: String(input.y),
-      radius: String(Math.min(20000, Math.max(300, Math.round(input.radius ?? 2000)))),
-      arrange: "E",
-    });
-  } else if (keyword && (input.query?.trim() || input.mood?.trim() || !region)) {
-    fetched = await tourFetch("searchKeyword2", {
-      ...common,
-      keyword: keyword.length >= 2 ? keyword : `${keyword} 여행`,
-      areaCode: region ? String(region.areaCode) : "",
-      sigunguCode: region?.sigunguCode ? String(region.sigunguCode) : "",
-      arrange: "C",
-    });
-  } else if (!region) {
-    return { ok: false, code: "empty_query", error: "지역을 고르거나 검색어를 입력해 주세요." };
-  } else {
-    fetched = await tourFetch("areaBasedList2", {
+  const fetchPage = (pageNo: number) => {
+    const common = { pageNo: String(pageNo), numOfRows: String(rows), contentTypeId: typeId };
+    if (category === "festival" && !namedFestivalSearch) {
+      return tourFetch("searchFestival2", {
+        pageNo: String(pageNo),
+        numOfRows: String(rows),
+        eventStartDate: koreaTodayYmd(),
+        lDongRegnCd: ldongRegnCdFromAreaCode(region?.areaCode),
+        arrange: "C",
+      });
+    }
+    if (hasCoords) {
+      return tourFetch("locationBasedList2", {
+        ...common,
+        mapX: String(input.x),
+        mapY: String(input.y),
+        radius: String(origin?.radius ?? 2000),
+        arrange: "E",
+      });
+    }
+    if (keyword && (hasTypedQuery || !region)) {
+      return tourFetch("searchKeyword2", {
+        ...common,
+        keyword: keyword.length >= 2 ? keyword : `${keyword} 여행`,
+        areaCode: region ? String(region.areaCode) : "",
+        sigunguCode: region?.sigunguCode ? String(region.sigunguCode) : "",
+        arrange: "C",
+      });
+    }
+    if (!region) {
+      return Promise.resolve({ ok: false as const, code: "empty_query" as const, error: "지역을 고르거나 검색어를 입력해 주세요." });
+    }
+    return tourFetch("areaBasedList2", {
       ...common,
       areaCode: String(region.areaCode),
       sigunguCode: region.sigunguCode ? String(region.sigunguCode) : "",
       arrange: "Q",
     });
+  };
+
+  let pageNo = requestedPage;
+  let fetched = await fetchPage(pageNo);
+  if (!fetched.ok) return fetched;
+  let totalCount = fetched.payload.response?.body?.totalCount ?? 0;
+  let items = asItems(fetched.payload.response);
+  if (category === "festival") {
+    items = currentFestivalItems(await hydrateFestivalDates(items)).filter(item => festivalItemMatches(item, tokens, origin));
+    let skipped = 0;
+    while (items.length === 0 && pageNo * rows < totalCount && skipped < FESTIVAL_SKIP_EMPTY_PAGES) {
+      pageNo += 1;
+      skipped += 1;
+      fetched = await fetchPage(pageNo);
+      if (!fetched.ok) break;
+      totalCount = fetched.payload.response?.body?.totalCount ?? totalCount;
+      items = currentFestivalItems(await hydrateFestivalDates(asItems(fetched.payload.response))).filter(item => festivalItemMatches(item, tokens, origin));
+    }
+    if (!fetched.ok) return fetched;
   }
 
-  if (!fetched.ok) return fetched;
-  const totalCount = fetched.payload.response?.body?.totalCount ?? 0;
-  const places = asItems(fetched.payload.response)
-    .filter(item => category !== "festival" || !isPastFestival(item))
-    .map(item => toCandidate(item, category))
+  const places = items
+    .map(item => (category === "festival" ? withFestivalDistance(item, origin) : toCandidate(item, category)))
     .filter((item): item is DiscoverCandidate => item !== null);
   return {
     ok: true,
     places,
-    isEnd: fetched.page * PAGE_SIZE >= totalCount || places.length < PAGE_SIZE,
-    page: fetched.page,
+    isEnd: pageNo * rows >= totalCount,
+    page: pageNo,
     totalCount,
   };
 }

@@ -3,13 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { AppShell } from "@/components/layout/AppShell";
+import { ContextPanel } from "@/components/layout/ContextPanel";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { PLACE_ADMINISTRATIVE_AREAS, PLACE_AREA_GROUPS, areaGroupById, browseDiscoverInput } from "../config/regions";
 import { searchDiscoverPlaces, loadTourPlaceDetail, updateMyPlaceStatus } from "../actions";
-import { addPlaceToDraftDate, addPlaceToDraftTrip, getDraftDateItems, getDraftTripItems, setActiveTripDay } from "@/features/planning/draftTrip";
-import { saveCouplePlan } from "@/features/planning/actions";
+import { addItemToCouplePlan } from "@/features/planning/actions";
 import { isDiscoverPlace, mergeCandidateWithSaved, placeToCandidate, uniqueByExternalId } from "../discover";
 import type { DiscoverCandidate, Place, PlaceCategoryId, PlacePreferenceStatus } from "../types/place";
 import { PlaceCard } from "./PlaceCard";
@@ -18,7 +17,6 @@ import { PlaceDetailPanel } from "./PlaceDetailPanel";
 import { PlaceDiscoverResults } from "./PlaceDiscoverResults";
 import { PlaceCategoryIcon } from "./PlaceCategoryIcon";
 import { PlacesMapPane } from "./PlacesMapPane";
-import { getDemoPlaces, saveDemoPlace, updateDemoPlaceStatus } from "../demoPlaces";
 import { withObjectParticle } from "@/lib/korean";
 
 type Section = "saved" | "search" | "browse" | "map";
@@ -26,6 +24,11 @@ type Filter = "all" | "want" | "visited" | "revisit" | "not_interested";
 type Layout = "grid" | "list";
 type DialogMode = "confirm" | "manual";
 const SAVED: PlacePreferenceStatus[] = ["want", "must_visit", "revisit"];
+
+function isKeptInArchive(place: Place) {
+  return place.userStatus !== "neutral" || place.partnerStatus !== "neutral";
+}
+
 const SECTIONS: ReadonlyArray<{ id: Section; label: string }> = [
   { id: "saved", label: "저장한 장소" },
   { id: "search", label: "장소 검색" },
@@ -42,7 +45,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   const [selectedId, setSelectedId] = useState(
     selectedParam && initialPlaces.some(place => place.id === selectedParam)
       ? selectedParam
-      : initialPlaces[0]?.id ?? "",
+      : initialPlaces.find(isKeptInArchive)?.id ?? "",
   );
   const [filter, setFilter] = useState<Filter>("all");
   const [savedCategory, setSavedCategory] = useState("all");
@@ -77,17 +80,6 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   placesRef.current = places;
 
   useEffect(() => {
-    if (persist) return;
-    setPlaces(getDemoPlaces());
-  }, [persist]);
-
-  useEffect(() => {
-    if (source !== "trip") return;
-    const day = Number(searchParams.get("day"));
-    if (Number.isFinite(day)) setActiveTripDay(day);
-  }, [searchParams, source]);
-
-  useEffect(() => {
     if (!selectedParam) return;
     if (places.some(place => place.id === selectedParam) || discover.some(place => place.id === selectedParam)) {
       setSelectedId(selectedParam);
@@ -104,24 +96,27 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     return () => document.removeEventListener("mousedown", closeSuggestions);
   }, [regionSuggestionsOpen]);
 
-  const counts = useMemo(() => ({
-    all: places.length,
-    want: places.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "want" || value === "must_visit")).length,
-    visited: places.filter(place => [place.userStatus, place.partnerStatus].includes("visited")).length,
-    revisit: places.filter(place => [place.userStatus, place.partnerStatus].includes("revisit")).length,
-    notInterested: places.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "not_interested" || value === "dislike")).length,
-  }), [places]);
+  const archivedPlaces = useMemo(() => places.filter(isKeptInArchive), [places]);
 
-  const visibleSaved = useMemo(() => places.filter(place => {
+  const counts = useMemo(() => ({
+    all: archivedPlaces.length,
+    want: archivedPlaces.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "want" || value === "must_visit")).length,
+    visited: archivedPlaces.filter(place => [place.userStatus, place.partnerStatus].includes("visited")).length,
+    revisit: archivedPlaces.filter(place => [place.userStatus, place.partnerStatus].includes("revisit")).length,
+    notInterested: archivedPlaces.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "not_interested" || value === "dislike")).length,
+  }), [archivedPlaces]);
+
+  const visibleSaved = useMemo(() => archivedPlaces.filter(place => {
     const statuses: PlacePreferenceStatus[] = [place.userStatus, place.partnerStatus];
     const matchesStatus = filter === "all"
       || (filter === "want" && statuses.some(value => value === "want" || value === "must_visit"))
       || (filter === "not_interested" && statuses.some(value => value === "not_interested" || value === "dislike"))
       || statuses.includes(filter);
     return matchesStatus && (savedCategory === "all" || place.category === savedCategory) && place.name.toLowerCase().includes(savedQuery.toLowerCase());
-  }), [places, filter, savedCategory, savedQuery]);
+  }), [archivedPlaces, filter, savedCategory, savedQuery]);
 
-  const selected = [...discover, ...places].find(place => place.id === selectedId) ?? (section === "saved" ? places[0] : discover[0]);
+  const selected = (section === "saved" ? archivedPlaces : [...discover, ...places]).find(place => place.id === selectedId)
+    ?? (section === "saved" ? visibleSaved[0] : discover[0]);
 
   const runDiscover = useCallback(async (input: Parameters<typeof searchDiscoverPlaces>[0], append = false) => {
     const requestId = ++discoverRequestRef.current;
@@ -151,17 +146,31 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   }, []);
 
   async function persistStatus(id: string, status: PlacePreferenceStatus) {
-    setPlaces(current => current.map(place => place.id === id ? { ...place, userStatus: status } : place));
+    const previous = places.find(place => place.id === id) ?? discover.find(place => place.id === id);
+    const applyStatus = (current: Place[]) => current.map(place => place.id === id ? { ...place, userStatus: status } : place);
+    const nextPlaces = applyStatus(places);
+    const updated = nextPlaces.find(place => place.id === id);
+    setPlaces(nextPlaces);
+    setDiscover(applyStatus);
+    if (updated && !isKeptInArchive(updated)) {
+      setSelectedId(nextPlaces.find(place => place.id !== id && isKeptInArchive(place))?.id ?? "");
+    }
     if (!persist) {
-      updateDemoPlaceStatus(id, status);
+      setNotice("로그인과 데이터베이스 연결이 필요해요.");
       return;
     }
     const result = await updateMyPlaceStatus(id, status);
-    if ("error" in result) setNotice(result.error);
+    if (!("error" in result)) return;
+    setNotice(result.error);
+    if (!previous) return;
+    const restore = (current: Place[]) => current.map(place => place.id === id ? { ...place, userStatus: previous.userStatus } : place);
+    setPlaces(restore);
+    setDiscover(restore);
+    setSelectedId(id);
   }
 
   function toggleSave(id: string) {
-    const place = places.find(item => item.id === id);
+    const place = places.find(item => item.id === id) ?? discover.find(item => item.id === id);
     if (!place) return;
     void persistStatus(id, SAVED.includes(place.userStatus) ? "neutral" : "want");
   }
@@ -185,7 +194,6 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   }
 
   function handleSaved(place: Place, message: string) {
-    if (!persist) saveDemoPlace(place);
     setPlaces(current => {
       const index = current.findIndex(item => item.id === place.id || (place.externalPlaceId && item.externalPlaceId === place.externalPlaceId));
       if (index >= 0) {
@@ -228,14 +236,32 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     )));
   }
 
-  function addSelectedToPlan(kind: "trip" | "date") {
+  async function addSelectedToPlan(kind: "trip" | "date") {
     if (!selected) return;
-    const result = kind === "date" ? addPlaceToDraftDate(selected) : addPlaceToDraftTrip(selected);
     const label = kind === "date" ? "데이트 일정" : "여행 일정";
     setNoticeHref(kind === "date" ? "/date" : "/trip");
+    if (!persist) {
+      setNotice("로그인과 데이터베이스 연결이 필요해요.");
+      return;
+    }
+    const result = await addItemToCouplePlan(kind, {
+      id: `plan-${kind}-${selected.id}`,
+      placeId: selected.id,
+      placeName: selected.name,
+      category: selected.categoryLabel,
+      startTime: "13:00",
+      durationMinutes: selected.durationMinutes || 60,
+      expectedCost: selected.expectedCostTwo || 0,
+      order: 0,
+      memo: selected.description || "",
+      dayIndex: kind === "trip" ? Number(searchParams.get("day") || 0) : 0,
+      coordinates: selected.coordinates,
+    });
+    if ("error" in result) {
+      setNotice(result.error);
+      return;
+    }
     setNotice(result.duplicate ? `${selected.name}은 이미 ${label}에 있어요.` : `${withObjectParticle(selected.name)} ${label}에 넣었어요.`);
-    const items = kind === "date" ? getDraftDateItems() : getDraftTripItems();
-    void saveCouplePlan(kind, items);
   }
 
   function handleSearch(formData?: FormData) {
@@ -313,122 +339,128 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     : discover;
 
   const copy = {
-    saved: { title: "둘의 장소", body: null },
+    saved: { title: "우리의 장소", body: null },
     search: { title: "장소 검색", body: "이름을 알면 찾아서 저장해요." },
     browse: { title: "지역별 둘러보기", body: "넓은 지역을 고른 뒤, 데이트하고 싶은 동네를 고르면 돼요." },
     map: { title: "지도에서 찾기", body: "지도를 옮긴 뒤, 지금 화면의 주변 장소를 가져와요." },
   }[section];
 
-  return <AppShell context={selected ? <PlaceDetailPanel place={selected} preferredPlan={source} onAdd={() => addSelectedToPlan("trip")} onAddDate={() => addSelectedToPlan("date")} onStatusChange={status => void persistStatus(selected.id, status)} onSave={() => openSave(selected)} /> : undefined}>
-    <div className="page-title-row">
-      <div>
-        <span className="eyebrow">OUR PLACE ARCHIVE</span>
-        <h1>{copy.title}</h1>
-        {copy.body && <p>{copy.body}</p>}
+  return (
+    <>
+      {selected && (
+        <ContextPanel>
+          <PlaceDetailPanel place={selected} preferredPlan={source} onAdd={() => addSelectedToPlan("trip")} onAddDate={() => addSelectedToPlan("date")} onStatusChange={status => void persistStatus(selected.id, status)} onSave={() => openSave(selected)} />
+        </ContextPanel>
+      )}
+      <div className="page-title-row">
+        <div>
+          <span className="eyebrow">OUR PLACE ARCHIVE</span>
+          <h1>{copy.title}</h1>
+          {copy.body && <p>{copy.body}</p>}
+        </div>
+        <div className="page-actions header-action-group">
+          {section !== "saved" && <button className="date-action-button is-history" type="button" onClick={() => handleSection("saved")}><HeaderActionIcon name="archive" /><span>저장한 장소</span></button>}
+          <button className="date-action-button is-history" type="button" onClick={openManual}><HeaderActionIcon name="edit" /><span>직접 입력</span></button>
+          {section === "saved"
+            ? <button className="date-action-button is-primary" type="button" onClick={() => handleSection("search")}><HeaderActionIcon name="search" /><span>장소 찾기</span></button>
+            : null}
+        </div>
       </div>
-      <div className="page-actions header-action-group">
-        {section !== "saved" && <button className="date-action-button is-history" type="button" onClick={() => handleSection("saved")}><HeaderActionIcon name="archive" /><span>저장한 장소</span></button>}
-        <button className="date-action-button is-history" type="button" onClick={openManual}><HeaderActionIcon name="edit" /><span>직접 입력</span></button>
-        {section === "saved"
-          ? <button className="date-action-button is-primary" type="button" onClick={() => handleSection("search")}><HeaderActionIcon name="search" /><span>장소 찾기</span></button>
-          : null}
-      </div>
-    </div>
 
-    <div className="toolbar">
-      <div className="segmented" role="tablist" aria-label="장소 탐색">
-        {SECTIONS.map(item => (
-          <button className={section === item.id ? "is-active" : ""} onClick={() => handleSection(item.id)} key={item.id} type="button" role="tab" aria-selected={section === item.id}>
-            {item.label}{item.id === "saved" ? <b>{counts.all}</b> : null}
-          </button>
-        ))}
-      </div>
-      <div className="view-options">
-        <button className={layout === "grid" && section !== "map" ? "is-active" : ""} type="button" aria-label="그리드 보기" onClick={() => { setLayout("grid"); if (section === "map") setSection("search"); }}>▦</button>
-        <button className={layout === "list" && section !== "map" ? "is-active" : ""} type="button" aria-label="목록 보기" onClick={() => { setLayout("list"); if (section === "map") setSection("search"); }}>☷</button>
-        <button className={section === "map" ? "is-active" : ""} type="button" aria-label="지도 보기" onClick={() => handleSection("map")}>⌖</button>
-      </div>
-    </div>
-
-    {section === "saved" && (
-      <>
-        <div className="segmented status-tabs" role="tablist" aria-label="장소 상태">
-          {([
-            ["all", "전체", counts.all],
-            ["want", "가고 싶은 곳", counts.want],
-            ["visited", "다녀온 곳", counts.visited],
-            ["revisit", "또 가고 싶은 곳", counts.revisit],
-            ["not_interested", "관심 없는 곳", counts.notInterested],
-          ] as const).map(([id, label, count]) => (
-            <button className={filter === id ? "is-active" : ""} onClick={() => setFilter(id)} key={id} type="button" role="tab" aria-selected={filter === id}>{label} <b>{count}</b></button>
+      <div className="toolbar">
+        <div className="segmented" role="tablist" aria-label="장소 탐색">
+          {SECTIONS.map(item => (
+            <button className={section === item.id ? "is-active" : ""} onClick={() => handleSection(item.id)} key={item.id} type="button" role="tab" aria-selected={section === item.id}>
+              {item.label}{item.id === "saved" ? <b>{counts.all}</b> : null}
+            </button>
           ))}
         </div>
-        <div className="category-row">
-          <button className={savedCategory === "all" ? "is-active" : ""} type="button" onClick={() => setSavedCategory("all")}>전체</button>
-          {PLACE_CATEGORIES.map(item => <button className={savedCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSavedCategory(item.id)} key={item.id}><PlaceCategoryIcon category={item.id} />{item.label}</button>)}
-          <label><span>⌕</span><input id="place-archive-search" value={savedQuery} onChange={event => setSavedQuery(event.target.value)} placeholder="저장한 이름만 찾기" /></label>
+        <div className="view-options">
+          <button className={layout === "grid" && section !== "map" ? "is-active" : ""} type="button" aria-label="그리드 보기" onClick={() => { setLayout("grid"); if (section === "map") setSection("search"); }}>▦</button>
+          <button className={layout === "list" && section !== "map" ? "is-active" : ""} type="button" aria-label="목록 보기" onClick={() => { setLayout("list"); if (section === "map") setSection("search"); }}>☷</button>
+          <button className={section === "map" ? "is-active" : ""} type="button" aria-label="지도 보기" onClick={() => handleSection("map")}>⌖</button>
         </div>
-      </>
-    )}
+      </div>
 
-    {section === "search" && (
-      <form className="discover-search" action={formData => void handleSearch(formData)}>
-        <div className="discover-search-bar">
-          <input
-            name="query"
-            value={searchQuery}
-            onChange={event => setSearchQuery(event.target.value)}
-            placeholder="성수 대림창고, 연남동 카페"
-            aria-label="장소 이름 검색"
-          />
-          <button className="primary-button" type="submit" disabled={discoverPending}>{discoverPending ? "검색 중..." : "검색"}</button>
-        </div>
-        <div className="chip-row discover-cats">
-          <button className={searchCategory === "all" ? "is-active" : ""} type="button" onClick={() => setSearchCategory("all")}>전체</button>
-          {PLACE_CATEGORIES.map(item => <button className={searchCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSearchCategory(item.id)} key={item.id}><PlaceCategoryIcon category={item.id} />{item.label}</button>)}
-        </div>
-      </form>
-    )}
-
-    {section === "browse" && (
-      <div className="discover-browse">
-        <div className="region-browser" aria-label="지역 선택">
-          <div className="region-browser-head">
-            <div><span>지역 둘러보기</span><strong>어디에서 함께 시간을 보낼까요?</strong></div>
-            <p>지역과 장소 종류를 고르면 후보를 바로 보여드려요.</p>
-          </div>
-          <div className="region-tabs" role="tablist" aria-label="넓은 지역">
-            {PLACE_AREA_GROUPS.map(group => (
-              <button
-                className={browseGroup === group.id ? "is-active" : ""}
-                type="button"
-                key={group.id}
-                role="tab"
-                aria-selected={browseGroup === group.id}
-                onClick={() => {
-                  setBrowseGroup(group.id);
-                  setBrowseArea("all");
-                  setBrowseRegionQuery("");
-                  runBrowse({ group: group.id, area: "all" });
-                }}
-              >
-                {group.label}
-              </button>
+      {section === "saved" && (
+        <>
+          <div className="segmented status-tabs" role="tablist" aria-label="장소 상태">
+            {([
+              ["all", "전체", counts.all],
+              ["want", "가고 싶은 곳", counts.want],
+              ["visited", "다녀온 곳", counts.visited],
+              ["revisit", "또 가고 싶은 곳", counts.revisit],
+              ["not_interested", "관심 없는 곳", counts.notInterested],
+            ] as const).map(([id, label, count]) => (
+              <button className={filter === id ? "is-active" : ""} onClick={() => setFilter(id)} key={id} type="button" role="tab" aria-selected={filter === id}>{label} <b>{count}</b></button>
             ))}
           </div>
-          <div className="region-options" role="listbox" aria-label="세부 지역">
-            <span className="region-section-label">추천 동네</span>
-            {selectedBrowseGroup && <>
+          <div className="category-row">
+            <button className={savedCategory === "all" ? "is-active" : ""} type="button" onClick={() => setSavedCategory("all")}>전체</button>
+            {PLACE_CATEGORIES.map(item => <button className={savedCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSavedCategory(item.id)} key={item.id}><PlaceCategoryIcon category={item.id} />{item.label}</button>)}
+            <label><span>⌕</span><input id="place-archive-search" value={savedQuery} onChange={event => setSavedQuery(event.target.value)} placeholder="저장한 이름만 찾기" /></label>
+          </div>
+        </>
+      )}
+
+      {section === "search" && (
+        <form className="discover-search" action={formData => void handleSearch(formData)}>
+          <div className="discover-search-bar">
+            <input
+              name="query"
+              value={searchQuery}
+              onChange={event => setSearchQuery(event.target.value)}
+              placeholder="성수 대림창고, 연남동 카페"
+              aria-label="장소 이름 검색"
+            />
+            <button className="primary-button" type="submit" disabled={discoverPending}>{discoverPending ? "검색 중..." : "검색"}</button>
+          </div>
+          <div className="chip-row discover-cats">
+            <button className={searchCategory === "all" ? "is-active" : ""} type="button" onClick={() => setSearchCategory("all")}>전체</button>
+            {PLACE_CATEGORIES.map(item => <button className={searchCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSearchCategory(item.id)} key={item.id}><PlaceCategoryIcon category={item.id} />{item.label}</button>)}
+          </div>
+        </form>
+      )}
+
+      {section === "browse" && (
+        <div className="discover-browse">
+          <div className="region-browser" aria-label="지역 선택">
+            <div className="region-browser-head">
+              <div><span>지역 둘러보기</span><strong>어디에서 함께 시간을 보낼까요?</strong></div>
+              <p>지역과 장소 종류를 고르면 후보를 바로 보여드려요.</p>
+            </div>
+            <div className="region-tabs" role="tablist" aria-label="넓은 지역">
+              {PLACE_AREA_GROUPS.map(group => (
+                <button
+                  className={browseGroup === group.id ? "is-active" : ""}
+                  type="button"
+                  key={group.id}
+                  role="tab"
+                  aria-selected={browseGroup === group.id}
+                  onClick={() => {
+                    setBrowseGroup(group.id);
+                    setBrowseArea("all");
+                    setBrowseRegionQuery("");
+                    runBrowse({ group: group.id, area: "all" });
+                  }}
+                >
+                  {group.label}
+                </button>
+              ))}
+            </div>
+            <div className="region-options" role="listbox" aria-label="세부 지역">
+              <span className="region-section-label">추천 동네</span>
+              {selectedBrowseGroup && <>
                 <button
                   className={browseArea === "all" ? "is-active" : ""}
                   type="button"
                   role="option"
                   aria-selected={browseArea === "all"}
-                    onClick={() => {
-                      setBrowseArea("all");
-                      setBrowseRegionQuery("");
-                      runBrowse({ group: selectedBrowseGroup.id, area: "all" });
-                      runBrowse({ group: selectedBrowseGroup.id, area: "all" });
+                  onClick={() => {
+                    setBrowseArea("all");
+                    setBrowseRegionQuery("");
+                    runBrowse({ group: selectedBrowseGroup.id, area: "all" });
+                    runBrowse({ group: selectedBrowseGroup.id, area: "all" });
                   }}
                 >
                   {selectedBrowseGroup.label} 전체
@@ -450,178 +482,178 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
                   </button>
                 ))}
               </>}
-          </div>
-          <form className="region-search" onSubmit={event => {
-            event.preventDefault();
-            handleRegionSearch(new FormData(event.currentTarget));
-          }}>
-            <label htmlFor="region-detail-search"><span>시·군·구·동 직접 찾기</span><small>목록에 없는 지역도 검색할 수 있어요.</small></label>
-            <div className="region-search-control" ref={regionSearchRef}>
-              <span className="region-search-icon" aria-hidden="true">⌕</span>
-              <input
-                id="region-detail-search"
-                name="region"
-                value={browseRegionQuery}
-                onChange={event => {
-                  setBrowseRegionQuery(event.target.value);
-                  setRegionSuggestionsOpen(true);
-                }}
-                onFocus={() => setRegionSuggestionsOpen(true)}
-                onKeyDown={event => {
-                  if (event.key === "Escape") setRegionSuggestionsOpen(false);
-                }}
-                placeholder={`${selectedBrowseGroup?.label ?? "지역"}의 구·시·군·동 입력`}
-                role="combobox"
-                aria-expanded={regionSuggestionsOpen}
-                aria-controls="region-suggestions"
-                aria-autocomplete="list"
-                autoComplete="off"
-              />
-              <button className="region-apply-button" type="submit" disabled={discoverPending}>
-                {discoverPending ? <><i className="button-spinner" />찾는 중</> : "지역 적용"}
-              </button>
-              {regionSuggestionsOpen && regionSuggestions.length > 0 && (
-                <div className="region-suggestion-popover" id="region-suggestions" role="listbox" aria-label={`${selectedBrowseGroup?.label ?? "지역"} 세부 지역`}>
-                  <span>추천 지역</span>
-                  {regionSuggestions.map(area => (
-                    <button type="button" role="option" aria-selected={browseRegionQuery === area} key={area} onClick={() => applyRegionSearch(area)}>
-                      <b>{area}</b>
-                      <small>{selectedBrowseGroup?.label}</small>
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
-          </form>
-          <div className="discover-filter">
-            <span>장소 종류</span>
-            <div className="chip-row">
-              {PLACE_CATEGORIES.map(item => (
-                <button className={browseCategories.includes(item.id) ? "is-active" : ""} type="button" key={item.id} aria-pressed={browseCategories.includes(item.id)} disabled={discoverPending} onClick={() => toggleBrowseCategory(item.id)}><PlaceCategoryIcon category={item.id} />{item.label}</button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    )}
-
-    {notice && <div className="inline-notice" role="status">{notice} <Link href={noticeHref}>{noticeHref === "/date" ? "데이트로 돌아가기" : "여행으로 돌아가기"}</Link><button type="button" onClick={() => setNotice("")} aria-label="알림 닫기">×</button></div>}
-
-    {section === "saved" && (
-      visibleSaved.length ? (
-        layout === "list" ? (
-          <ul className="place-result-list">
-            {visibleSaved.map(place => (
-              <li key={place.id}>
-                <button type="button" className={`kakao-result ${selectedId === place.id ? "is-selected" : ""}`} onClick={() => setSelectedId(place.id)}>
-                  <b>{place.name}</b>
-                  <small>{place.categoryLabel} · {place.district}</small>
+            <form className="region-search" onSubmit={event => {
+              event.preventDefault();
+              handleRegionSearch(new FormData(event.currentTarget));
+            }}>
+              <label htmlFor="region-detail-search"><span>시·군·구·동 직접 찾기</span><small>목록에 없는 지역도 검색할 수 있어요.</small></label>
+              <div className="region-search-control" ref={regionSearchRef}>
+                <span className="region-search-icon" aria-hidden="true">⌕</span>
+                <input
+                  id="region-detail-search"
+                  name="region"
+                  value={browseRegionQuery}
+                  onChange={event => {
+                    setBrowseRegionQuery(event.target.value);
+                    setRegionSuggestionsOpen(true);
+                  }}
+                  onFocus={() => setRegionSuggestionsOpen(true)}
+                  onKeyDown={event => {
+                    if (event.key === "Escape") setRegionSuggestionsOpen(false);
+                  }}
+                  placeholder={`${selectedBrowseGroup?.label ?? "지역"}의 구·시·군·동 입력`}
+                  role="combobox"
+                  aria-expanded={regionSuggestionsOpen}
+                  aria-controls="region-suggestions"
+                  aria-autocomplete="list"
+                  autoComplete="off"
+                />
+                <button className="region-apply-button" type="submit" disabled={discoverPending}>
+                  {discoverPending ? <><i className="button-spinner" />찾는 중</> : "지역 적용"}
                 </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="place-grid">{visibleSaved.map(place => <PlaceCard key={place.id} place={place} selected={selectedId === place.id} onSelect={() => setSelectedId(place.id)} onToggleSave={() => toggleSave(place.id)} />)}</div>
-        )
-      ) : (
-        <div className="empty-soft">
-          <h1>{places.length ? "조건에 맞는 장소가 없어요" : "첫 장소를 골라 볼까요?"}</h1>
-          <p>{places.length ? "필터를 바꾸거나 다른 이름으로 찾아 보세요." : "이름을 검색하거나, 알고 있는 장소를 직접 남겨 보세요."}</p>
-          <div className="dialog-actions">
-            <button className="primary-button" type="button" onClick={() => handleSection("search")}>장소 찾기</button>
-            <button className="outline-button" type="button" onClick={openManual}>직접 입력</button>
+                {regionSuggestionsOpen && regionSuggestions.length > 0 && (
+                  <div className="region-suggestion-popover" id="region-suggestions" role="listbox" aria-label={`${selectedBrowseGroup?.label ?? "지역"} 세부 지역`}>
+                    <span>추천 지역</span>
+                    {regionSuggestions.map(area => (
+                      <button type="button" role="option" aria-selected={browseRegionQuery === area} key={area} onClick={() => applyRegionSearch(area)}>
+                        <b>{area}</b>
+                        <small>{selectedBrowseGroup?.label}</small>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </form>
+            <div className="discover-filter">
+              <span>장소 종류</span>
+              <div className="chip-row">
+                {PLACE_CATEGORIES.map(item => (
+                  <button className={browseCategories.includes(item.id) ? "is-active" : ""} type="button" key={item.id} aria-pressed={browseCategories.includes(item.id)} disabled={discoverPending} onClick={() => toggleBrowseCategory(item.id)}><PlaceCategoryIcon category={item.id} />{item.label}</button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
-      )
-    )}
+      )}
 
-    {section === "search" && (
-      <PlaceDiscoverResults
-        places={discover}
-        selectedId={selectedId}
-        pending={discoverPending}
-        error={discoverError}
-        isEnd={discoverIsEnd}
-        layout={layout}
-        emptyTitle={searched ? "검색 결과가 없어요." : "장소 이름을 검색해 보세요."}
-        emptyBody={searched ? "다른 이름이거나, 못 찾으면 직접 입력해 보세요." : "성수 대림창고처럼 알고 있는 이름을 넣으면 후보가 나와요."}
-        onSelect={handleSelect}
-        onSave={openSave}
-        onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}
-        onManual={openManual}
-      />
-    )}
+      {notice && <div className="inline-notice" role="status">{notice} <Link href={noticeHref}>{noticeHref === "/date" ? "데이트로 돌아가기" : "여행으로 돌아가기"}</Link><button type="button" onClick={() => setNotice("")} aria-label="알림 닫기">×</button></div>}
 
-    {section === "browse" && (
-      browseArea ? (
-        <>
-          {(discover.length > 0 || browseResultQuery) && (
-            <div className="result-search-toolbar">
-              <div><b>검색 결과</b><span>{visibleBrowseDiscover.length}곳{browseResultQuery ? ` / 전체 ${discover.length}곳` : ""}</span></div>
-              <label><span aria-hidden="true">⌕</span><input value={browseResultQuery} onChange={event => setBrowseResultQuery(event.target.value)} placeholder="결과에서 이름·주소 찾기" aria-label="검색 결과 내 찾기" />{browseResultQuery && <button type="button" onClick={() => setBrowseResultQuery("")} aria-label="결과 검색어 지우기">×</button>}</label>
+      {section === "saved" && (
+        visibleSaved.length ? (
+          layout === "list" ? (
+            <ul className="place-result-list">
+              {visibleSaved.map(place => (
+                <li key={place.id}>
+                  <button type="button" className={`kakao-result ${selectedId === place.id ? "is-selected" : ""}`} onClick={() => setSelectedId(place.id)}>
+                    <b>{place.name}</b>
+                    <small>{place.categoryLabel} · {place.district}</small>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="place-grid">{visibleSaved.map(place => <PlaceCard key={place.id} place={place} selected={selectedId === place.id} onSelect={() => setSelectedId(place.id)} onToggleSave={() => toggleSave(place.id)} />)}</div>
+          )
+        ) : (
+          <div className="empty-soft">
+            <h1>{archivedPlaces.length ? "조건에 맞는 장소가 없어요" : "첫 장소를 골라 볼까요?"}</h1>
+            <p>{archivedPlaces.length ? "필터를 바꾸거나 다른 이름으로 찾아 보세요." : "이름을 검색하거나, 알고 있는 장소를 직접 남겨 보세요."}</p>
+            <div className="dialog-actions">
+              <button className="primary-button" type="button" onClick={() => handleSection("search")}>장소 찾기</button>
+              <button className="outline-button" type="button" onClick={openManual}>직접 입력</button>
             </div>
-          )}
-          <PlaceDiscoverResults
-          places={visibleBrowseDiscover}
+          </div>
+        )
+      )}
+
+      {section === "search" && (
+        <PlaceDiscoverResults
+          places={discover}
           selectedId={selectedId}
           pending={discoverPending}
           error={discoverError}
           isEnd={discoverIsEnd}
           layout={layout}
-          emptyTitle={browseResultQuery ? "결과 안에서 일치하는 장소가 없어요." : "이 동네의 후보가 아직 없어요."}
-          emptyBody={browseResultQuery ? "검색어를 줄이거나 다른 이름과 주소로 찾아보세요." : "다른 동네를 고르거나, 종류를 바꿔 보세요."}
+          emptyTitle={searched ? "검색 결과가 없어요." : "장소 이름을 검색해 보세요."}
+          emptyBody={searched ? "다른 이름이거나, 못 찾으면 직접 입력해 보세요." : "성수 대림창고처럼 알고 있는 이름을 넣으면 후보가 나와요."}
           onSelect={handleSelect}
           onSave={openSave}
           onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}
+          onManual={openManual}
         />
-        </>
-      ) : (
-        <div className="empty-inline">
-          <h2>데이트할 동네를 골라 주세요.</h2>
-          <p>홍대/합정, 강남/신사, 가평/양평처럼 가고 싶은 동네를 고르면 후보가 나와요.</p>
-        </div>
-      )
-    )}
+      )}
 
-    {section === "map" && (
-      <>
-        <PlacesMapPane
-          saved={places}
-          results={discover}
-          selectedId={selectedId}
-          category={mapCategory}
-          pending={discoverPending}
-          onCategoryChange={setMapCategory}
-          onSelect={handleSelect}
-          onSearchHere={handleMapSearch}
-        />
-        {discoverError && <p className="form-error" role="alert">{discoverError}</p>}
-        {discover.length > 0 && (
-          <PlaceDiscoverResults
-            places={discover}
+      {section === "browse" && (
+        browseArea ? (
+          <>
+            {(discover.length > 0 || browseResultQuery) && (
+              <div className="result-search-toolbar">
+                <div><b>검색 결과</b><span>{visibleBrowseDiscover.length}곳{browseResultQuery ? ` / 전체 ${discover.length}곳` : ""}</span></div>
+                <label><span aria-hidden="true">⌕</span><input value={browseResultQuery} onChange={event => setBrowseResultQuery(event.target.value)} placeholder="결과에서 이름·주소 찾기" aria-label="검색 결과 내 찾기" />{browseResultQuery && <button type="button" onClick={() => setBrowseResultQuery("")} aria-label="결과 검색어 지우기">×</button>}</label>
+              </div>
+            )}
+            <PlaceDiscoverResults
+              places={visibleBrowseDiscover}
+              selectedId={selectedId}
+              pending={discoverPending}
+              error={discoverError}
+              isEnd={discoverIsEnd}
+              layout={layout}
+              emptyTitle={browseResultQuery ? "결과 안에서 일치하는 장소가 없어요." : "이 동네의 후보가 아직 없어요."}
+              emptyBody={browseResultQuery ? "검색어를 줄이거나 다른 이름과 주소로 찾아보세요." : "다른 동네를 고르거나, 종류를 바꿔 보세요."}
+              onSelect={handleSelect}
+              onSave={openSave}
+              onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}
+            />
+          </>
+        ) : (
+          <div className="empty-inline">
+            <h2>데이트할 동네를 골라 주세요.</h2>
+            <p>홍대/합정, 강남/신사, 가평/양평처럼 가고 싶은 동네를 고르면 후보가 나와요.</p>
+          </div>
+        )
+      )}
+
+      {section === "map" && (
+        <>
+          <PlacesMapPane
+            saved={places}
+            results={discover}
             selectedId={selectedId}
+            category={mapCategory}
             pending={discoverPending}
-            error=""
-            isEnd={discoverIsEnd}
-            layout="list"
-            emptyTitle=""
-            emptyBody=""
+            onCategoryChange={setMapCategory}
             onSelect={handleSelect}
-            onSave={openSave}
-            onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}
+            onSearchHere={handleMapSearch}
           />
-        )}
-      </>
-    )}
+          {discoverError && <p className="form-error" role="alert">{discoverError}</p>}
+          {discover.length > 0 && (
+            <PlaceDiscoverResults
+              places={discover}
+              selectedId={selectedId}
+              pending={discoverPending}
+              error=""
+              isEnd={discoverIsEnd}
+              layout="list"
+              emptyTitle=""
+              emptyBody=""
+              onSelect={handleSelect}
+              onSave={openSave}
+              onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}
+            />
+          )}
+        </>
+      )}
 
-    <PlaceCreateDialog
-      open={dialogOpen}
-      mode={dialogMode}
-      persist={persist}
-      candidate={pendingCandidate}
-      savedKakaoIds={places.map(place => place.externalPlaceId ? `${place.externalSource ?? "kakao"}:${place.externalPlaceId}` : "").filter(Boolean)}
-      onClose={() => setDialogOpen(false)}
-      onSaved={handleSaved}
-    />
-  </AppShell>;
+      <PlaceCreateDialog
+        open={dialogOpen}
+        mode={dialogMode}
+        persist={persist}
+        candidate={pendingCandidate}
+        onClose={() => setDialogOpen(false)}
+        onSaved={handleSaved}
+      />
+    </>
+  );
 }

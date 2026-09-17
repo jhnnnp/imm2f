@@ -49,7 +49,7 @@ export function InsightsPanel({ initial }: { initial: PreferenceInsight | null }
           <h2>좋아하는 곳에서 우리다움을 찾아요</h2>
           <p>각자 저장한 장소의 유형, 분위기, 지역과 활동을 비교해 보여드려요.</p>
           <div className="insight-empty-flow" aria-label="분석 결과 구성">
-            <b>각자의 기록</b><i aria-hidden="true">→</i><b>우리의 취향</b><i aria-hidden="true">→</i><b>둘만의 시간</b>
+            <b>각자의 기록</b><i aria-hidden="true">→</i><b>우리의 취향</b><i aria-hidden="true">→</i><b>우리의  시간</b>
           </div>
         </div>
       ) : (
@@ -72,7 +72,7 @@ export function InsightsPanel({ initial }: { initial: PreferenceInsight | null }
             </article>
             <article className="paper-card common-taste-card">
               <span className="eyebrow">COMMON TASTE</span>
-              <h2>둘의 긍정 기록에서 겹쳐요</h2>
+              <h2>우리의긍정 기록에서 겹쳐요</h2>
               <div className="taste-tags">
                 {insight.commonTastes.length ? insight.commonTastes.map(item => (
                   <span key={item.label}><b>{item.label}</b><small>{item.score}</small></span>

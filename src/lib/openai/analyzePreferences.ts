@@ -1,4 +1,5 @@
-import { getOpenAiApiKey, getOpenAiModel, isOpenAiConfigured } from "./env";
+import { completeJson } from "./client";
+import { isOpenAiConfigured } from "./env";
 
 export type PreferencePlaceInput = {
   name: string;
@@ -151,7 +152,7 @@ export function calculatePreferenceInsight(places: PreferencePlaceInput[]): Pref
       {
         title: "둘 다 편안한 선택",
         description: `${sharedPrimary} 분위기가 느껴지는 곳`,
-        reason: commonTastes.length ? "둘의 긍정 기록에서 가장 자주 겹친 취향이에요." : "공통 취향 데이터가 쌓이기 전까지 두 사람의 긍정 조건을 함께 확인해요.",
+        reason: commonTastes.length ? "우리의긍정 기록에서 가장 자주 겹친 취향이에요." : "공통 취향 데이터가 쌓이기 전까지 두 사람의 긍정 조건을 함께 확인해요.",
       },
       {
         title: "서로의 취향을 섞은 선택",
@@ -199,41 +200,30 @@ export async function analyzePreferencesWithOpenAi(input: {
   }));
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${getOpenAiApiKey()}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: getOpenAiModel(),
-        temperature: 0.3,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You summarize a couple's place preferences from saved place states only.",
-              "Never invent places, addresses, prices, distances, ratings, or visit counts not implied by the data.",
-              "Reply Korean JSON:",
-              '{"summary":"2-3 Korean sentences","differences":[{"you":"...","partner":"...","bridge":"..."}],"recommendations":[{"title":"...","description":"...","reason":"..."}]}',
-              "The server already calculated scores and taste labels. Do not calculate or output scores.",
-              "unrated means no response, never describe it as neutral or dislike.",
-              "Do not discuss price. differences compare category, mood, area, activity, or pace. recommendations describe place conditions, never invent venue names.",
-            ].join(" "),
-          },
-          {
-            role: "user",
-            content: `${input.youName} / ${input.partnerName}\n검증된 통계:\n${JSON.stringify({ matchScore: fallback.matchScore, confidence: fallback.confidence, commonTastes: fallback.commonTastes, evidence: fallback.evidence, youHighlights: fallback.youHighlights, partnerHighlights: fallback.partnerHighlights })}\n장소 기록:\n${JSON.stringify(sample)}`,
-          },
-        ],
-      }),
+    const parsed = await completeJson<AnalyzePayload>({
+      temperature: 0.3,
+      maxTokens: 2500,
+      reasoningEffort: "low",
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You summarize a couple's place preferences from saved place states only.",
+            "Never invent places, addresses, prices, distances, ratings, or visit counts not implied by the data.",
+            "Reply Korean JSON:",
+            '{"summary":"2-3 Korean sentences","differences":[{"you":"...","partner":"...","bridge":"..."}],"recommendations":[{"title":"...","description":"...","reason":"..."}]}',
+            "The server already calculated scores and taste labels. Do not calculate or output scores.",
+            "unrated means no response, never describe it as neutral or dislike.",
+            "Do not discuss price. differences compare category, mood, area, activity, or pace. recommendations describe place conditions, never invent venue names.",
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: `${input.youName} / ${input.partnerName}\n검증된 통계:\n${JSON.stringify({ matchScore: fallback.matchScore, confidence: fallback.confidence, commonTastes: fallback.commonTastes, evidence: fallback.evidence, youHighlights: fallback.youHighlights, partnerHighlights: fallback.partnerHighlights })}\n장소 기록:\n${JSON.stringify(sample)}`,
+        },
+      ],
     });
-    if (!response.ok) return fallback;
-
-    const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const text = payload.choices?.[0]?.message?.content ?? "";
-    const parsed = JSON.parse(text) as AnalyzePayload;
+    if (!parsed) return fallback;
     const differences = (parsed.differences ?? [])
       .map(item => ({
         you: String(item.you ?? "").trim().slice(0, 80),

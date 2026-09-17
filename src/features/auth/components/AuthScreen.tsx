@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 import type { ReactNode } from "react";
 
@@ -17,7 +16,6 @@ export function AuthScreen({ title, description, children, footer }: { title: st
         )}
         {children}
         {footer && <div className="auth-footer">{footer}</div>}
-        {!configured && <p className="auth-footnote"><Link href="/">환경 변수 없이 프로토타입 둘러보기</Link></p>}
       </section>
     </main>
   );

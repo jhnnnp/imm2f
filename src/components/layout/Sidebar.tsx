@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NAVIGATION } from "./navigation";
@@ -11,6 +12,8 @@ import { BrandMark, SidebarIcon } from "./SidebarIcon";
 export function Sidebar() {
   const pathname = usePathname();
   const session = useAppSession();
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
   const hasIdentity = session.mode === "authenticated" || session.mode === "setup_error";
   const youName = hasIdentity ? session.displayName : "나";
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? null : null;
@@ -26,9 +29,9 @@ export function Sidebar() {
       <nav className="nav-list">
         {NAVIGATION.map((item, index) => {
           if ("section" in item) return <p key={`${item.section}-${index}`}>{item.section}</p>;
-          const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+          const active = ready && (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href));
           return (
-            <Link className={`nav-item ${active ? "is-active" : ""}`} href={item.href} key={item.href}>
+            <Link className={`nav-item ${active ? "is-active" : ""}`} href={item.href} key={item.href} suppressHydrationWarning>
               <span className="nav-icon-wrap"><SidebarIcon name={item.iconName} /></span>{item.label}
             </Link>
           );
@@ -41,20 +44,20 @@ export function Sidebar() {
             <strong>{session.mode === "setup_error" ? `${youName} · 복구 필요` : <>{youName} <span>&amp;</span> {partnerName ?? "파트너"}</>}</strong>
             <small>
               {session.mode === "authenticated"
-                ? session.partner ? "둘의 공간이 연결되어 있어요" : "함께할 파트너를 초대해 보세요"
+                ? session.partner ? "우리의공간이 연결되어 있어요" : "함께할 파트너를 초대해 보세요"
                 : session.mode === "setup_error" ? "로그인은 됐지만 공간을 준비하지 못했어요"
-                : session.mode === "demo" ? "로그인 없이 둘러보는 체험 공간" : "로그인하고 둘만의 공간을 시작해요"}
+                  : "로그인하고 우리의 공간을 시작해요"}
             </small>
           </div>
         </div>
         {session.mode === "authenticated" && session.partner
           ? <span className="couple-card-status"><i />연결됨</span>
           : session.mode === "setup_error"
-          ? <button className="couple-card-action" type="button" onClick={() => void signOut()}>
+            ? <button className="couple-card-action" type="button" onClick={() => void signOut()}>
               <span>다시 로그인</span><b aria-hidden="true">→</b>
             </button>
-          : <Link className="couple-card-action" href={session.mode === "authenticated" ? "/invite" : session.mode === "demo" ? "/demo/exit" : "/login"}>
-              <span>{session.mode === "authenticated" ? "파트너 초대" : session.mode === "demo" ? "체험 나가기" : "로그인"}</span><b aria-hidden="true">→</b>
+            : <Link className="couple-card-action" href={session.mode === "authenticated" ? "/invite" : "/login"}>
+              <span>{session.mode === "authenticated" ? "파트너 초대" : "로그인"}</span><b aria-hidden="true">→</b>
             </Link>}
       </div>
     </aside>

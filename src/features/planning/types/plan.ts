@@ -41,12 +41,21 @@ export type PlanOption = {
   placeCount: number;
 };
 
+export type DateActivityId = "cafe" | "meal" | "walk" | "exhibit" | "indoor" | "nightview";
+export type DateCuisine = "한식" | "일식" | "중식" | "양식";
+export type DateCuisineChoice = DateCuisine | "any";
+export type DateTimeWindow = "afternoon" | "evening" | "night" | "any";
+export type DateIntakeSlot = "activity" | "area" | "scope" | "span" | "time" | "cuisine" | "indoor";
+export type DateStayKind = "date" | "daytrip" | "overnight";
+export type DateAreaScope = "core" | "walkable" | "nearby";
+
 export type AIPlanCondition = {
   dateLabel: string;
   startTime: string;
   endTime: string;
   budget: number | null;
   region: string;
+  timeSpecified: boolean;
 };
 
 export type AIPlaceRecommendation = {
@@ -56,6 +65,7 @@ export type AIPlaceRecommendation = {
   category: string;
   district: string;
   address: string;
+  phone: string;
   mapUrl: string;
   coordinates: [number, number] | null;
   durationMinutes: number;
@@ -65,9 +75,46 @@ export type AIPlaceRecommendation = {
   distanceFromPreviousMeters: number | null;
 };
 
+export type AIChatStop = {
+  name: string;
+  meta: string;
+  reason?: string;
+  mapUrl?: string;
+  isSaved?: boolean;
+  phone?: string;
+  address?: string;
+  coordinates?: [number, number] | null;
+  dayIndex?: number;
+  distanceFromPreviousMeters?: number | null;
+  startTime?: string;
+  durationMinutes?: number;
+  image?: string;
+  openingHours?: string;
+  source?: "kakao" | "tourapi";
+};
+
+export type DateChatTurn = {
+  role: "user" | "assistant";
+  text: string;
+};
+
+export type DatePreviousStop = {
+  name: string;
+  category: string;
+};
+
+export type AIChatCard = {
+  headline: string;
+  lines: string[];
+  stops?: AIChatStop[];
+  suggestions?: string[];
+  followUp?: string;
+};
+
 export type AIPlannerReply = {
   status: "plan";
   message: string;
+  card: AIChatCard;
   condition: AIPlanCondition;
   recommendations: AIPlaceRecommendation[];
   items: PlanItem[];
@@ -79,23 +126,45 @@ export type AIPlannerReply = {
 export type AIPlannerClarification = {
   status: "clarification";
   message: string;
+  card: AIChatCard;
   state: AIPlannerState;
   options: string[];
   multiple: boolean;
+  slot: DateIntakeSlot;
 };
 
-export type AIPlannerResult = AIPlannerReply | AIPlannerClarification;
+export type AIPlannerChat = {
+  status: "chat";
+  message: string;
+  card: AIChatCard;
+  state: AIPlannerState;
+  options?: string[];
+  multiple?: boolean;
+  slot?: DateIntakeSlot | null;
+};
+
+export type AIPlannerResult = AIPlannerReply | AIPlannerClarification | AIPlannerChat;
 
 export type AIPlannerState = {
+  activities: DateActivityId[];
+  areas: string[];
   region: string;
   regions: string[];
+  areaScope: DateAreaScope | null;
   requiredPlaces: string[];
   excludedPlaces: string[];
-  preferredCategories: string[];
-  avoidedCategories: string[];
+  cuisine: DateCuisineChoice | null;
+  indoorPlay: string | null;
   pace: "relaxed" | "balanced" | "active";
+  stayKind: DateStayKind | null;
+  nights: number;
+  timeWindow: DateTimeWindow | null;
+  startTime: string | null;
+  endTime: string | null;
+  dateLabel: string | null;
+  pinOrder: string[];
   preserveExistingPlaces: boolean;
   intent: "create" | "modify" | "remove" | "reset" | "clarify";
-  pendingQuestion: string | null;
+  pendingSlot: DateIntakeSlot | null;
   conversationNotes: string[];
 };

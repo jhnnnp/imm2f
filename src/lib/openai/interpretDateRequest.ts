@@ -1,159 +1,243 @@
-import type { AIPlannerState } from "@/features/planning/types/plan";
-import { getOpenAiApiKey, getOpenAiModel, isOpenAiConfigured } from "./env";
+import type { AIPlannerState, DateAreaScope, DateChatTurn, DateCuisineChoice, DateIntakeSlot, DateStayKind, DateTimeWindow } from "@/features/planning/types/plan";
+import {
+  asAreaScope,
+  asCuisineChoice,
+  asTimeWindow,
+  canonicalizeArea,
+  DATE_LANDMARKS,
+  emptyDateBrief,
+  extractActivitiesFromText,
+  extractAreaScope,
+  extractAreasFromText,
+  extractCuisine,
+  extractIndoorPlay,
+  extractPlacesFromText,
+  extractStay,
+  extractTimeWindow,
+  groundedAreas,
+  isDateActivityId,
+  missingSlot,
+  uniqueActivities,
+  uniqueStrings,
+  withAreas,
+  withTimeWindow,
+} from "@/features/ai/dateBrief";
+import { completeJson } from "./client";
+import { isOpenAiConfigured } from "./env";
+import { chatSituationFromMessage } from "./composeDateChat";
 
-type IntentPayload = Partial<AIPlannerState> & {
+export type IntentPayload = {
+  intent?: AIPlannerState["intent"];
+  addActivities?: string[];
+  removeActivities?: string[];
+  addAreas?: string[];
+  removeAreas?: string[];
   addPlaces?: string[];
   removePlaces?: string[];
-  replaceRegion?: string;
-  clarifyingQuestion?: string;
+  cuisine?: DateCuisineChoice | null;
+  indoorPlay?: string | null;
+  areaScope?: DateAreaScope | null;
+  timeWindow?: DateTimeWindow | null;
+  stayKind?: DateStayKind | null;
+  nights?: number | null;
+  pace?: AIPlannerState["pace"] | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  preserveExistingPlaces?: boolean;
   conversationNote?: string;
-  shouldGenerate?: boolean;
+  askSlot?: DateIntakeSlot | null;
+  reply?: string;
 };
 
-const EMPTY_STATE: AIPlannerState = {
-  region: "",
-  regions: [],
-  requiredPlaces: [],
-  excludedPlaces: [],
-  preferredCategories: [],
-  avoidedCategories: [],
-  pace: "balanced",
-  preserveExistingPlaces: true,
-  intent: "create",
-  pendingQuestion: null,
-  conversationNotes: [],
-};
-
-function strings(value: unknown, max = 8) {
-  return Array.isArray(value)
-    ? [...new Set(value.map(item => String(item).trim()).filter(Boolean))].slice(0, max)
-    : [];
+function asQuestionSlot(value: unknown): DateIntakeSlot | null {
+  return value === "area" ? value : null;
 }
 
-function fallbackPatch(message: string, previous?: AIPlannerState): IntentPayload {
-  const placeTerms = [...message.matchAll(/([가-힣A-Za-z0-9]{2,18}?(?:공원|미술관|박물관|전시관|시장|식당|카페|역))(?=\s|에서|으로|가고|들(?:러|렀)|빼|제외|도|$)/g)].map(match => match[1]);
+function asTime(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!/^\d{1,2}:\d{2}$/.test(raw)) return null;
+  const [hour, minute] = raw.split(":").map(Number);
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+export function fallbackPatch(message: string): IntentPayload {
   const removing = /빼|제외|삭제|가지\s*마/.test(message);
-  const explicitAdd = /들러|경유|가고\s*싶|포함|추가|넣어/.test(message);
-  const addedPlaces = explicitAdd ? placeTerms : placeTerms.filter(place => !place.endsWith("역"));
-  const categories = ["카페", "맛집", "음식점", "전시", "산책", "공원", "야경"].filter(category => message.includes(category));
-  if (/저녁|점심|아침|식사|밥/.test(message) && !categories.includes("음식점")) categories.push("음식점");
-  for (const cuisine of ["한식", "일식", "중식", "양식"]) {
-    if (message.includes(cuisine) && !categories.includes(cuisine)) categories.push(cuisine);
-  }
-  if (/놀거리|놀고|놀러|방탈출|볼링|보드게임|오락실|만화카페|VR|게임/.test(message) && !categories.includes("실내 놀거리")) categories.push("실내 놀거리");
-  const regionOnly = !previous && placeTerms.length <= 1 && categories.length === 0
-    && /(?:역|동|구|시)(?:\s*(?:근처|주변))?\s*$/.test(message.trim());
-  const hasBridgeActivity = /카페|커피|디저트|저녁|점심|아침|식사|밥|산책|전시|영화|공연/.test(message);
-  const addsSeveralWaypoints = Boolean(previous) && addedPlaces.length >= 2 && !hasBridgeActivity;
-  const clarifyingQuestion = regionOnly
-    ? `${placeTerms[0] ?? "그 지역"}에서 카페, 식사, 산책 중 어떤 데이트를 하고 싶나요?`
-    : addsSeveralWaypoints
-      ? `${addedPlaces.at(-1)}에는 카페나 저녁 식사 후에 갈까요, 아니면 바로 이동할까요?`
-      : undefined;
+  const activities = extractActivitiesFromText(message);
+  const places = extractPlacesFromText(message);
+  const adding = /들러|경유|가고\s*싶|포함|추가|넣어|갈\s*수|있나/.test(message);
+  const stay = extractStay(message);
   return {
-    intent: removing ? "remove" : "modify",
-    addPlaces: removing ? [] : addedPlaces,
-    removePlaces: removing ? placeTerms : [],
-    preferredCategories: /빼|제외/.test(message) ? [] : categories,
-    avoidedCategories: /빼|제외/.test(message) ? categories : [],
-    pace: /여유|천천히|오래/.test(message) ? "relaxed" : /많이|알차게|활동/.test(message) ? "active" : "balanced",
+    intent: removing ? "remove" : /처음부터|새로|전부\s*바꿔|리셋/.test(message) ? "reset" : undefined,
+    addActivities: removing ? [] : activities,
+    removeActivities: removing ? activities : [],
+    addAreas: extractAreasFromText(message),
+    addPlaces: removing ? [] : places,
+    removePlaces: removing ? places : [],
+    cuisine: extractCuisine(message),
+    indoorPlay: extractIndoorPlay(message),
+    areaScope: extractAreaScope(message),
+    timeWindow: extractTimeWindow(message),
+    stayKind: stay?.stayKind ?? null,
+    nights: stay?.nights ?? null,
+    pace: /여유|천천히|오래/.test(message) ? "relaxed" : /많이|알차게|활동/.test(message) ? "active" : null,
     preserveExistingPlaces: !/처음부터|새로|전부\s*바꿔|리셋/.test(message),
-    clarifyingQuestion,
-    shouldGenerate: !clarifyingQuestion,
-    conversationNote: message,
+    conversationNote: adding ? `기존 코스에 ${places.join(", ") || "장소"}를 더함` : message,
   };
 }
 
-function mergeState(previous: AIPlannerState | undefined, patch: IntentPayload, fallbackRegion: string): AIPlannerState {
-  const base = previous ?? EMPTY_STATE;
+export function mergeDateState(previous: AIPlannerState | undefined, patch: IntentPayload, dateLabel?: string): AIPlannerState {
+  const base = previous ?? emptyDateBrief();
   const intent = ["create", "modify", "remove", "reset", "clarify"].includes(String(patch.intent))
     ? patch.intent as AIPlannerState["intent"]
     : previous ? "modify" : "create";
   const reset = intent === "reset" || patch.preserveExistingPlaces === false;
-  const add = strings(patch.addPlaces);
-  const remove = strings(patch.removePlaces);
-  const required = [...new Set([...(reset ? [] : base.requiredPlaces), ...add])].filter(name => !remove.includes(name));
-  const excluded = [...new Set([...(reset ? [] : base.excludedPlaces), ...remove])].filter(name => !add.includes(name));
-  const region = [patch.replaceRegion, reset || !previous ? patch.region : "", reset || !previous ? fallbackRegion : "", base.region]
-    .map(value => typeof value === "string" ? value.trim() : "")
-    .find(Boolean) ?? "";
+  const addActivities = uniqueActivities(patch.addActivities ?? []);
+  const removeActivities = uniqueActivities(patch.removeActivities ?? []);
+  const activities = uniqueActivities([...(reset ? [] : base.activities), ...addActivities].filter(id => !removeActivities.includes(id)));
+  const addAreas = uniqueStrings((patch.addAreas ?? []).map(canonicalizeArea), 3);
+  const removeAreas = uniqueStrings((patch.removeAreas ?? []).map(canonicalizeArea), 3);
+  const areas = uniqueStrings([...(reset ? [] : base.areas), ...addAreas].filter(area => !removeAreas.includes(area)), 3);
+  const addPlaces = uniqueStrings(patch.addPlaces ?? [], 6).filter(place => {
+    if (isDateActivityId(place)) return false;
+    if (DATE_LANDMARKS.some(landmark => landmark === place)) return true;
+    return !areas.includes(place);
+  });
+  const removePlaces = uniqueStrings(patch.removePlaces ?? [], 4);
+  const requiredPlaces = uniqueStrings([...(reset ? [] : base.requiredPlaces), ...addPlaces].filter(place => !removePlaces.includes(place)), 6);
+  const indoorPlay = patch.indoorPlay?.trim() || (reset ? null : base.indoorPlay);
+  const timeWindow = asTimeWindow(patch.timeWindow) ?? (reset ? null : base.timeWindow);
+  const timed = timeWindow && timeWindow !== base.timeWindow ? withTimeWindow(base, timeWindow) : base;
+  const stayKind = patch.stayKind === "date" || patch.stayKind === "daytrip" || patch.stayKind === "overnight"
+    ? patch.stayKind
+    : (reset ? null : base.stayKind);
+  const nights = stayKind === "overnight"
+    ? Math.max(1, Math.min(2, Number(patch.nights ?? (reset ? 1 : base.nights)) || 1))
+    : 0;
+  const areaScope = asAreaScope(patch.areaScope) ?? (reset ? null : base.areaScope);
+  const located = withAreas({ ...base, areaScope }, areas);
   return {
-    region,
-    regions: strings(patch.regions).length
-      ? [...new Set([...(reset ? [] : base.regions), ...strings(patch.regions)])].slice(0, 3)
-      : base.regions.length ? base.regions : region ? [region] : [],
-    requiredPlaces: required,
-    excludedPlaces: excluded,
-    preferredCategories: [...new Set([...(reset ? [] : base.preferredCategories), ...strings(patch.preferredCategories)])].filter(item => !strings(patch.avoidedCategories).includes(item)),
-    avoidedCategories: [...new Set([...(reset ? [] : base.avoidedCategories), ...strings(patch.avoidedCategories)])].filter(item => !strings(patch.preferredCategories).includes(item)),
-    pace: patch.pace === "relaxed" || patch.pace === "active" ? patch.pace : base.pace,
+    activities,
+    areas: located.areas,
+    region: located.region,
+    regions: located.regions,
+    areaScope: located.areaScope,
+    requiredPlaces,
+    excludedPlaces: uniqueStrings([...(reset ? [] : base.excludedPlaces), ...removePlaces].filter(place => !addPlaces.includes(place)), 8),
+    cuisine: asCuisineChoice(patch.cuisine) ?? (reset ? null : base.cuisine),
+    indoorPlay: indoorPlay || null,
+    pace: patch.pace === "relaxed" || patch.pace === "active" || patch.pace === "balanced" ? patch.pace : base.pace,
+    stayKind,
+    nights,
+    timeWindow: timeWindow ?? timed.timeWindow,
+    startTime: patch.startTime === undefined ? timed.startTime : asTime(patch.startTime) ?? timed.startTime,
+    endTime: patch.endTime === undefined ? timed.endTime : asTime(patch.endTime) ?? timed.endTime,
+    dateLabel: dateLabel || base.dateLabel,
+    pinOrder: reset ? [] : uniqueStrings(base.pinOrder, 8),
     preserveExistingPlaces: patch.preserveExistingPlaces !== false,
     intent,
-    pendingQuestion: String(patch.clarifyingQuestion ?? "").trim() || null,
+    pendingSlot: missingSlot({
+      ...base,
+      activities,
+      areas: located.areas,
+      regions: located.regions,
+      areaScope: located.areaScope,
+      cuisine: asCuisineChoice(patch.cuisine) ?? (reset ? null : base.cuisine),
+      indoorPlay: indoorPlay || null,
+      stayKind,
+      nights,
+      timeWindow: timeWindow ?? timed.timeWindow,
+      startTime: patch.startTime === undefined ? timed.startTime : asTime(patch.startTime) ?? timed.startTime,
+    }),
     conversationNotes: [...(reset ? [] : base.conversationNotes), String(patch.conversationNote ?? "").trim()].filter(Boolean).slice(-12),
   };
 }
 
+function usableReply(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text || /^false$/i.test(text) || text.length < 8) return "";
+  return text.slice(0, 500);
+}
+
+export function applyInterpretPatch(input: {
+  message: string;
+  previousState?: AIPlannerState;
+  dateLabel?: string;
+  patch: IntentPayload;
+}) {
+  const merged = mergeDateState(input.previousState, input.patch, input.dateLabel);
+  const areas = groundedAreas(input.message, input.previousState, merged.areas);
+  const state = withAreas({ ...merged, pendingSlot: null }, areas);
+  const next = { ...state, pendingSlot: missingSlot(state) };
+  return { state: next, slot: missingSlot(next), reply: usableReply(input.patch.reply) };
+}
+
+export function shouldSkipDateNlu(message: string) {
+  return Boolean(chatSituationFromMessage(message));
+}
+
 export async function interpretDateRequest(input: {
   message: string;
-  fallbackRegion: string;
   previousState?: AIPlannerState;
   previousPlaceNames: string[];
+  dateLabel?: string;
+  conversation?: DateChatTurn[];
 }) {
-  const localPatch = fallbackPatch(input.message, input.previousState);
-  const toResult = (patch: IntentPayload) => {
-    const question = String(patch.clarifyingQuestion ?? localPatch.clarifyingQuestion ?? "").trim();
-    const answeredPendingQuestion = Boolean(input.previousState?.pendingQuestion) && !localPatch.clarifyingQuestion;
-    const normalizedPatch = {
-      ...patch,
-      addPlaces: [...new Set([...strings(patch.addPlaces), ...strings(localPatch.addPlaces)])],
-      removePlaces: [...new Set([...strings(patch.removePlaces), ...strings(localPatch.removePlaces)])],
-      preferredCategories: [...new Set([...strings(patch.preferredCategories), ...strings(localPatch.preferredCategories)])],
-      avoidedCategories: [...new Set([...strings(patch.avoidedCategories), ...strings(localPatch.avoidedCategories)])],
-      conversationNote: patch.conversationNote || input.message,
-      clarifyingQuestion: answeredPendingQuestion ? "" : question,
-    };
-    return {
-      state: mergeState(input.previousState, normalizedPatch, input.fallbackRegion),
-      clarifyingQuestion: answeredPendingQuestion ? "" : question,
-    };
-  };
-  const fallback = () => toResult(localPatch);
-  if (!isOpenAiConfigured()) return fallback();
+  const localPatch = fallbackPatch(input.message);
+  const fallback = () => applyInterpretPatch({
+    message: input.message,
+    previousState: input.previousState,
+    dateLabel: input.dateLabel,
+    patch: localPatch,
+  });
+  if (!isOpenAiConfigured() || shouldSkipDateNlu(input.message)) return fallback();
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${getOpenAiApiKey()}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: getOpenAiModel(),
-        temperature: 0,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: [
-              "Extract ONLY the change expressed by the latest Korean date-planning message.",
-              "Do not restate unchanged previous state in addPlaces or removePlaces.",
-              "A directly named station, park, museum, market, restaurant, or cafe is a place constraint.",
-              "A station used only with 'near/around' describes the search region, not addPlaces. A station with 'stop by/via/include/add' belongs in addPlaces.",
-              "Map meal/dinner/lunch/food requests to preferredCategories=['음식점']; coffee/dessert requests to ['카페']; walking/outdoors to ['공원'].",
-              "Words like add/stop by/go to mean addPlaces. Words like remove/exclude mean removePlaces.",
-              "If the user asks to start over, intent=reset and preserveExistingPlaces=false.",
-              "Do not generate a plan when an important choice is ambiguous. Ask exactly one short Korean follow-up question instead.",
-              "Examples that require clarification: a region without an activity; adding several waypoints without saying what should happen before or between them.",
-              "If the latest message answers the previous pending question, incorporate that answer and set clarifyingQuestion to an empty string.",
-              "Different neighborhoods may be combined in one date. Extract every explicitly named neighborhood or station into regions instead of replacing the first region.",
-              "Return JSON with intent(create|modify|remove|reset|clarify), replaceRegion, regions, addPlaces, removePlaces, preferredCategories, avoidedCategories, pace(relaxed|balanced|active), preserveExistingPlaces, clarifyingQuestion, shouldGenerate, conversationNote.",
-            ].join(" "),
-          },
-          { role: "user", content: JSON.stringify({ previousState: input.previousState ?? EMPTY_STATE, pendingQuestion: input.previousState?.pendingQuestion, currentPlaces: input.previousPlaceNames, latestMessage: input.message }) },
-        ],
-      }),
+    const patch = await completeJson<IntentPayload>({
+      temperature: 0,
+      maxTokens: 1200,
+      reasoningEffort: "low",
+      messages: [
+        {
+          role: "system",
+          content: [
+            "Extract a structured date brief from Korean chat. Be a concise concierge, not a chatty companion.",
+            "Return JSON only:",
+            '{"intent":"create|modify|remove|reset|clarify","addActivities":["cafe"|"meal"|"walk"|"exhibit"|"indoor"|"nightview"],"removeActivities":[],"addAreas":[],"removeAreas":[],"addPlaces":[],"removePlaces":[],"cuisine":"한식"|"일식"|"중식"|"양식"|"any"|null,"indoorPlay":"방탈출"|"보드게임"|"볼링"|"오락실"|"만화카페"|"VR 체험"|"상관없음"|null,"areaScope":"core"|"walkable"|"nearby"|null,"timeWindow":"afternoon"|"evening"|"night"|"any"|null,"stayKind":"date"|"daytrip"|"overnight"|null,"nights":0|1|2|null,"pace":"relaxed"|"balanced"|"active"|null,"startTime":"HH:MM"|null,"endTime":"HH:MM"|null,"preserveExistingPlaces":true,"conversationNote":"short Korean restatement of the latest change only","askSlot":null,"reply":""}',
+            "Never invent a city or neighborhood the user did not write. addAreas may only contain names that appear in latestMessage.",
+            "From 여행가고싶어, 데이트하고싶어, 놀러가고싶어 with no place: addAreas:[], askSlot:\"area\", intent:\"clarify\", reply asking where to go. Do not copy example cities into addAreas.",
+            "From 군산 여행 가려고 하는데 일정 짜줘: addAreas:[\"군산\"], stayKind null unless nights were said, reply empty. From 군산 1박2일: addAreas:[\"군산\"], stayKind:\"overnight\", nights:1.",
+            "From 성수에서 데이트하고 싶어: addAreas:[\"성수\"], stayKind:\"date\", nights:0. Infer 2-3 activities from the vibe only if the user named them. Do not always choose cafe+meal+walk.",
+            "stayKind: 데이트→date, 당일치기/하루만→daytrip, 1박2일/2박3일/여행+박→overnight. Bare 여행 with no nights leaves stayKind null so the app can ask.",
+            "If the user names a destination, never askSlot area. Time only if they mentioned when, not because they said 저녁 먹고 싶어.",
+            "askSlot may be area only when no city or neighborhood can be inferred. Never ask activity, cuisine, scope, or indoor.",
+            "reply is empty whenever a course can be generated. When asking where to go, one polite 해요체 sentence. No emoji, no 반말, no vibe adjectives.",
+            "If the user only greets, thanks you, or asks what you can do, intent:\"clarify\" and put the answer in reply. Do not set intent clarify when addAreas is non-empty.",
+            "Activity map: 카페/커피/디저트→cafe; 식사/저녁/점심/밥/맛집/파스타/라멘→meal; 산책/공원/한강→walk; 전시/미술관/갤러리→exhibit; 방탈출/보드게임/볼링/오락실/실내 놀거리→indoor; 야경/전망대/루프탑→nightview.",
+            "Cuisine: 파스타/피자/브런치/스테이크→양식; 라멘/스시/초밥/오마카세→일식; 국밥/고기/갈비→한식.",
+            "If currentPlaces is non-empty and the user asks to add a stop (추가, 넣어, 갈 수 있나, 들러), set addPlaces to that landmark, keep addAreas empty, preserveExistingPlaces true, intent modify.",
+            "If the user asks to swap one stop (카페 변경 해줘), keep preserveExistingPlaces true, put the current matching venue into removePlaces, intent modify.",
+            "areaScope only if the user mentioned range. Time only if they mentioned when, not because they said 저녁 먹고 싶어. Cuisine only if they mentioned food type.",
+            "Never return clarifyingQuestion. Never return the boolean or string false.",
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            currentBrief: input.previousState ?? emptyDateBrief(),
+            currentPlaces: input.previousPlaceNames,
+            recentTurns: (input.conversation ?? []).slice(-8),
+            latestMessage: input.message,
+          }),
+        },
+      ],
     });
-    if (!response.ok) return fallback();
-    const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const patch = JSON.parse(body.choices?.[0]?.message?.content ?? "{}") as IntentPayload;
-    return toResult(patch);
+    if (!patch) return fallback();
+    return applyInterpretPatch({
+      message: input.message,
+      previousState: input.previousState,
+      dateLabel: input.dateLabel,
+      patch: { ...patch, askSlot: asQuestionSlot(patch.askSlot) },
+    });
   } catch {
     return fallback();
   }

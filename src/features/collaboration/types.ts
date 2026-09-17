@@ -1,5 +1,3 @@
-import type { PlanItem, PlanKind } from "@/features/planning/types/plan";
-
 export type ActivityAction =
   | "PLACE_ADDED"
   | "PLACE_LIKED"
@@ -37,16 +35,6 @@ export function hrefForActivity(action: string) {
   if (action === "PARTNER_JOINED") return "/invite";
   return "/";
 }
-
-export type PlanVersion = {
-  id: string;
-  planKind: PlanKind;
-  versionNumber: number;
-  changeSummary: string;
-  createdByName: string;
-  createdAt: string;
-  snapshot: PlanItem[];
-};
 
 export type BudgetBucketId = "food" | "cafe" | "transport" | "stay" | "tour" | "shop" | "other";
 

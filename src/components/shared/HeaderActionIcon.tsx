@@ -1,7 +1,6 @@
-export type HeaderActionIconName = "history" | "sparkles" | "plus" | "activity" | "edit" | "search" | "archive";
+export type HeaderActionIconName = "sparkles" | "plus" | "activity" | "edit" | "search" | "archive";
 
 const paths: Record<HeaderActionIconName, React.ReactNode> = {
-  history: <><path d="M4 8a8 8 0 1 1 1.5 8.7"/><path d="M4 3.5V8h4.5M12 7.5V12l3 1.8"/></>,
   sparkles: <><path d="m12 3 1.1 3.4L16.5 7.5l-3.4 1.1L12 12l-1.1-3.4-3.4-1.1 3.4-1.1L12 3Z"/><path d="m18.5 13 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3ZM5.5 14l.8 2.7 2.7.8-2.7.8L5.5 21l-.8-2.7-2.7-.8 2.7-.8.8-2.7Z"/></>,
   plus: <path d="M12 5v14M5 12h14"/>,
   activity: <><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/><path d="m3.5 7.5 6-3 5 4 6-4.5"/></>,

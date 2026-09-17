@@ -20,7 +20,7 @@ export function InviteAccept({ token, inviterName, signedIn }: { token: string; 
 
   return (
     <div className="auth-form">
-      <p className="auth-lead"><b>{inviterName}</b>님이 둘의 공간으로 초대했어요.</p>
+      <p className="auth-lead"><b>{inviterName}</b>님이 우리의공간으로 초대했어요.</p>
       {signedIn ? (
         <button className="primary-button full" type="button" onClick={() => void accept()} disabled={pending}>
           {pending ? "연결 중..." : "초대 수락하기"}

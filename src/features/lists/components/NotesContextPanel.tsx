@@ -5,7 +5,7 @@ const PANEL_COPY = {
   vault: {
     eyebrow: "QUICK ACCESS",
     title: "필요할 때 바로",
-    quote: "흩어진 정보가 제자리를 찾으면, 둘의 다음 순간은 더 가벼워져요.",
+    quote: "흩어진 정보가 제자리를 찾으면, 우리의다음 순간은 더 가벼워져요.",
     tipTitle: "이렇게 보관해 보세요",
     tips: ["예약명은 장소와 날짜를 함께 적기", "링크나 확인 번호는 별도 필드에 담기", "사용한 항목은 상태를 바꿔 정리하기"],
     nextHref: "/trip",
@@ -23,7 +23,7 @@ const PANEL_COPY = {
   bucket: {
     eyebrow: "OUR NEXT SCENE",
     title: "다음 장면을 향해",
-    quote: "함께 꿈꾸던 일을 해낸 날, 버킷은 둘의 추억이 돼요.",
+    quote: "함께 꿈꾸던 일을 해낸 날, 버킷은 우리의추억이 돼요.",
     tipTitle: "꿈을 현실로 만드는 법",
     tips: ["작고 구체적인 문장으로 적기", "마음이 정해지면 준비 중으로 바꾸기", "달성한 날은 추억으로 이어 남기기"],
     nextHref: "/memories",

@@ -1,5 +1,6 @@
 import type { PlanChange } from "@/features/planning/types/plan";
-import { getOpenAiApiKey, getOpenAiModel, isOpenAiConfigured } from "./env";
+import { completeJson } from "./client";
+import { isOpenAiConfigured } from "./env";
 
 export type PlanEditItemInput = {
   id: string;
@@ -53,42 +54,32 @@ export async function proposePlanEditsWithOpenAi(input: {
   }));
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${getOpenAiApiKey()}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: getOpenAiModel(),
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You edit an existing couple plan. Never invent places, addresses, coordinates, prices, distances, travel times, or new item ids.",
-              "Only propose changes for provided item ids.",
-              "Allowed change types: remove, duration.",
-              "For duration, minutes must be 30-240 in steps of 10.",
-              "Reply Korean labels/details. JSON shape:",
-              '{"summary":"Korean one sentence","changes":[{"type":"remove","itemId":"...","label":"...","detail":"..."},{"type":"duration","itemId":"...","minutes":90,"label":"...","detail":"..."}]}',
-              "Return 1-4 useful changes. If the request cannot be fulfilled with existing items, return {\"summary\":\"...\",\"changes\":[]}.",
-            ].join(" "),
-          },
-          {
-            role: "user",
-            content: `계획 종류: ${input.kind}\n요청: ${prompt}\n현재 일정:\n${JSON.stringify(catalog)}`,
-          },
-        ],
-      }),
+    const parsed = await completeJson<EditPayload>({
+      temperature: 0.2,
+      maxTokens: 2000,
+      reasoningEffort: "low",
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You edit an existing couple plan. Never invent places, addresses, coordinates, prices, distances, travel times, or new item ids.",
+            "Only propose changes for provided item ids.",
+            "Allowed change types: remove, duration.",
+            "For duration, minutes must be 30-240 in steps of 10.",
+            "Reply Korean labels/details. JSON shape:",
+            '{"summary":"Korean one sentence","changes":[{"type":"remove","itemId":"...","label":"...","detail":"..."},{"type":"duration","itemId":"...","minutes":90,"label":"...","detail":"..."}]}',
+            "Return 1-4 useful changes. If the request cannot be fulfilled with existing items, return {\"summary\":\"...\",\"changes\":[]}.",
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: `계획 종류: ${input.kind}\n요청: ${prompt}\n현재 일정:\n${JSON.stringify(catalog)}`,
+        },
+      ],
     });
-    if (!response.ok) {
+    if (!parsed) {
       return { error: "AI 제안을 만들지 못했어요. 잠시 후 다시 시도해 주세요." };
     }
-    const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const text = payload.choices?.[0]?.message?.content ?? "";
-    const parsed = JSON.parse(text) as EditPayload;
     const changes: PlanChange[] = [];
     const seen = new Set<string>();
 

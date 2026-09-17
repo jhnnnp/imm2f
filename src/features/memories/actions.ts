@@ -249,6 +249,38 @@ export async function updateMemory(input: UpdateMemoryInput): Promise<{ memory: 
     location_source: hasCoordinates ? "manual" : "none",
   }).eq("memory_id", input.id);
 
+  const coverUrl = input.coverUrl?.trim() || "";
+  if (coverUrl) {
+    const { data: existingPhotos } = await supabase.from("memory_photos").select("id, sort_order").eq("memory_id", input.id).order("sort_order");
+    if (existingPhotos?.length) {
+      await Promise.all(existingPhotos.map((photo, index) => (
+        supabase.from("memory_photos").update({ sort_order: index + 1 }).eq("id", photo.id)
+      )));
+    }
+    const photoInput = input.photo;
+    const { error: photoError } = await supabase.from("memory_photos").insert({
+      memory_id: input.id,
+      storage_url: coverUrl,
+      caption: "",
+      sort_order: 0,
+      latitude: hasCoordinates ? input.lat : photoInput?.latitude ?? null,
+      longitude: hasCoordinates ? input.lng : photoInput?.longitude ?? null,
+      captured_at: photoInput?.capturedAt ?? null,
+      storage_path: photoInput?.storagePath ?? null,
+      original_filename: photoInput?.originalFilename ?? "",
+      mime_type: photoInput?.mimeType ?? "",
+      file_size: photoInput?.fileSize ?? null,
+      width: photoInput?.width ?? null,
+      height: photoInput?.height ?? null,
+      camera_make: photoInput?.cameraMake ?? "",
+      camera_model: photoInput?.cameraModel ?? "",
+      orientation: photoInput?.orientation ?? null,
+      location_source: photoInput?.locationSource ?? (hasCoordinates ? "manual" : "none"),
+      metadata: photoInput?.metadata ?? {},
+    });
+    if (photoError) return { error: photoError.message };
+  }
+
   const { data: photoData } = await supabase.from("memory_photos").select("*").eq("memory_id", input.id).order("sort_order");
   const photos = (photoData ?? []) as PhotoRow[];
   const signedEntries = await Promise.all(photos.filter(photo => photo.storage_path).map(async photo => {

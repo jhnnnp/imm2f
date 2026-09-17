@@ -4,11 +4,13 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
+import { looksLikeNonVenue } from "@/lib/kakao/dateCandidate";
 import { searchKakaoPlacesRemote, type KakaoSearchInput } from "@/lib/kakao/local";
 import { loadTourPlaceDetail as loadTourPlaceDetailRemote, searchTourPlacesRemote } from "@/lib/tourapi/client";
+import { shouldSearchFestivals } from "@/lib/tourapi/festivalSchedule";
 import { applyRanking, rankDiscoverCandidates, type RankedCandidate } from "@/lib/openai/rank";
-import { PLACES } from "./data/places";
 import { mapPlaceRow, visualToneForCategory } from "./mappers";
+import { discoverSearchCategories, isAllowedKakaoDiscoverPlace, kakaoGroupCode } from "./config/kakaoCategories";
 import { PLACE_CATEGORIES, usesTourApi } from "./config/placeCategories";
 import type { DiscoverCandidate, Place, PlaceCategoryId, PlacePreferenceStatus } from "./types/place";
 import type { Database } from "@/lib/supabase/database.types";
@@ -56,10 +58,10 @@ function optionalCost(value: number | null | undefined) {
 
 export async function listPlaces(): Promise<{ persist: boolean; places: Place[] }> {
   const session = await getAppSession();
-  if (session.mode !== "authenticated") return { persist: false, places: PLACES };
+  if (session.mode !== "authenticated") return { persist: false, places: [] };
 
   const supabase = await createClient();
-  if (!supabase) return { persist: false, places: PLACES };
+  if (!supabase) return { persist: false, places: [] };
 
   const { data, error } = await supabase
     .from("places")
@@ -83,36 +85,44 @@ export async function searchKakaoPlaces(input: KakaoSearchInput | string) {
   return searchDiscoverPlaces(input);
 }
 
+function keepDiscoverPlace(place: DiscoverCandidate) {
+  return isAllowedKakaoDiscoverPlace(place) && !looksLikeNonVenue(place);
+}
+
+function discoverCategorySearches(params: DiscoverSearchInput, category: PlaceCategoryId) {
+  const { categories: _ignored, ...rest } = "categories" in params ? params : { ...params, categories: undefined };
+  const categoryParams: KakaoSearchInput = { ...rest, category };
+  const searches: Array<Promise<DiscoverSearchResult>> = [];
+  if (shouldSearchFestivals(categoryParams) || usesTourApi(category)) {
+    searches.push(searchTourPlacesRemote({
+      ...categoryParams,
+      category: shouldSearchFestivals(categoryParams) ? "festival" : category,
+    }));
+  }
+  if (category === "book" || kakaoGroupCode(category)) {
+    searches.push(searchKakaoPlacesRemote(categoryParams));
+  }
+  return searches.length ? searches : [searchKakaoPlacesRemote(categoryParams)];
+}
+
 export async function searchDiscoverPlaces(input: DiscoverSearchInput | string): Promise<DiscoverSearchResult> {
   const params = typeof input === "string" ? { query: input } : input;
-  const categories = "categories" in params ? [...new Set(params.categories)] : [];
-  let raw: DiscoverSearchResult;
-  if (categories.length > 0) {
-    raw = await Promise.all(categories.map(category => {
-      const categoryParams = { ...params, categories: undefined, category };
-      return usesTourApi(category)
-        ? searchTourPlacesRemote(categoryParams)
-        : searchKakaoPlacesRemote(categoryParams);
-    })).then(results => {
-      const successful = results.filter((result): result is Extract<DiscoverSearchResult, { ok: true }> => result.ok);
-      if (!successful.length) return results[0] ?? { ok: false as const, code: "NO_RESULT", error: "장소를 불러오지 못했어요." };
-      const unique = new Map<string, DiscoverCandidate>();
-      successful.flatMap(result => result.places).forEach(place => unique.set(`${place.externalSource}:${place.externalPlaceId}`, place));
-      return {
-        ok: true as const,
-        places: [...unique.values()].slice(0, 36),
-        isEnd: successful.every(result => result.isEnd),
-        page: params.page ?? 1,
-        totalCount: successful.reduce((sum, result) => sum + result.totalCount, 0),
-      };
-    });
-  } else {
-    const singleParams = params as KakaoSearchInput;
-    raw = usesTourApi(singleParams.category)
-      ? await searchTourPlacesRemote(singleParams)
-      : await searchKakaoPlacesRemote(singleParams);
-  }
+  const categories = discoverSearchCategories(params);
+  let raw: DiscoverSearchResult = await Promise.all(categories.flatMap(category => discoverCategorySearches(params, category))).then(results => {
+    const successful = results.filter((result): result is Extract<DiscoverSearchResult, { ok: true }> => result.ok);
+    if (!successful.length) return results[0] ?? { ok: false as const, code: "NO_RESULT", error: "장소를 불러오지 못했어요." };
+    const unique = new Map<string, DiscoverCandidate>();
+    successful.flatMap(result => result.places).filter(keepDiscoverPlace).forEach(place => unique.set(`${place.externalSource}:${place.externalPlaceId}`, place));
+    return {
+      ok: true as const,
+      places: [...unique.values()].slice(0, 36),
+      isEnd: successful.every(result => result.isEnd),
+      page: params.page ?? 1,
+      totalCount: successful.reduce((sum, result) => sum + result.totalCount, 0),
+    };
+  });
   if (!raw.ok) return raw;
+  raw = { ...raw, places: raw.places.filter(keepDiscoverPlace) };
   if ((params.page ?? 1) > 1 || raw.places.length < 2) return raw;
   const { places: saved } = await listPlaces();
   const ranking = await rankDiscoverCandidates(raw.places, saved);
@@ -292,7 +302,7 @@ export async function updateMyPlaceStatus(placeId: string, status: PlacePreferen
     place_id: placeId,
     user_id: session.userId,
     status,
-  });
+  }, { onConflict: "place_id,user_id" });
   if (error) return { error: error.message };
 
   if (status === "want" || status === "must_visit" || status === "revisit") {

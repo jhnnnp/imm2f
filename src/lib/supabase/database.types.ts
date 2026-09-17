@@ -198,6 +198,34 @@ export type Database = {
         Update: { result?: Json };
         Relationships: [];
       };
+      date_drafts: {
+        Row: {
+          id: string;
+          couple_id: string;
+          scheduled_on: string;
+          title: string;
+          notes: string;
+          items: Json;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          couple_id: string;
+          scheduled_on: string;
+          title?: string;
+          notes?: string;
+          items?: Json;
+          updated_at?: string;
+        };
+        Update: {
+          scheduled_on?: string;
+          title?: string;
+          notes?: string;
+          items?: Json;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       plans: {
         Row: {
           id: string;

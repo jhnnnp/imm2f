@@ -42,16 +42,31 @@ export type KakaoSearchResult =
 const KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json";
 const KAKAO_CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json";
 const PAGE_SIZE = 15;
+const NATURE_CATEGORY = /공원|숲|산|봉우리|해변|해수욕|계곡|호수|폭포|수목원|식물원|자연|생태|한강|하천|섬|해안/;
+const STAY_CATEGORY = /호텔|펜션|숙박|게스트하우스|리조트|모텔|여관/;
+const FESTIVAL_CATEGORY = /축제|페스티벌|페스티발/;
+const KAKAO_UTILITY_GROUP_CODES = new Set([
+  "MT1", "CS2", "PS3", "SC4", "AC5", "PK6", "OL7", "SW8", "BK9", "AG2", "PO3", "HP8", "PM9",
+]);
+
+export function isKakaoUtilityGroupCode(code: string | undefined) {
+  return KAKAO_UTILITY_GROUP_CODES.has(code ?? "");
+}
 
 export function mapKakaoCategory(groupCode: string, categoryName: string): { id: PlaceCategoryId; label: string } {
   const name = categoryName.replace(/\s+/g, "");
-  if (name.includes("서점") || name.includes("책방") || name.includes("북카페")) return { id: "book", label: "책방" };
-  if (name.includes("사진")) return { id: "photo", label: "사진" };
+  const last = categoryName.split(">").map(part => part.trim()).filter(Boolean).at(-1) || "";
+  if (name.includes("서점") || name.includes("책방") || name.includes("북카페") || name.includes("도서관")) return { id: "book", label: "책방" };
+  if (FESTIVAL_CATEGORY.test(name)) return { id: "festival", label: "축제" };
+  if (name.includes("사진") || name.includes("포토")) return { id: "photo", label: "사진" };
   if (groupCode === "CE7") return { id: "cafe", label: "카페" };
   if (groupCode === "FD6") return { id: "restaurant", label: "맛집" };
-  if (groupCode === "AT4") return { id: "nature", label: "자연" };
-  if (groupCode === "CT1") return { id: "photo", label: "문화" };
-  const last = categoryName.split(">").map(part => part.trim()).filter(Boolean).at(-1);
+  if (groupCode === "AD5" || STAY_CATEGORY.test(name)) return { id: "stay", label: "숙박" };
+  if (groupCode === "AT4") {
+    if (NATURE_CATEGORY.test(last) || NATURE_CATEGORY.test(name)) return { id: "nature", label: "자연" };
+    return { id: "tourist", label: "관광지" };
+  }
+  if (groupCode === "CT1") return { id: "photo", label: "사진" };
   // Unknown Kakao categories must never inherit cafe semantics. The date planner
   // validates these separately and only admits a small set of safe exceptions.
   return { id: "tourist", label: last || "장소" };
@@ -65,6 +80,7 @@ export function districtFromAddress(address: string) {
 
 function toCandidate(document: KakaoKeywordDocument): KakaoPlaceCandidate | null {
   if (!document.id || !document.place_name) return null;
+  if (isKakaoUtilityGroupCode(document.category_group_code)) return null;
   const lng = Number(document.x);
   const lat = Number(document.y);
   if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
@@ -197,11 +213,14 @@ export async function searchKakaoPlacesRemote(input: KakaoSearchInput): Promise<
       }
       const payload = JSON.parse(text) as KakaoKeywordResponse;
       const mapped = (payload.documents ?? []).map(toCandidate).filter((item): item is KakaoPlaceCandidate => item !== null);
+      const categorized = input.category && input.category !== "all"
+        ? mapped.filter(place => place.category === input.category)
+        : mapped;
       const administrativeArea = input.region?.split(/\s+/).findLast(part => /(?:구|군|시)$/.test(part));
       const scoped = administrativeArea
-        ? mapped.filter(place => `${place.address} ${place.roadAddress} ${place.district}`.includes(administrativeArea))
+        ? categorized.filter(place => `${place.address} ${place.roadAddress} ${place.district}`.includes(administrativeArea))
         : [];
-      const places = scoped.length ? scoped : mapped;
+      const places = scoped.length ? scoped : categorized;
       return {
         ok: true,
         places,

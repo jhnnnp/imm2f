@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap, Marker } from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import { DEFAULT_MAP_CENTER } from "../config/regions";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { PlaceCategoryIcon } from "./PlaceCategoryIcon";
 import { clampRadius, distanceMeters } from "../geo";
 import { isDiscoverPlace } from "../discover";
 import type { Place, PlaceCategoryId } from "../types/place";
+import { htmlMarkerPlacement } from "@/features/map/htmlMarker";
 
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
@@ -104,17 +106,22 @@ export function PlacesMapPane({
         const key = place.externalPlaceId || place.id;
         if (seen.has(key)) return;
         seen.add(key);
+        const discover = isDiscoverPlace(place);
         const marker = document.createElement("button");
         marker.type = "button";
-        marker.className = isDiscoverPlace(place) ? "discover-marker" : "memory-marker";
+        marker.className = discover ? "discover-marker" : "memory-marker";
         marker.setAttribute("aria-label", `${place.name} 미리보기`);
-        marker.innerHTML = `<span>${isDiscoverPlace(place) ? "·" : "♥"}</span>`;
+        marker.innerHTML = discover ? `<span>·</span>` : `<i aria-hidden="true"></i><span>♥</span>`;
         if (place.id === selectedId) marker.classList.add("is-selected");
         marker.addEventListener("click", () => {
           onSelect(place.id);
           map.flyTo({ center: place.coordinates!, zoom: Math.max(map.getZoom(), 14), duration: 600 });
         });
-        markersRef.current.push(new maplibregl.Marker({ element: marker, anchor: "bottom" }).setLngLat(place.coordinates).addTo(map));
+        markersRef.current.push(new maplibregl.Marker({
+          element: marker,
+          ...htmlMarkerPlacement,
+          anchor: discover ? "center" : "bottom",
+        }).setLngLat(place.coordinates).addTo(map));
       });
     });
     return () => {

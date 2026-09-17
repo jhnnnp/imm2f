@@ -72,4 +72,6 @@ export type UpdateMemoryInput = {
   memoryType: MemoryType;
   lng: number | null;
   lat: number | null;
+  coverUrl?: string;
+  photo?: PhotoMetadataInput;
 };

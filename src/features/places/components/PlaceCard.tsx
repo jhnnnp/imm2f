@@ -24,7 +24,7 @@ export function PlaceCard({
     </button>
     <button className={`heart ${saved ? "is-on" : ""}`} onClick={onToggleSave} aria-label={saved ? "저장됨" : "이 장소 저장"}>{saved ? "♥" : "♡"}</button>
     <button className="place-info" onClick={onSelect}>
-      <span>{place.categoryLabel} · {place.district}</span><h3>{place.name}</h3><p>{place.recommendReason || place.description || place.roadAddress || place.address || place.district}</p>
+      <span>{place.categoryLabel} · {place.district}{place.category === "festival" && place.openingHours ? ` · ${place.openingHours}` : ""}</span><h3>{place.name}</h3><p>{place.recommendReason || place.description || place.roadAddress || place.address || place.district}</p>
       {discover
         ? <div className="couple-fit" aria-label="두 사람의 취향 예상 점수"><span>나 <b>{place.userFit}</b></span><span>파트너 <b>{place.partnerFit}</b></span><em>{saved ? "저장됨" : "후보"}</em></div>
         : <div className="couple-fit"><span>나 <b>{place.userFit}</b></span><span>파트너 <b>{place.partnerFit}</b></span><em><PlaceStatusBadge status={place.partnerStatus} /></em></div>}

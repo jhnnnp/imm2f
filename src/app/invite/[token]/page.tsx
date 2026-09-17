@@ -24,7 +24,7 @@ export default async function InviteTokenPage({ params }: { params: Promise<{ to
   }
 
   return (
-    <AuthScreen title="둘의 공간으로 초대받았어요" description="같은 장소 기록, 같은 계획을 나누게 됩니다.">
+    <AuthScreen title="우리의공간으로 초대받았어요" description="같은 장소 기록, 같은 계획을 나누게 됩니다.">
       <InviteAccept token={token} inviterName={preview.inviterName} signedIn={session.mode === "authenticated"} />
     </AuthScreen>
   );

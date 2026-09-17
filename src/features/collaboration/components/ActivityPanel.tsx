@@ -1,10 +1,14 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
-import { preloadCoupleActivities } from "../activityClient";
+import { useTossDismiss } from "@/lib/useTossDismiss";
+import { invalidateCoupleActivities, preloadCoupleActivities } from "../activityClient";
+import { clearCoupleActivities, dismissCoupleActivities } from "../actions";
 import { hrefForActivity, type CoupleActivity } from "../types";
+
+type ActivityGroup = CoupleActivity & { ids: string[]; count: number };
 
 function ActivityIcon({ action }: { action: string }) {
   const type = action.startsWith("TRIP") ? "trip" : action.startsWith("DATE") ? "calendar" :
@@ -21,11 +25,36 @@ function ActivityIcon({ action }: { action: string }) {
   return <span className={`activity-symbol is-${type}`} aria-hidden="true"><svg viewBox="0 0 24 24">{paths}</svg></span>;
 }
 
+function groupActivities(items: CoupleActivity[]) {
+  return items.reduce<ActivityGroup[]>((groups, item) => {
+    const last = groups[groups.length - 1];
+    if (last && last.action === item.action && last.title === item.title && last.actorUserId === item.actorUserId) {
+      last.ids.push(item.id);
+      last.count += 1;
+      return groups;
+    }
+    groups.push({ ...item, ids: [item.id], count: 1 });
+    return groups;
+  }, []);
+}
+
 export function ActivityPanel({ initialItems }: { initialItems?: CoupleActivity[] }) {
+  const router = useRouter();
   const session = useAppSession();
+  const feedRef = useRef<HTMLDivElement>(null);
+  const skipClick = useRef(false);
+  const dragged = useRef<string[] | null>(null);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [items, setItems] = useState<CoupleActivity[]>(initialItems ?? []);
   const [loaded, setLoaded] = useState(initialItems !== undefined || session.mode !== "authenticated");
   const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const dismissing = useTossDismiss(Boolean(draggingId), feedRef);
+  const dismissingRef = useRef(false);
+  dismissingRef.current = dismissing;
+  const groups = useMemo(() => groupActivities(items), [items]);
 
   useEffect(() => {
     if (initialItems !== undefined) {
@@ -55,30 +84,131 @@ export function ActivityPanel({ initialItems }: { initialItems?: CoupleActivity[
     };
   }, [initialItems, session.mode]);
 
+  useEffect(() => {
+    return () => {
+      if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    };
+  }, []);
+
+  const refresh = () => {
+    invalidateCoupleActivities();
+    void preloadCoupleActivities(8, true);
+    void preloadCoupleActivities(20, true);
+  };
+
+  const toss = (ids: string[]) => {
+    const previous = items;
+    setItems(current => current.filter(item => !ids.includes(item.id)));
+    setStatus(ids.length > 1 ? "같은 이야기를 지웠어요" : "이야기를 지웠어요");
+    refresh();
+    void dismissCoupleActivities(ids).then(result => {
+      if (result.error) {
+        setItems(previous);
+        setError(result.error);
+        setStatus("");
+      }
+    });
+  };
+
+  const askClear = () => {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      if (confirmTimer.current) clearTimeout(confirmTimer.current);
+      confirmTimer.current = setTimeout(() => setConfirmClear(false), 4000);
+      return;
+    }
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    setConfirmClear(false);
+    const previous = items;
+    setItems([]);
+    setStatus("오늘의 이야기를 비웠어요");
+    refresh();
+    void clearCoupleActivities().then(result => {
+      if (result.error) {
+        setItems(previous);
+        setError(result.error);
+        setStatus("");
+      }
+    });
+  };
+
   return (
     <div>
       <div className="panel-heading">
         <div>
           <span className="eyebrow">TODAY</span>
           <h2>오늘의 이야기</h2>
+          {items.length > 0 && (
+            <button
+              className={`activity-clear${confirmClear ? " is-confirm" : ""}`}
+              type="button"
+              onClick={askClear}
+            >
+              {confirmClear ? "정말 지울까요?" : "모두 비우기"}
+            </button>
+          )}
         </div>
       </div>
-      <div className="activity-feed">
+      <div
+        ref={feedRef}
+        className={`activity-feed${dismissing ? " is-tossing" : ""}`}
+        data-toss-hint="바깥에 놓으면 지워져요"
+      >
         {!loaded && <div className="panel-loading" aria-label="이야기 불러오는 중"><i /><i /><i /></div>}
         {error && <p className="panel-error" role="alert">{error}</p>}
+        {status && <p className="sr-only" role="status">{status}</p>}
         {loaded && !items.length && (
           <p className="form-hint">아직 기록이 없어요. 장소를 저장하거나 일정을 바꾸면 여기에 쌓여요.</p>
         )}
-        {items.map(item => {
+        {groups.map(group => {
+          const active = draggingId === group.id;
+          const href = hrefForActivity(group.action);
           return (
-            <Link className={`activity-item ${item.important ? "important" : ""}`} href={hrefForActivity(item.action)} key={item.id}>
-              <ActivityIcon action={item.action} />
+            <article
+              className={`activity-item ${group.important ? "important" : ""}${group.count > 1 ? " is-stack" : ""}${active ? " is-dragging" : ""}${active && dismissing ? " is-toss" : ""}`}
+              key={group.ids.join("-")}
+              draggable
+              role="link"
+              tabIndex={0}
+              aria-label={group.count > 1
+                ? `${group.title}. 같은 이야기 ${group.count}개. 바깥으로 끌면 함께 지워져요.`
+                : `${group.title}. 바깥으로 끌면 지워져요.`}
+              onDragStart={event => {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", group.id);
+                dragged.current = group.ids;
+                skipClick.current = true;
+                setDraggingId(group.id);
+              }}
+              onDragEnd={() => {
+                if (dismissingRef.current && dragged.current) toss(dragged.current);
+                dragged.current = null;
+                setDraggingId(null);
+                window.setTimeout(() => {
+                  skipClick.current = false;
+                }, 0);
+              }}
+              onClick={() => {
+                if (skipClick.current) {
+                  skipClick.current = false;
+                  return;
+                }
+                router.push(href);
+              }}
+              onKeyDown={event => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                router.push(href);
+              }}
+            >
+              <ActivityIcon action={group.action} />
               <div className="activity-copy">
-                <b>{item.title}</b>
-                <small>{item.actorName} · {item.createdAt}</small>
-                {item.detail ? <p>{item.detail}</p> : null}
+                <b>{group.title}</b>
+                <small>{group.actorName} · {group.createdAt}</small>
+                {group.detail ? <p>{group.detail}</p> : null}
+                {group.count > 1 ? <em className="activity-count">같은 이야기 {group.count}개</em> : null}
               </div>
-            </Link>
+            </article>
           );
         })}
       </div>

@@ -18,7 +18,7 @@ const KIND_META: Record<NoteKind, {
   emptyDescription: string;
 }> = {
   vault: {
-    kicker: "둘만의 중요한 정보를 안전하게 한곳에",
+    kicker: "우리의  중요한 정보를 안전하게 한곳에",
     addLabel: "보관하기",
     dialogTitle: "보관함에 추가",
     titleLabel: "무엇을 보관할까요?",
@@ -45,16 +45,16 @@ const KIND_META: Record<NoteKind, {
     detailLabel: "이루고 싶은 이유나 계획",
     collectionLabel: "버킷리스트",
     emptyTitle: "함께 이루고 싶은 일을 적어보세요",
-    emptyDescription: "가고 싶은 곳부터 사소한 도전까지, 둘의 다음 장면을 시작해요.",
+    emptyDescription: "가고 싶은 곳부터 사소한 도전까지, 우리의다음 장면을 시작해요.",
   },
 };
 
 function NoteKindIcon({ kind }: { kind: NoteKind }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      {kind === "vault" && <><rect x="3.5" y="4" width="17" height="16" rx="3"/><circle cx="12" cy="12" r="3"/><path d="M12 9v6M9 12h6"/></>}
-      {kind === "gift" && <><path d="M3.5 9h17v11h-17zM2.5 6h19v3h-19zM12 6v14"/><path d="M12 6H8.8A2.3 2.3 0 1 1 11 3.1L12 6Zm0 0h3.2A2.3 2.3 0 1 0 13 3.1L12 6Z"/></>}
-      {kind === "bucket" && <><path d="M6 9.5V6a6 6 0 0 1 12 0v3.5M4 8h16l-1 13H5L4 8Z"/><path d="M9 12v4M15 12v4"/></>}
+      {kind === "vault" && <><rect x="3.5" y="4" width="17" height="16" rx="3" /><circle cx="12" cy="12" r="3" /><path d="M12 9v6M9 12h6" /></>}
+      {kind === "gift" && <><path d="M3.5 9h17v11h-17zM2.5 6h19v3h-19zM12 6v14" /><path d="M12 6H8.8A2.3 2.3 0 1 1 11 3.1L12 6Zm0 0h3.2A2.3 2.3 0 1 0 13 3.1L12 6Z" /></>}
+      {kind === "bucket" && <><path d="M6 9.5V6a6 6 0 0 1 12 0v3.5M4 8h16l-1 13H5L4 8Z" /><path d="M9 12v4M15 12v4" /></>}
     </svg>
   );
 }
@@ -100,7 +100,7 @@ function GiftLinkPreview({ url, mode = "card" }: { url: string; mode?: "card" | 
   }, [mode, url, valid]);
 
   if (!valid) return mode === "editor" ? (
-    <div className="gift-preview-empty"><span>↗</span><b>링크를 붙여 넣어 보세요</b><p>대표 이미지와 상품 정보를 불러와<br/>구매 후보 카드로 정리해 드려요.</p></div>
+    <div className="gift-preview-empty"><span>↗</span><b>링크를 붙여 넣어 보세요</b><p>대표 이미지와 상품 정보를 불러와<br />구매 후보 카드로 정리해 드려요.</p></div>
   ) : null;
 
   if (mode === "card") {
@@ -298,7 +298,7 @@ export function CoupleNotesBoard({
             <div className="bucket-collaborators" aria-label="함께 작성하는 사람">
               <span>{collaborators?.viewerName.slice(0, 1) || "나"}</span>
               <span>{collaborators?.partnerName.slice(0, 1) || "?"}</span>
-              <small><b>함께 쓰는 목록</b>{collaborators ? `${collaborators.viewerName} · ${collaborators.partnerName}` : "우리 둘의 공간"}</small>
+              <small><b>함께 쓰는 목록</b>{collaborators ? `${collaborators.viewerName} · ${collaborators.partnerName}` : "우리 우리의공간"}</small>
             </div>
             <div className="bucket-paper-progress" aria-label={`버킷리스트 달성률 ${progress}%`}>
               <span><b>{highlightCount}</b> / {notes.length || 0} 완료</span>

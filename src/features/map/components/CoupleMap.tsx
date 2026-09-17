@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GeoJSONSource, Map as MapLibreMap, Marker, StyleSpecification } from "maplibre-gl";
-import { getDemoPlaces, subscribeDemoPlaces } from "@/features/places/demoPlaces";
-import { ensureDemoGunsanTrip, getDraftPlanMeta, getDraftTripItems, subscribeDraftTrip } from "@/features/planning/draftTrip";
+import "maplibre-gl/dist/maplibre-gl.css";
 import type { CouplePlan, PlanItem } from "@/features/planning/types/plan";
-import { getArchivedTrips, subscribeTripArchive, type TripJourney } from "@/features/trip/tripArchive";
+import type { ArchivedTripPlan } from "@/features/planning/actions";
 import type { Memory } from "@/features/memories/types";
 import type { Place, PlacePreferenceStatus } from "@/features/places/types/place";
+import { htmlMarkerPlacement, screenOffsetForStackedPins } from "@/features/map/htmlMarker";
 
 const MAP_STYLE: StyleSpecification = {
   version: 8,
@@ -32,15 +32,6 @@ const MAP_STYLE: StyleSpecification = {
 };
 
 const DEFAULT_CENTER: [number, number] = [126.978, 37.5665];
-const MAP_PREVIEW_PLACES: Place[] = [
-  { id: "map-preview-1", name: "서울숲", category: "nature", categoryLabel: "공원", district: "성동구 성수동", description: "천천히 걷고 오래 이야기하기 좋은 곳", durationMinutes: 120, expectedCostTwo: null, coordinates: [127.0374, 37.5444], visualTone: "green", userStatus: "visited", partnerStatus: "visited", userFit: 92, partnerFit: 90 },
-  { id: "map-preview-2", name: "아키비스트", category: "cafe", categoryLabel: "카페", district: "종로구 효자로", description: "둘만의 조용한 오후를 남겨둔 카페", durationMinutes: 90, expectedCostTwo: null, coordinates: [126.9715, 37.5796], visualTone: "brown", userStatus: "revisit", partnerStatus: "visited", userFit: 95, partnerFit: 88 },
-  { id: "map-preview-3", name: "남산 산책길", category: "nature", categoryLabel: "산책", district: "중구 남산동", description: "해 질 무렵 도시가 가장 부드럽게 보이는 길", durationMinutes: 100, expectedCostTwo: null, coordinates: [126.9882, 37.5512], visualTone: "green", userStatus: "want", partnerStatus: "want", userFit: 86, partnerFit: 91 },
-  { id: "map-preview-4", name: "익선동 골목", category: "tourist", categoryLabel: "동네", district: "종로구 익선동", description: "작은 가게를 발견하며 함께 걷고 싶은 골목", durationMinutes: 120, expectedCostTwo: null, coordinates: [126.9893, 37.5743], visualTone: "brown", userStatus: "must_visit", partnerStatus: "want", userFit: 90, partnerFit: 87 },
-  { id: "map-preview-5", name: "망원한강공원", category: "nature", categoryLabel: "공원", district: "마포구 망원동", description: "돗자리와 음악만 챙겨 가면 되는 저녁", durationMinutes: 150, expectedCostTwo: null, coordinates: [126.8996, 37.5524], visualTone: "blue", userStatus: "revisit", partnerStatus: "revisit", userFit: 93, partnerFit: 94 },
-  { id: "map-preview-6", name: "을지로 작은 바", category: "restaurant", categoryLabel: "다이닝", district: "중구 을지로", description: "하루를 천천히 마무리하고 싶은 공간", durationMinutes: 100, expectedCostTwo: null, coordinates: [126.9926, 37.5662], visualTone: "brown", userStatus: "visited", partnerStatus: "visited", userFit: 88, partnerFit: 85 },
-  { id: "map-preview-7", name: "북촌 전망길", category: "photo", categoryLabel: "뷰 포인트", district: "종로구 가회동", description: "같은 풍경을 서로 다른 시선으로 담는 곳", durationMinutes: 80, expectedCostTwo: null, coordinates: [126.9847, 37.5824], visualTone: "blue", userStatus: "want", partnerStatus: "want", userFit: 89, partnerFit: 92 },
-];
 type PinLabel = "want" | "visited" | "revisit" | "memory";
 type PlacePin = { kind: "place"; id: string; label: Exclude<PinLabel, "memory">; place: Place; coordinates: [number, number] };
 type MemoryPin = { kind: "memory"; id: string; label: "memory"; memory: Memory; coordinates: [number, number] };
@@ -124,7 +115,7 @@ function framePins(map: MapLibreMap, pins: MapPin[], viewMode: ViewMode, duratio
     duration,
   });
 }
-export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, persist }: { places: Place[]; memories: Memory[]; trip: CouplePlan; persist: boolean }) {
+export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, archivedTrips: initialArchivedTrips }: { places: Place[]; memories: Memory[]; trip: CouplePlan; archivedTrips: ArchivedTripPlan[] }) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
@@ -132,7 +123,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
   const [tripItems, setTripItems] = useState(initialTrip.items);
   const [tripTitle, setTripTitle] = useState(initialTrip.title || "우리가 고른 여행");
   const [tripDayCount, setTripDayCount] = useState(Math.max(1, initialTrip.dayCount));
-  const [archivedTrips, setArchivedTrips] = useState<TripJourney[]>([]);
+  const [archivedTrips] = useState<ArchivedTripPlan[]>(initialArchivedTrips);
   const [selectedJourneyId, setSelectedJourneyId] = useState("current");
   const [journeyMenuOpen, setJourneyMenuOpen] = useState(false);
   const [mapState, setMapState] = useState<MapState>("loading");
@@ -143,64 +134,30 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
   const [activeLabels, setActiveLabels] = useState<Set<PinLabel>>(() => new Set(FILTERS.map(item => item.id)));
 
   useEffect(() => {
-    if (persist) { setPlaces(initialPlaces); return; }
-    const sync = () => setPlaces(getDemoPlaces());
-    sync();
-    return subscribeDemoPlaces(sync);
-  }, [initialPlaces, persist]);
+    setPlaces(initialPlaces);
+    setTripItems(initialTrip.items);
+    setTripTitle(initialTrip.title || "우리가 고른 여행");
+    setTripDayCount(Math.max(1, initialTrip.dayCount));
+  }, [initialPlaces, initialTrip]);
 
-  useEffect(() => {
-    if (persist) {
-      setTripItems(initialTrip.items);
-      setTripTitle(initialTrip.title || "우리가 고른 여행");
-      setTripDayCount(Math.max(1, initialTrip.dayCount));
-      return;
-    }
-    ensureDemoGunsanTrip();
-    const syncTrip = () => {
-      const items = getDraftTripItems();
-      const meta = getDraftPlanMeta("trip");
-      const itemDays = items.reduce((max, item) => Math.max(max, (item.dayIndex ?? 0) + 1), 1);
-      setTripItems(items);
-      setTripTitle(meta.title);
-      setTripDayCount(Math.max(meta.dayCount, itemDays));
-    };
-    syncTrip();
-    const unsubscribeDraft = subscribeDraftTrip(syncTrip);
-    const syncArchive = () => setArchivedTrips(getArchivedTrips());
-    syncArchive();
-    const unsubscribeArchive = subscribeTripArchive(syncArchive);
-    return () => { unsubscribeDraft(); unsubscribeArchive(); };
-  }, [initialTrip, persist]);
-
-  useEffect(() => {
-    if (!persist) return;
-    setArchivedTrips(getArchivedTrips());
-    return subscribeTripArchive(() => setArchivedTrips(getArchivedTrips()));
-  }, [persist]);
-
-  const tripJourneys = useMemo<TripJourney[]>(() => {
-    const journeys: TripJourney[] = [{
-      id: "current",
-      title: tripTitle,
-      startDate: initialTrip.startDate ?? getDraftPlanMeta("trip").startDate,
-      dayCount: tripDayCount,
-      status: "completed",
-      items: tripItems,
-    }, ...archivedTrips];
+  const tripJourneys = useMemo<ArchivedTripPlan[]>(() => {
+    const journeys: ArchivedTripPlan[] = [
+      ...(tripItems.length ? [{
+        id: "current",
+        title: tripTitle || "우리가 고른 여행",
+        startDate: initialTrip.startDate ?? "",
+        dayCount: tripDayCount,
+        status: "completed" as const,
+        items: tripItems,
+      }] : []),
+      ...archivedTrips.filter(journey => journey.items.length > 0),
+    ];
     return journeys.filter((journey, index) => journeys.findIndex(candidate => candidate.startDate === journey.startDate && candidate.title === journey.title && candidate.dayCount === journey.dayCount) === index);
   }, [tripTitle, tripDayCount, tripItems, archivedTrips, initialTrip.startDate]);
   const selectedJourney = tripJourneys.find(journey => journey.id === selectedJourneyId) ?? tripJourneys[0];
   const journeyItems = selectedJourney?.items ?? [];
 
-  const displayPlaces = useMemo(() => {
-    if (persist) return places;
-    const existingIds = new Set(places.map(place => place.id));
-    const existingNames = new Set(places.map(place => place.name.trim().toLocaleLowerCase("ko-KR")));
-    return [...places, ...MAP_PREVIEW_PLACES.filter(place =>
-      !existingIds.has(place.id) && !existingNames.has(place.name.trim().toLocaleLowerCase("ko-KR")),
-    )];
-  }, [places, persist]);
+  const displayPlaces = places;
 
   const pins = useMemo(() => {
     const next: MapPin[] = [];
@@ -337,7 +294,8 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     if (selected && !visiblePins.some(pin => pin.id === selected.id)) setSelected(null);
     if (!visiblePins.length) { framePins(map, [], viewMode, 480); return; }
     void import("maplibre-gl").then(maplibregl => {
-      markersRef.current = visiblePins.map(pin => {
+      const pinCoordinates = visiblePins.map(item => item.coordinates);
+      markersRef.current = visiblePins.map((pin, index) => {
         const element = document.createElement("button");
         element.type = "button";
         element.className = `memory-city-marker is-${pin.label} ${viewMode === "3d" ? "is-3d" : ""}`;
@@ -345,7 +303,11 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
         const statusLabel = pin.kind === "trip" ? `${(pin.item.dayIndex ?? 0) + 1}일차 ${pin.dayOrder}번째 일정` : FILTERS.find(filter => filter.id === pin.label)?.label ?? "장소";
         element.setAttribute("aria-label", `${pinName(pin)} · ${statusLabel}`);
         const image = pin.kind === "memory" ? pin.memory.coverUrl : pin.kind === "place" ? pin.place.image : null;
-        element.innerHTML = image ? `<img src="${image}" alt=""><i></i>` : `<span style="background:rgb(${markerColor(pin.label)})">${pin.kind === "trip" ? `<b>${pin.dayOrder}</b>` : markerIcon(pin.label)}</span><i></i>`;
+        const head = image
+          ? `<img src="${image}" alt="">`
+          : `<span style="background:rgb(${markerColor(pin.label)})">${pin.kind === "trip" ? `<b>${pin.dayOrder}</b>` : markerIcon(pin.label)}</span>`;
+        element.innerHTML = `<span class="memory-city-marker-art">${head}<i></i></span>`;
+        if (selectedRef.current?.id === pin.id) element.classList.add("is-selected");
         element.addEventListener("click", event => {
           event.stopPropagation();
           markersRef.current.forEach(marker => marker.getElement().classList.remove("is-selected"));
@@ -353,10 +315,12 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
           setSelected(pin);
           map.easeTo({ center: pin.coordinates, zoom: Math.max(map.getZoom(), 15.2), pitch: viewMode === "3d" ? 48 : 0, bearing: viewMode === "3d" ? -14 : 0, duration: 620, offset: [0, -48] });
         });
-        const offset: [number, number] | undefined = pin.kind === "trip"
-          ? (pin.dayOrder % 2 === 0 ? [11, 8] : [-11, 0])
-          : undefined;
-        return new maplibregl.Marker({ element, anchor: "bottom", offset }).setLngLat(pin.coordinates).addTo(map);
+        const offset = screenOffsetForStackedPins(pinCoordinates, index);
+        return new maplibregl.Marker({
+          element,
+          ...htmlMarkerPlacement,
+          ...(offset ? { offset } : {}),
+        }).setLngLat(pin.coordinates).addTo(map);
       });
       framePins(map, visiblePins, viewMode, 620);
     });
@@ -371,8 +335,8 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
   }
 
   return <div className={`couple-map-wrap memory-city ${viewMode === "3d" ? "is-3d" : "is-2d"}`}>
-    <div ref={container} className="maplibre-canvas" aria-label="둘의 기억이 쌓인 3D 지도" />
-    {mapState === "loading" && <div className="map-loading" role="status"><span>둘의 기억 도시를 만들고 있어요</span><i /></div>}
+    <div ref={container} className="maplibre-canvas" aria-label="우리의기억이 쌓인 3D 지도" />
+    {mapState === "loading" && <div className="map-loading" role="status"><span>우리의기억 도시를 만들고 있어요</span><i /></div>}
     {mapState === "error" && <div className="map-error" role="alert"><b>기억 지도를 불러오지 못했어요</b><span>잠시 후 다시 시도해 주세요.</span><button type="button" className="outline-button" onClick={() => setMapAttempt(value => value + 1)}>다시 불러오기</button></div>}
 
     <header className="memory-map-heading"><span className="eyebrow">OUR MAP</span><h1>우리의 기억 지도</h1></header>
@@ -382,7 +346,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
       </nav>
       <div className="memory-map-right-tools">
         {mode === "time" && <div className="memory-year-picker" aria-label="연도 선택">{years.map(year => <button type="button" key={year} className={selectedYear === year ? "is-active" : ""} aria-pressed={selectedYear === year} onClick={() => { setSelectedYear(year); setSelected(null); }}>{year}</button>)}</div>}
-        {mode === "trips" && <div className="memory-trip-summary" aria-label={`${selectedJourney.title} 일정`}>
+        {mode === "trips" && selectedJourney && <div className="memory-trip-summary" aria-label={`${selectedJourney.title} 일정`}>
           <div className="memory-trip-picker" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setJourneyMenuOpen(false); }}>
             <button type="button" className="memory-trip-picker-trigger" aria-haspopup="listbox" aria-expanded={journeyMenuOpen} onClick={() => setJourneyMenuOpen(value => !value)}><span>{formatJourneyRange(selectedJourney.startDate, selectedJourney.dayCount)}</span><b>{selectedJourney.title}</b><i aria-hidden="true">⌄</i></button>
             {journeyMenuOpen && <div className="memory-trip-picker-menu" role="listbox" aria-label="여행 선택">{tripJourneys.map(journey => <button type="button" role="option" aria-selected={journey.id === selectedJourneyId} key={journey.id} onClick={() => { setSelectedJourneyId(journey.id); setSelected(null); setJourneyMenuOpen(false); }}><span>{formatJourneyRange(journey.startDate, journey.dayCount)}</span><b>{journey.title}</b></button>)}</div>}
@@ -395,10 +359,11 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
 
     {mode !== "trips" && <div className="memory-map-filters" aria-label="장소 분류">{FILTERS.map(filter => <button type="button" key={filter.id} className={`is-${filter.id} ${activeLabels.has(filter.id) ? "is-active" : ""}`} aria-pressed={activeLabels.has(filter.id)} onClick={() => toggleFilter(filter.id)}><i /><span>{filter.label}</span><b>{counts[filter.id]}</b></button>)}</div>}
 
-    {mode === "trips" && <div className="memory-map-stats"><b>{formatJourneyRange(selectedJourney.startDate, selectedJourney.dayCount)}</b><span>{tripPins.length}곳</span><i /><span>여행 전체 동선</span></div>}
+    {mode === "trips" && selectedJourney && <div className="memory-map-stats"><b>{formatJourneyRange(selectedJourney.startDate, selectedJourney.dayCount)}</b><span>{tripPins.length}곳</span><i /><span>여행 전체 동선</span></div>}
 
-    {!pins.length && <div className="memory-map-empty"><b>첫 장소가 기억 도시의 시작이에요.</b><span>둘이 좋아하는 장소를 저장하면 지도 위에 흔적이 생겨요.</span><Link href="/places">장소 둘러보기 →</Link></div>}
-    {mapState === "ready" && visiblePins.length === 0 && pins.length > 0 && <div className="map-filter-empty">이 보기에는 아직 표시할 기억이 없어요.</div>}
+    {mode === "trips" && !selectedJourney && <div className="memory-map-empty"><b>아직 지도에 올릴 여행이 없어요.</b><span>여행 일정에 장소를 담으면 동선이 보여요.</span><Link href="/trip">여행 짜기 →</Link></div>}
+    {mode !== "trips" && !pins.length && <div className="memory-map-empty"><b>첫 장소가 기억 도시의 시작이에요.</b><span>둘이 좋아하는 장소를 저장하면 지도 위에 흔적이 생겨요.</span><Link href="/places">장소 둘러보기 →</Link></div>}
+    {mapState === "ready" && mode !== "trips" && visiblePins.length === 0 && pins.length > 0 && <div className="map-filter-empty">이 보기에는 아직 표시할 기억이 없어요.</div>}
 
     {selected && <aside className="memory-sheet">
       <button type="button" className="memory-sheet-close" onClick={() => { markersRef.current.forEach(marker => marker.getElement().classList.remove("is-selected")); setSelected(null); }} aria-label="선택한 장소 닫기">×</button>
@@ -408,7 +373,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
         {selected.kind === "memory" && selected.memory.photos.slice(0, 1).map(photo => <img key={photo.id} src={photo.storageUrl} alt="" />)}
         {((selected.kind === "place" && !selected.place.image) || (selected.kind === "memory" && !selected.memory.coverUrl) || selected.kind === "trip") && <div><span>{selected.kind === "trip" ? selected.dayOrder : "⌖"}</span><small>{selected.kind === "trip" ? selected.item.startTime : "OUR PLACE"}</small></div>}
       </div>
-      <div className="memory-sheet-copy"><span>{selected.kind === "place" ? `${selected.place.categoryLabel} · ${selected.place.district}` : selected.kind === "memory" ? `${selected.memory.happenedOn} · ${selected.memory.locationLabel || "우리의 추억"}` : `${(selected.item.dayIndex ?? 0) + 1}일차 ${selected.item.startTime} · ${selected.item.category}`}</span><h2>{pinName(selected)}</h2><p>{selected.kind === "place" ? selected.place.description || "둘의 장소로 저장했어요." : selected.kind === "memory" ? selected.memory.description || "둘만 아는 장면이에요." : selected.item.memo}</p></div>
+      <div className="memory-sheet-copy"><span>{selected.kind === "place" ? `${selected.place.categoryLabel} · ${selected.place.district}` : selected.kind === "memory" ? `${selected.memory.happenedOn} · ${selected.memory.locationLabel || "우리의 추억"}` : `${(selected.item.dayIndex ?? 0) + 1}일차 ${selected.item.startTime} · ${selected.item.category}`}</span><h2>{pinName(selected)}</h2><p>{selected.kind === "place" ? selected.place.description || "우리의 장소로 저장했어요." : selected.kind === "memory" ? selected.memory.description || "우리의  아는 장면이에요." : selected.item.memo}</p></div>
       <Link href={selected.kind === "place" ? `/places?selected=${selected.place.id}` : selected.kind === "memory" ? "/memories" : "/trip"}>{selected.kind === "place" ? "장소 자세히 보기" : selected.kind === "memory" ? "추억 보러 가기" : "여행 일정 보기"}<span>→</span></Link>
     </aside>}
   </div>;

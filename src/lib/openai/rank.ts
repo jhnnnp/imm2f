@@ -1,5 +1,6 @@
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
-import { getOpenAiApiKey, getOpenAiModel, isOpenAiConfigured } from "./env";
+import { completeJson } from "./client";
+import { isOpenAiConfigured } from "./env";
 
 export type RankedCandidate = {
   externalSource: "kakao" | "tourapi";
@@ -48,32 +49,22 @@ export async function rankDiscoverCandidates(candidates: DiscoverCandidate[], sa
   const allowed = new Set(catalog.map(item => item.id));
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${getOpenAiApiKey()}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: getOpenAiModel(),
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: "You rank existing place candidates for a couple. Never invent places or ids. Only use the provided candidate ids. Reply JSON: {\"rankings\":[{\"id\":\"kakao:123\",\"userFit\":0-100,\"partnerFit\":0-100,\"reason\":\"Korean one sentence\"}]}. Include every provided id exactly once.",
-          },
-          {
-            role: "user",
-            content: `저장된 취향:\n${tasteLines(saved) || "- 아직 저장된 장소가 없어요."}\n\n후보:\n${JSON.stringify(catalog)}`,
-          },
-        ],
-      }),
+    const parsed = await completeJson<RankPayload>({
+      temperature: 0.2,
+      maxTokens: 2500,
+      reasoningEffort: "low",
+      messages: [
+        {
+          role: "system",
+          content: "You rank existing place candidates for a couple. Never invent places or ids. Only use the provided candidate ids. Reply JSON: {\"rankings\":[{\"id\":\"kakao:123\",\"userFit\":0-100,\"partnerFit\":0-100,\"reason\":\"Korean one sentence\"}]}. Include every provided id exactly once.",
+        },
+        {
+          role: "user",
+          content: `저장된 취향:\n${tasteLines(saved) || "- 아직 저장된 장소가 없어요."}\n\n후보:\n${JSON.stringify(catalog)}`,
+        },
+      ],
     });
-    if (!response.ok) return null;
-    const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const text = payload.choices?.[0]?.message?.content ?? "";
-    const parsed = JSON.parse(text) as RankPayload;
+    if (!parsed) return null;
     const ranked: RankedCandidate[] = [];
     const seen = new Set<string>();
     for (const row of parsed.rankings ?? []) {

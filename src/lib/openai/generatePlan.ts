@@ -1,5 +1,6 @@
 import type { PlanItem, PlanKind, PlanOption, PlanOptionStyle } from "@/features/planning/types/plan";
-import { getOpenAiApiKey, getOpenAiModel, isOpenAiConfigured } from "./env";
+import { completeJson } from "./client";
+import { isOpenAiConfigured } from "./env";
 
 export type PlanPlaceInput = {
   id: string;
@@ -201,45 +202,34 @@ export async function generatePlanOptionsWithOpenAi(input: {
   }
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${getOpenAiApiKey()}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: getOpenAiModel(),
-        temperature: 0.3,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You generate exactly 3 day-plan options for a couple using ONLY provided place ids.",
-              "Never invent places, addresses, coordinates, distances, travel times, prices, or opening hours.",
-              "Styles must be balanced, relaxed, budget (A/B/C).",
-              "Each option items: place_id, start_time (HH:MM), duration_minutes (30-240), optional Korean memo.",
-              `For ${input.kind === "date" ? "date: 2-4 places starting near 15:00" : "trip day: 3-6 places starting near 09:30"}.`,
-              "Prefer want/must_visit/revisit. Avoid dislike/not_interested when alternatives exist.",
-              "JSON: {\"options\":[{\"key\":\"A\",\"style\":\"balanced\",\"title\":\"...\",\"summary\":\"Korean one sentence\",\"items\":[...]}, ...]}",
-            ].join(" "),
-          },
-          {
-            role: "user",
-            content: `계획 종류: ${input.kind}\n특별 요청: ${prompt || "없음"}\n후보 장소:\n${JSON.stringify(catalog)}`,
-          },
-        ],
-      }),
+    const parsed = await completeJson<GeneratePayload>({
+      temperature: 0.3,
+      maxTokens: 3500,
+      reasoningEffort: "low",
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You generate exactly 3 day-plan options for a couple using ONLY provided place ids.",
+            "Never invent places, addresses, coordinates, distances, travel times, prices, or opening hours.",
+            "Styles must be balanced, relaxed, budget (A/B/C).",
+            "Each option items: place_id, start_time (HH:MM), duration_minutes (30-240), optional Korean memo.",
+            `For ${input.kind === "date" ? "date: 2-4 places starting near 15:00" : "trip day: 3-6 places starting near 09:30"}.`,
+            "Prefer want/must_visit/revisit. Avoid dislike/not_interested when alternatives exist.",
+            "JSON: {\"options\":[{\"key\":\"A\",\"style\":\"balanced\",\"title\":\"...\",\"summary\":\"Korean one sentence\",\"items\":[...]}, ...]}",
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: `계획 종류: ${input.kind}\n특별 요청: ${prompt || "없음"}\n후보 장소:\n${JSON.stringify(catalog)}`,
+        },
+      ],
     });
-    if (!response.ok) {
+    if (!parsed) {
       const options = heuristicOptions(input.kind, input.places);
       if (!options.length) return { error: "AI 일정을 만들지 못했어요. 잠시 후 다시 시도해 주세요." };
       return { options, note: note || "AI 응답이 불안정해 규칙 기반 3안으로 대체했어요." };
     }
-
-    const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const text = payload.choices?.[0]?.message?.content ?? "";
-    const parsed = JSON.parse(text) as GeneratePayload;
     const byStyle = new Map<PlanOptionStyle, RawOption>();
     for (const row of parsed.options ?? []) {
       const style = normalizeStyle(row.style) ?? normalizeStyle(row.key);

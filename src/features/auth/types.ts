@@ -1,6 +1,4 @@
 export type AppSession =
-  | { mode: "prototype" }
-  | { mode: "demo" }
   | { mode: "guest" }
   | {
       mode: "setup_error";

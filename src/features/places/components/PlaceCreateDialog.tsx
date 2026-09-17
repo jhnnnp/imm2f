@@ -1,18 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { createPlace, saveKakaoPlace } from "../actions";
-import { visualToneForCategory } from "../mappers";
 import type { DiscoverCandidate, Place, PlaceCategoryId } from "../types/place";
-import { withObjectParticle } from "@/lib/korean";
 
 export function PlaceCreateDialog({
   open,
   mode,
   persist,
   candidate,
-  savedKakaoIds,
   onClose,
   onSaved,
 }: {
@@ -20,12 +18,16 @@ export function PlaceCreateDialog({
   mode: "confirm" | "manual";
   persist: boolean;
   candidate: DiscoverCandidate | null;
-  savedKakaoIds: string[];
   onClose: () => void;
   onSaved: (place: Place, notice: string) => void;
 }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useLayoutEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -33,35 +35,7 @@ export function PlaceCreateDialog({
     setPending(false);
   }, [open, mode, candidate?.externalPlaceId]);
 
-  if (!open) return null;
-
-  function localFromCandidate(item: DiscoverCandidate, description: string): Place {
-    const source = item.externalSource === "tourapi" ? "tourapi" : "kakao";
-    return {
-      id: `${source}-${item.externalPlaceId}`,
-      name: item.name,
-      category: item.category,
-      categoryLabel: item.categoryLabel,
-      district: item.district,
-      address: item.address,
-      roadAddress: item.roadAddress,
-      mapUrl: item.mapUrl,
-      phone: item.phone,
-      openingHours: item.openingHours ?? null,
-      description,
-      durationMinutes: 60,
-      expectedCostTwo: null,
-      coordinates: item.coordinates,
-      image: item.image,
-      visualTone: visualToneForCategory(item.category),
-      userStatus: "want",
-      partnerStatus: "neutral",
-      userFit: 0,
-      partnerFit: 0,
-      externalSource: source,
-      externalPlaceId: item.externalPlaceId,
-    };
-  }
+  if (!open || !mounted) return null;
 
   async function confirmKakao(formData: FormData) {
     if (!candidate) return;
@@ -70,18 +44,8 @@ export function PlaceCreateDialog({
     const description = String(formData.get("description") ?? "").trim();
 
     if (!persist) {
-      if (savedKakaoIds.includes(`${candidate.externalSource}:${candidate.externalPlaceId}`) || savedKakaoIds.includes(candidate.externalPlaceId)) {
-        setPending(false);
-        onSaved(localFromCandidate(candidate, description), `${candidate.name}은 이미 저장된 장소예요.`);
-        onClose();
-        return;
-      }
-      onSaved(
-        localFromCandidate(candidate, description),
-        `${withObjectParticle(candidate.name)} 이 기기에 저장했어요. 데모를 나가기 전까지 유지돼요.`,
-      );
       setPending(false);
-      onClose();
+      setError("로그인 후 장소를 저장할 수 있어요.");
       return;
     }
 
@@ -91,7 +55,7 @@ export function PlaceCreateDialog({
       setError(result.error);
       return;
     }
-    onSaved(result.place, result.duplicate ? `${result.place.name}은 이미 저장된 장소예요.` : `${result.place.name}을 둘의 장소에 저장했어요.`);
+    onSaved(result.place, result.duplicate ? `${result.place.name}은 이미 저장된 장소예요.` : `${result.place.name}을 우리의 장소에 저장했어요.`);
     onClose();
   }
 
@@ -108,26 +72,8 @@ export function PlaceCreateDialog({
     };
 
     if (!persist) {
-      const local: Place = {
-        id: crypto.randomUUID(),
-        name: input.name.trim(),
-        category: input.category,
-        categoryLabel: PLACE_CATEGORIES.find(item => item.id === input.category)?.label ?? "장소",
-        district: input.district.trim(),
-        description: input.description.trim(),
-        durationMinutes: input.durationMinutes,
-        expectedCostTwo: input.expectedCostTwo,
-        coordinates: null,
-        visualTone: visualToneForCategory(input.category),
-        userStatus: "want",
-        partnerStatus: "neutral",
-        userFit: 0,
-        partnerFit: 0,
-        externalSource: "manual",
-      };
-      onSaved(local, `${withObjectParticle(local.name)} 이 기기에 저장했어요. 데모를 나가기 전까지 유지돼요.`);
       setPending(false);
-      onClose();
+      setError("로그인 후 장소를 저장할 수 있어요.");
       return;
     }
 
@@ -137,15 +83,15 @@ export function PlaceCreateDialog({
       setError(result.error);
       return;
     }
-    onSaved(result.place, `${result.place.name}을 둘의 장소에 저장했어요.`);
+    onSaved(result.place, `${result.place.name}을 우리의 장소에 저장했어요.`);
     onClose();
   }
 
-  return (
+  return createPortal(
     <div className="dialog-backdrop" onClick={onClose} role="presentation">
-      <div className="place-create-dialog" onClick={event => event.stopPropagation()}>
+      <div className="place-create-dialog" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="place-create-title">
         <span className="eyebrow">NEW PLACE</span>
-        <h2>{mode === "manual" ? "직접 입력" : "이 장소 저장"}</h2>
+        <h2 id="place-create-title">{mode === "manual" ? "직접 입력" : "이 장소 저장"}</h2>
 
         {mode === "confirm" && candidate && (
           <form className="auth-form" action={formData => void confirmKakao(formData)}>
@@ -154,7 +100,7 @@ export function PlaceCreateDialog({
               <small>{candidate.categoryLabel} · {candidate.roadAddress || candidate.address}</small>
             </div>
             <label className="field">
-              <span>둘만의 메모</span>
+              <span>우리의  메모</span>
               <textarea name="description" rows={3} placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것" />
             </label>
             <p className="form-hint">저장하기 전까지는 목록에만 보여요.</p>
@@ -184,7 +130,7 @@ export function PlaceCreateDialog({
               <input name="district" placeholder="서울 성수동" />
             </label>
             <label className="field">
-              <span>둘만의 메모</span>
+              <span>우리의  메모</span>
               <textarea name="description" rows={3} placeholder="둘에게 이 장소가 특별한 이유" />
             </label>
             {error && <p className="form-error" role="alert">{error}</p>}
@@ -195,6 +141,7 @@ export function PlaceCreateDialog({
           </form>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

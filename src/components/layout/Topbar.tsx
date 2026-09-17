@@ -128,8 +128,8 @@ export function Topbar() {
               </>
             ) : (
               <>
-                <p>{session.mode === "demo" ? "데모로 둘러보는 중이에요" : "아직 로그인하지 않았어요"}</p>
-                <Link href={session.mode === "demo" ? "/demo/exit" : "/login"} role="menuitem" onClick={() => setMenuOpen(false)}>{session.mode === "demo" ? "데모 나가기" : "로그인"}</Link>
+                <p>아직 로그인하지 않았어요</p>
+                <Link href="/login" role="menuitem" onClick={() => setMenuOpen(false)}>로그인</Link>
                 <Link href="/signup" role="menuitem" onClick={() => setMenuOpen(false)}>공간 만들기</Link>
               </>
             )}

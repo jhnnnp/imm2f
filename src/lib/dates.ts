@@ -5,6 +5,15 @@ export function toIsoDate(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
+export function seoulTodayIso(now = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+
 export function addDays(iso: string, amount: number) {
   const date = new Date(`${iso}T12:00:00`);
   date.setDate(date.getDate() + amount);

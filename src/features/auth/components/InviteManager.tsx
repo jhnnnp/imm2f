@@ -34,7 +34,7 @@ export function InviteManager() {
   async function shareLink() {
     if (!link) return;
     if (navigator.share) {
-      await navigator.share({ title: "ONLY US 초대", text: "우리 둘의 공간에 초대할게요.", url: link });
+      await navigator.share({ title: "ONLY US 초대", text: "우리 우리의공간에 초대할게요.", url: link });
       return;
     }
     await copyLink();
@@ -45,7 +45,7 @@ export function InviteManager() {
       <article className="invite-create-card">
         <header>
           <span className="invite-symbol" aria-hidden="true"><i>나</i><i>?</i></span>
-          <div><span className="eyebrow">PRIVATE INVITATION</span><h2>{link ? "초대 링크가 준비됐어요" : "둘의 공간을 연결해요"}</h2><p>{link ? "아래 링크를 파트너에게 전해 주세요." : "한 사람만 링크를 만들면 충분해요. 파트너가 수락하는 순간 같은 공간이 열립니다."}</p></div>
+          <div><span className="eyebrow">PRIVATE INVITATION</span><h2>{link ? "초대 링크가 준비됐어요" : "우리의공간을 연결해요"}</h2><p>{link ? "아래 링크를 파트너에게 전해 주세요." : "한 사람만 링크를 만들면 충분해요. 파트너가 수락하는 순간 같은 공간이 열립니다."}</p></div>
         </header>
         {link ? (
           <div className="invite-result" aria-live="polite">
@@ -67,7 +67,7 @@ export function InviteManager() {
       <aside className="invite-guide">
         <span className="eyebrow">HOW IT WORKS</span>
         <h3>초대부터 연결까지</h3>
-        <ol><li><b>1</b><div><strong>링크 만들기</strong><p>안전한 일회용 초대 링크를 만들어요.</p></div></li><li><b>2</b><div><strong>파트너에게 전달</strong><p>메신저로 링크를 직접 공유해 주세요.</p></div></li><li><b>3</b><div><strong>둘의 공간 시작</strong><p>수락하면 장소, 일정과 추억을 함께 봐요.</p></div></li></ol>
+        <ol><li><b>1</b><div><strong>링크 만들기</strong><p>안전한 일회용 초대 링크를 만들어요.</p></div></li><li><b>2</b><div><strong>파트너에게 전달</strong><p>메신저로 링크를 직접 공유해 주세요.</p></div></li><li><b>3</b><div><strong>우리의공간 시작</strong><p>수락하면 장소, 일정과 추억을 함께 봐요.</p></div></li></ol>
         <p className="invite-privacy"><span>✓</span>링크를 받은 한 사람만 연결할 수 있어요.</p>
       </aside>
     </section>

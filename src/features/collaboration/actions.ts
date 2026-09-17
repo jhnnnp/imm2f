@@ -1,10 +1,9 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import type { Json } from "@/lib/supabase/database.types";
-import type { PlanItem, PlanKind } from "@/features/planning/types/plan";
-import type { ActivityAction, CoupleActivity, PlanVersion } from "./types";
+import type { ActivityAction, CoupleActivity } from "./types";
 
 type ActivityRow = {
   id: string;
@@ -13,16 +12,6 @@ type ActivityRow = {
   detail: string;
   actor_user_id: string | null;
   created_at: string;
-};
-
-type VersionRow = {
-  id: string;
-  plan_kind: PlanKind;
-  version_number: number;
-  change_summary: string;
-  created_by: string | null;
-  created_at: string;
-  snapshot: PlanItem[] | null;
 };
 
 const IMPORTANT_ACTIONS = new Set([
@@ -72,17 +61,49 @@ export async function recordCoupleActivity(input: {
   afterValue?: Json;
 }) {
   const supabase = await createClient();
-  if (!supabase) return;
-  await supabase.from("activities").insert({
-    couple_id: input.coupleId,
-    actor_user_id: input.actorUserId,
-    entity_type: input.entityType,
-    entity_id: input.entityId ?? "",
-    action: input.action,
+  const service = createServiceClient();
+  const client = supabase ?? service;
+  if (!client) return;
+
+  const entityId = input.entityId ?? "";
+  const latest = await client
+    .from("activities")
+    .select("id, action, actor_user_id, entity_type, entity_id, created_at")
+    .eq("couple_id", input.coupleId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const row = latest.data;
+  const sameStory = row
+    && row.action === input.action
+    && row.actor_user_id === input.actorUserId
+    && row.entity_type === input.entityType
+    && row.entity_id === entityId
+    && Date.now() - new Date(row.created_at).getTime() < 30 * 60 * 1000;
+
+  const payload = {
     title: input.title,
     detail: input.detail ?? "",
     before_value: input.beforeValue ?? null,
     after_value: input.afterValue ?? null,
+  };
+
+  if (sameStory) {
+    const updated = await client.from("activities").update(payload).eq("id", row.id).eq("couple_id", input.coupleId).select("id");
+    if (!updated.error && updated.data?.length) return;
+    if (service && client !== service) {
+      const retry = await service.from("activities").update(payload).eq("id", row.id).eq("couple_id", input.coupleId).select("id");
+      if (!retry.error && retry.data?.length) return;
+    }
+  }
+
+  await client.from("activities").insert({
+    couple_id: input.coupleId,
+    actor_user_id: input.actorUserId,
+    entity_type: input.entityType,
+    entity_id: entityId,
+    action: input.action,
+    ...payload,
   });
 }
 
@@ -105,6 +126,46 @@ export async function queuePartnerEmail(input: {
   });
 }
 
+export async function dismissCoupleActivity(id: string) {
+  return dismissCoupleActivities([id]);
+}
+
+export async function dismissCoupleActivities(ids: string[]) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return { ok: true as const };
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return { error: "로그인이 필요해요." };
+  const supabase = await createClient();
+  const service = createServiceClient();
+  const scopedDelete = async (client: NonNullable<typeof supabase> | NonNullable<typeof service>) => {
+    const result = await client.from("activities").delete().in("id", unique).eq("couple_id", session.coupleId).select("id");
+    return Boolean(result.error) || !result.data?.length;
+  };
+
+  let failed = true;
+  if (supabase) failed = await scopedDelete(supabase);
+  if (failed && service) failed = await scopedDelete(service);
+  if (failed) return { error: "이야기를 지우지 못했어요." };
+  return { ok: true as const };
+}
+
+export async function clearCoupleActivities() {
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return { error: "로그인이 필요해요." };
+  const supabase = await createClient();
+  const service = createServiceClient();
+  const scopedClear = async (client: NonNullable<typeof supabase> | NonNullable<typeof service>) => {
+    const result = await client.from("activities").delete().eq("couple_id", session.coupleId).select("id");
+    return Boolean(result.error) || !result.data?.length;
+  };
+
+  let failed = true;
+  if (supabase) failed = await scopedClear(supabase);
+  if (failed && service) failed = await scopedClear(service);
+  if (failed) return { error: "이야기를 지우지 못했어요." };
+  return { ok: true as const };
+}
+
 export async function loadCoupleActivities(limit = 20): Promise<CoupleActivity[]> {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return [];
@@ -115,6 +176,7 @@ export async function loadCoupleActivities(limit = 20): Promise<CoupleActivity[]
     .from("activities")
     .select("id, action, title, detail, actor_user_id, created_at")
     .eq("couple_id", session.coupleId)
+    .neq("entity_type", "date_draft")
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -131,40 +193,4 @@ export async function loadCoupleActivities(limit = 20): Promise<CoupleActivity[]
     important: IMPORTANT_ACTIONS.has(row.action),
     createdAt: relativeTime(row.created_at),
   }));
-}
-
-export async function loadPlanVersions(kind: PlanKind, limit = 12): Promise<{ versions: PlanVersion[]; latest: number }> {
-  const session = await getAppSession();
-  if (session.mode !== "authenticated") return { versions: [], latest: 0 };
-  const supabase = await createClient();
-  if (!supabase) return { versions: [], latest: 0 };
-
-  const { data: plan } = await supabase
-    .from("plans")
-    .select("id")
-    .eq("couple_id", session.coupleId)
-    .eq("kind", kind)
-    .maybeSingle();
-  if (!plan) return { versions: [], latest: 0 };
-
-  const { data } = await supabase
-    .from("plan_versions")
-    .select("id, plan_kind, version_number, change_summary, created_by, created_at, snapshot")
-    .eq("plan_id", plan.id)
-    .order("version_number", { ascending: false })
-    .limit(limit);
-
-  const rows = (data ?? []) as VersionRow[];
-  const names = await loadNames(rows.map(row => row.created_by));
-  const versions = rows.map(row => ({
-    id: row.id,
-    planKind: row.plan_kind,
-    versionNumber: row.version_number,
-    changeSummary: row.change_summary,
-    createdByName: row.created_by ? names.get(row.created_by) ?? "파트너" : "나",
-    createdAt: relativeTime(row.created_at),
-    snapshot: Array.isArray(row.snapshot) ? row.snapshot : [],
-  }));
-
-  return { versions, latest: versions[0]?.versionNumber ?? 0 };
 }
