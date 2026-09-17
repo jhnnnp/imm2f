@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { proposePlanEdits, recommendDatePlan } from "../actions";
 import type { AIPlannerReply, AIPlannerState, PlanChange, PlanItem, PlanKind } from "@/features/planning/types/plan";
 import type { Place } from "@/features/places/types/place";
@@ -48,6 +48,17 @@ export function AIPlanEditor({
   const [onboardingActivities, setOnboardingActivities] = useState<string[]>([]);
   const [error, setError] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const chatLogRef = useRef<HTMLDivElement>(null);
+  const keepChatPinnedRef = useRef(true);
+
+  useEffect(() => {
+    const chatLog = chatLogRef.current;
+    if (!chatLog || !keepChatPinnedRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      chatLog.scrollTo({ top: chatLog.scrollHeight, behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [conversation]);
 
   const chosen = useMemo(
     () => changes.filter((_, index) => selected[index]),
@@ -200,7 +211,15 @@ export function AIPlanEditor({
         </>
       ) : (
         <>
-          <div className="ai-chat-log" aria-live="polite">
+          <div
+            className="ai-chat-log"
+            aria-live="polite"
+            ref={chatLogRef}
+            onScroll={event => {
+              const element = event.currentTarget;
+              keepChatPinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 36;
+            }}
+          >
               <p className="is-assistant">오늘 어떤 데이트를 하고 싶나요?<br />하고 싶은 걸 먼저 고르면 어울리는 동선을 같이 만들게요.</p>
               {conversation.map((message, index) => (
                 <p key={`${message.role}-${index}`} className={message.role === "user" ? "is-user" : "is-assistant"}>{message.text}</p>

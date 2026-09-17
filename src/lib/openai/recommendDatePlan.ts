@@ -233,6 +233,8 @@ function validateAndRepairRows(rows: SelectedRow[], candidates: DiscoverCandidat
     conversation.includes("보드게임") ? "보드게임|보드카페" : "",
     conversation.includes("볼링") ? "볼링장" : "",
     conversation.includes("오락실") ? "오락실" : "",
+    conversation.includes("만화카페") ? "만화카페" : "",
+    /VR\s*체험|VR카페/.test(conversation) ? "VR카페|VR" : "",
   ].filter(Boolean);
   if (!requestedPlayTypes.length && /놀거리|놀고|놀러|실내/.test(conversation)) requestedPlayTypes.push("볼링장|방탈출|보드게임|보드카페|오락실|만화카페");
   for (const pattern of requestedPlayTypes.slice(0, 2)) {

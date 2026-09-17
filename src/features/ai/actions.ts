@@ -271,7 +271,7 @@ export async function recommendDatePlan(input: { prompt: string; latestPrompt?: 
   const state = {
     ...interpretation.state,
     regions: [...new Set([...(interpretation.state.regions ?? []), ...mentionedRegions])].slice(0, 3),
-    requiredPlaces: interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|실내 놀거리)$/.test(place)),
+    requiredPlaces: interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|만화카페|VR(?:카페|\s*체험)?|실내 놀거리)$/.test(place)),
   };
   const searchRegions = state.regions.length ? state.regions : [state.region || inferred.region].filter(Boolean);
   const condition = { ...inferred, region: searchRegions.join(" · ") || state.region || inferred.region };
@@ -285,13 +285,16 @@ export async function recommendDatePlan(input: { prompt: string; latestPrompt?: 
   if (clarifyingQuestion) {
     const routeOptions = ["카페 후 이동", "저녁 식사 후 이동", "바로 이동"];
     const activityOptions = ["카페", "식사", "산책", "전시", "실내 놀거리", "야경"];
+    const indoorPlayOptions = ["방탈출", "보드게임", "볼링", "오락실", "만화카페", "VR 체험"];
     const cuisineOptions = ["한식", "일식", "중식", "양식", "상관없음"];
     const asksCuisine = /어떤.*(?:음식|식당)|음식점|무엇을\s*먹|메뉴/.test(clarifyingQuestion);
+    const asksIndoorPlay = /실내|놀거리|방탈출|보드게임|볼링|오락실|만화카페|VR/.test(clarifyingQuestion)
+      && state.preferredCategories.includes("실내 놀거리");
     return {
       status: "clarification",
       message: clarifyingQuestion,
       state: { ...state, pendingQuestion: clarifyingQuestion },
-      options: routeQuestion ? routeOptions : asksCuisine ? cuisineOptions : activityOptions,
+      options: routeQuestion ? routeOptions : asksCuisine ? cuisineOptions : asksIndoorPlay ? indoorPlayOptions : activityOptions,
       multiple: !routeQuestion && !asksCuisine,
     };
   }
@@ -301,7 +304,7 @@ export async function recommendDatePlan(input: { prompt: string; latestPrompt?: 
   const retainedPlaces = state.preserveExistingPlaces ? (input.previousPlaceNames ?? []).map(name => name.trim()).filter(Boolean).slice(0, 5) : [];
   const directQueries = [...new Set([...explicitPlaces, ...retainedPlaces])].filter(name => !state.excludedPlaces.includes(name));
   const wantsPlay = /놀거리|놀고|놀러|방탈출|볼링|보드게임|게임/.test(prompt) || state.preferredCategories.includes("실내 놀거리");
-  const playQueries = ["방탈출", "볼링", "보드게임", "오락실"];
+  const playQueries = ["방탈출", "볼링", "보드게임", "오락실", "만화카페", "VR카페"];
   const activityQueries = wantsPlay
     ? searchRegions.slice(-1).flatMap(region => playQueries.map(query => searchKakaoPlacesRemote({ region, query, page: 1 })))
     : [];

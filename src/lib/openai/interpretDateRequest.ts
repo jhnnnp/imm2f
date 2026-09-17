@@ -40,7 +40,7 @@ function fallbackPatch(message: string, previous?: AIPlannerState): IntentPayloa
   for (const cuisine of ["한식", "일식", "중식", "양식"]) {
     if (message.includes(cuisine) && !categories.includes(cuisine)) categories.push(cuisine);
   }
-  if (/놀거리|놀고|놀러|방탈출|볼링|보드게임|게임/.test(message) && !categories.includes("실내 놀거리")) categories.push("실내 놀거리");
+  if (/놀거리|놀고|놀러|방탈출|볼링|보드게임|오락실|만화카페|VR|게임/.test(message) && !categories.includes("실내 놀거리")) categories.push("실내 놀거리");
   const regionOnly = !previous && placeTerms.length <= 1 && categories.length === 0
     && /(?:역|동|구|시)(?:\s*(?:근처|주변))?\s*$/.test(message.trim());
   const hasBridgeActivity = /카페|커피|디저트|저녁|점심|아침|식사|밥|산책|전시|영화|공연/.test(message);
