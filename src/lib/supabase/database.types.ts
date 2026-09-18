@@ -494,6 +494,26 @@ export type Database = {
         };
         Relationships: [];
       };
+      memory_wall_boards: {
+        Row: {
+          couple_id: string;
+          state: Json;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          couple_id: string;
+          state?: Json;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Update: {
+          state?: Json;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Relationships: [];
+      };
       memory_photos: {
         Row: {
           id: string;
