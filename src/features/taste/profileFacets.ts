@@ -46,6 +46,6 @@ export function profileFacets(profile: TasteProfile): TasteFacet[] {
     { label: "하루", items: rhythm },
     { label: "하고 싶은 것", items: profile.activities.map(labelForActivity) },
     { label: "음식·술", items: table },
-    { label: "코스에서 빼는 것", items: profile.avoidFoods, kind: "avoid" },
+    { label: "코스에서 빼는 것", items: profile.avoidFoods, kind: "avoid" as const },
   ].filter(facet => facet.items.length);
 }

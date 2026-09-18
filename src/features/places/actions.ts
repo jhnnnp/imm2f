@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
 import { looksLikeNonVenue } from "@/lib/kakao/dateCandidate";
-import { searchKakaoPlacesRemote, type KakaoSearchInput } from "@/lib/kakao/local";
+import { searchKakaoPlacesRemote, type KakaoSearchInput, type KakaoSearchResult } from "@/lib/kakao/local";
 import { loadTourPlaceDetail as loadTourPlaceDetailRemote, searchTourPlacesRemote } from "@/lib/tourapi/client";
 import { shouldSearchFestivals } from "@/lib/tourapi/festivalSchedule";
 import { applyRanking, rankDiscoverCandidates, type RankedCandidate } from "@/lib/openai/rank";
@@ -89,38 +89,53 @@ function keepDiscoverPlace(place: DiscoverCandidate) {
   return isAllowedKakaoDiscoverPlace(place) && !looksLikeNonVenue(place);
 }
 
-function discoverCategorySearches(params: DiscoverSearchInput, category: PlaceCategoryId) {
+function toDiscoverSearchResult(result: KakaoSearchResult): DiscoverSearchResult {
+  return result;
+}
+
+function discoverSearchPromise(promise: Promise<KakaoSearchResult>): Promise<DiscoverSearchResult> {
+  return promise.then(toDiscoverSearchResult);
+}
+
+function discoverCategorySearches(params: DiscoverSearchInput, category: PlaceCategoryId): Promise<DiscoverSearchResult>[] {
   const { categories: _ignored, ...rest } = "categories" in params ? params : { ...params, categories: undefined };
   const categoryParams: KakaoSearchInput = { ...rest, category };
-  const searches: Array<Promise<DiscoverSearchResult>> = [];
+  const searches: Promise<DiscoverSearchResult>[] = [];
   if (shouldSearchFestivals(categoryParams) || usesTourApi(category)) {
-    searches.push(searchTourPlacesRemote({
+    searches.push(discoverSearchPromise(searchTourPlacesRemote({
       ...categoryParams,
       category: shouldSearchFestivals(categoryParams) ? "festival" : category,
-    }));
+    })));
   }
   if (category === "book" || kakaoGroupCode(category)) {
-    searches.push(searchKakaoPlacesRemote(categoryParams));
+    searches.push(discoverSearchPromise(searchKakaoPlacesRemote(categoryParams)));
   }
-  return searches.length ? searches : [searchKakaoPlacesRemote(categoryParams)];
+  return searches.length ? searches : [discoverSearchPromise(searchKakaoPlacesRemote(categoryParams))];
+}
+
+function mergeDiscoverResults(results: DiscoverSearchResult[], page: number): DiscoverSearchResult {
+  const successful = results.filter((result): result is Extract<DiscoverSearchResult, { ok: true }> => result.ok);
+  if (!successful.length) {
+    return results[0] ?? { ok: false, code: "NO_RESULT", error: "장소를 불러오지 못했어요." };
+  }
+  const unique = new Map<string, DiscoverCandidate>();
+  successful.flatMap(result => result.places).filter(keepDiscoverPlace).forEach(place => {
+    unique.set(`${place.externalSource}:${place.externalPlaceId}`, place);
+  });
+  return {
+    ok: true,
+    places: [...unique.values()].slice(0, 36),
+    isEnd: successful.every(result => result.isEnd),
+    page,
+    totalCount: successful.reduce((sum, result) => sum + result.totalCount, 0),
+  };
 }
 
 export async function searchDiscoverPlaces(input: DiscoverSearchInput | string): Promise<DiscoverSearchResult> {
   const params = typeof input === "string" ? { query: input } : input;
   const categories = discoverSearchCategories(params);
-  let raw: DiscoverSearchResult = await Promise.all(categories.flatMap(category => discoverCategorySearches(params, category))).then(results => {
-    const successful = results.filter((result): result is Extract<DiscoverSearchResult, { ok: true }> => result.ok);
-    if (!successful.length) return results[0] ?? { ok: false as const, code: "NO_RESULT", error: "장소를 불러오지 못했어요." };
-    const unique = new Map<string, DiscoverCandidate>();
-    successful.flatMap(result => result.places).filter(keepDiscoverPlace).forEach(place => unique.set(`${place.externalSource}:${place.externalPlaceId}`, place));
-    return {
-      ok: true as const,
-      places: [...unique.values()].slice(0, 36),
-      isEnd: successful.every(result => result.isEnd),
-      page: params.page ?? 1,
-      totalCount: successful.reduce((sum, result) => sum + result.totalCount, 0),
-    };
-  });
+  const searches = categories.flatMap(category => discoverCategorySearches(params, category));
+  let raw: DiscoverSearchResult = mergeDiscoverResults(await Promise.all(searches), params.page ?? 1);
   if (!raw.ok) return raw;
   raw = { ...raw, places: raw.places.filter(keepDiscoverPlace) };
   if ((params.page ?? 1) > 1 || raw.places.length < 2) return raw;
