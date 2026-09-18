@@ -1,5 +1,6 @@
 "use server";
 
+import { cache } from "react";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
@@ -88,11 +89,9 @@ function isMissingSchemaObject(error: { code?: string; message?: string } | null
 
 type PlanningClient = NonNullable<Awaited<ReturnType<typeof createClient>>>;
 
-async function hydratePlanItemCoordinates(
+async function attachStoredPlanCoordinates(
   supabase: PlanningClient,
   coupleId: string,
-  planId: string,
-  title: string,
   items: PlanItem[],
 ) {
   if (!items.length) return items;
@@ -118,8 +117,18 @@ async function hydratePlanItemCoordinates(
       .in("external_place_id", discoverIds);
     rows.push(...(data ?? []));
   }
+  return withLookedUpCoordinates(items, placeCoordinateLookup(rows));
+}
 
-  let hydrated = withLookedUpCoordinates(items, placeCoordinateLookup(rows));
+async function hydratePlanItemCoordinates(
+  supabase: PlanningClient,
+  coupleId: string,
+  planId: string,
+  title: string,
+  items: PlanItem[],
+) {
+  if (!items.length) return items;
+  let hydrated = await attachStoredPlanCoordinates(supabase, coupleId, items);
   const missing = hydrated.filter(item => !asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]));
   if (!missing.length) return hydrated;
 
@@ -167,7 +176,7 @@ function planWriteVariants(payload: PlanWritePayload) {
   ] as const;
 }
 
-export async function loadCouplePlan(kind: PlanKind): Promise<CouplePlan> {
+export const loadCouplePlan = cache(async (kind: PlanKind): Promise<CouplePlan> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return emptyPlan(false);
   const supabase = await createClient();
@@ -252,8 +261,30 @@ export async function loadCouplePlan(kind: PlanKind): Promise<CouplePlan> {
     revalidatePath("/our-map");
     revalidatePath("/");
   }
-  const liveItems = await hydratePlanItemCoordinates(supabase, session.coupleId, plan.id, plan.title ?? "", stripped.items);
+  const liveItems = await attachStoredPlanCoordinates(supabase, session.coupleId, stripped.items);
   return { ...stripped, items: liveItems };
+});
+
+export async function hydrateCouplePlanCoordinates(kind: PlanKind): Promise<CouplePlan> {
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return emptyPlan(false);
+  const supabase = await createClient();
+  if (!supabase) return emptyPlan(false);
+
+  const base = await loadCouplePlan(kind);
+  if (!base.persist) return base;
+
+  let planQuery = await supabase
+    .from("plans")
+    .select("id, title")
+    .eq("couple_id", session.coupleId)
+    .eq("kind", kind)
+    .maybeSingle();
+  const plan = planQuery.data as { id: string; title?: string } | null;
+  if (!plan?.id) return base;
+
+  const items = await hydratePlanItemCoordinates(supabase, session.coupleId, plan.id, plan.title ?? "", base.items);
+  return { ...base, items };
 }
 
 export async function addItemToCouplePlan(kind: PlanKind, item: PlanItem): Promise<{ ok: true; duplicate: boolean; items: PlanItem[] } | { error: string }> {
@@ -489,7 +520,7 @@ function parseDraftItems(value: unknown): PlanItem[] {
   return value.map(item => normalizePlanItem(item as PlanItem));
 }
 
-export async function listDateDrafts(): Promise<DateDaySnapshot[]> {
+export const listDateDrafts = cache(async (): Promise<DateDaySnapshot[]> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return [];
   const supabase = await createClient();
@@ -534,7 +565,7 @@ export async function listDateDrafts(): Promise<DateDaySnapshot[]> {
     });
   }
   return [...byDate.values()].filter(hasDateContent);
-}
+});
 
 export async function saveDateDraft(day: DateDaySnapshot): Promise<{ ok: true } | { error: string }> {
   if (!day.date) return { ok: true };
@@ -630,7 +661,7 @@ export type ArchivedDatePlan = {
   items: PlanItem[];
 };
 
-export async function listArchivedDatePlans(): Promise<{ persist: boolean; dates: ArchivedDatePlan[] }> {
+export const listArchivedDatePlans = cache(async (): Promise<{ persist: boolean; dates: ArchivedDatePlan[] }> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { persist: false, dates: [] };
   const supabase = await createClient();
@@ -660,7 +691,7 @@ export async function listArchivedDatePlans(): Promise<{ persist: boolean; dates
       items: (byId.get(memory.id) ?? []).map(normalizePlanItem),
     })),
   };
-}
+});
 
 export async function archiveDatePlan(input: { title: string; date: string; notes: string; items: PlanItem[] }): Promise<{ ok: true; id: string } | { error: string }> {
   const session = await getAppSession();
@@ -701,7 +732,7 @@ export type ArchivedTripPlan = {
   items: PlanItem[];
 };
 
-export async function listArchivedTripPlans(): Promise<ArchivedTripPlan[]> {
+export const listArchivedTripPlans = cache(async (): Promise<ArchivedTripPlan[]> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return [];
   const supabase = await createClient();
@@ -740,7 +771,7 @@ export async function listArchivedTripPlans(): Promise<ArchivedTripPlan[]> {
     });
     return journey ? [journey] : [];
   });
-}
+});
 
 export async function archiveTripPlan(input: { title: string; startDate: string; dayCount: number; items: PlanItem[] }): Promise<{ ok: true; id: string } | { error: string }> {
   const session = await getAppSession();

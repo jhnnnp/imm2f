@@ -1,5 +1,6 @@
 "use server";
 
+import { cache } from "react";
 import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
 import { compareTasteProfiles, seedFromProfile } from "./compare";
@@ -22,7 +23,7 @@ function rowToProfile(row: Record<string, unknown> | null | undefined) {
   return row ? parseTasteProfile(row) : null;
 }
 
-export async function loadTasteBoard(): Promise<TasteBoard> {
+export const loadTasteBoard = cache(async (): Promise<TasteBoard> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return emptyBoard();
   const youName = session.displayName;
@@ -56,7 +57,7 @@ export async function loadTasteBoard(): Promise<TasteBoard> {
     partnerConnected,
     compare: you && partner ? compareTasteProfiles(you, partner) : null,
   };
-}
+});
 
 export async function saveTasteProfile(input: TasteInput): Promise<TasteBoard | { error: string }> {
   const parsed = parseTasteInput(input);

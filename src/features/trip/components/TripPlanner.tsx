@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { useHydratePlanCoordinates } from "@/features/planning/useHydratePlanCoordinates";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -57,6 +58,8 @@ export function TripPlanner({
   const [archiveNotice, setArchiveNotice] = useState("");
   const revisionRef = useRef(initialPlan.revision);
   const saveQueueRef = useRef(Promise.resolve());
+  useHydratePlanCoordinates("trip", items, setItems);
+
   const dayItems = useMemo(
     () => items.filter(item => (item.dayIndex ?? 0) === selectedDay),
     [items, selectedDay],

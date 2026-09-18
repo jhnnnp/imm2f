@@ -11,6 +11,7 @@ import { DateArchiveJournal } from "@/features/date/components/DateArchiveJourna
 import { applyDateSwitch, emptyDateDay, hasDateContent, landingDateDay, upsertDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
 import type { CourseKeepInput, CourseKeepResult } from "@/features/ai/courseKeep";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
+import { useHydratePlanCoordinates } from "@/features/planning/useHydratePlanCoordinates";
 import { archiveDatePlan, listArchivedDatePlans, loadCouplePlan, openDateDay, saveCouplePlan, saveDateDraft, type ArchivedDatePlan } from "@/features/planning/actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import type { CouplePlan, PlanChange, PlanItem } from "@/features/planning/types/plan";
@@ -61,6 +62,8 @@ export function DatePlanner({
   titleRef.current = title;
   notesRef.current = notes;
   dateRef.current = startDate;
+
+  useHydratePlanCoordinates("date", items, setItems);
 
   useEffect(() => {
     if (initialPlan.startDate === today) return;
