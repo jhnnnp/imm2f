@@ -18,6 +18,7 @@ import {
   type CorkPose,
 } from "../corkLayout";
 import { inspectMemoryPhoto } from "../photoInspect";
+import { useResolvedMemories } from "../resolvePhotoUrls";
 import {
   albumTiles,
   buildWallPieces,
@@ -63,9 +64,9 @@ function MemoryTypeMark({ type, className }: { type: MemoryType; className: stri
   return <span className={`${className} is-${type}`}>{MEMORY_TYPE_LABEL[type]}</span>;
 }
 
-function MemoryFace({ memory, size = "card" }: { memory: Memory; size?: "hero" | "card" | "mini" }) {
+function MemoryFace({ memory, size = "card", imageClassName }: { memory: Memory; size?: "hero" | "card" | "mini"; imageClassName?: string }) {
   const image = memoryImages(memory)[0];
-  if (image) return <img src={image.url} alt="" />;
+  if (image) return <img className={imageClassName} src={image.url} alt="" />;
   return (
     <div className={`memory-letter-face is-${memory.memoryType} is-${size}`}>
       <i className="memory-letter-margin" aria-hidden="true" />
@@ -93,6 +94,7 @@ export function MemoryTimeline({
 }) {
   const session = useAppSession();
   const [memories, setMemories] = useState(initialMemories);
+  const displayMemories = useResolvedMemories(memories);
   const [tab, setTab] = useState<MemoryTab>("timeline");
   const [open, setOpen] = useState(false);
   const [createStep, setCreateStep] = useState<CreateStep>("photo");
@@ -147,15 +149,41 @@ export function MemoryTimeline({
     [places],
   );
   const visible = useMemo(() => {
-    if (tab === "trip") return memories.filter(item => item.memoryType === "trip");
-    if (tab === "date") return memories.filter(item => item.memoryType === "date");
-    return memories;
-  }, [memories, tab]);
+    if (tab === "trip") return displayMemories.filter(item => item.memoryType === "trip");
+    if (tab === "date") return displayMemories.filter(item => item.memoryType === "date");
+    return displayMemories;
+  }, [displayMemories, tab]);
   const wallPieces = useMemo(() => buildWallPieces(visible), [visible]);
   const tiles = useMemo(() => albumTiles(visible), [visible]);
   const mappedMemories = useMemo(() => visible.filter(item => item.coordinates), [visible]);
   const viewerImages = viewer ? memoryImages(viewer) : [];
   const activeViewerImage = viewerImages[viewerPhotoIndex] ?? viewerImages[0] ?? null;
+
+  useEffect(() => {
+    if (!viewer || editing) return;
+    const count = viewerImages.length;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeViewer();
+        return;
+      }
+      if (count < 2) return;
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setCoverFailed(false);
+        setViewerPhotoIndex(index => (index + 1) % count);
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setCoverFailed(false);
+        setViewerPhotoIndex(index => (index - 1 + count) % count);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [viewer, editing, viewerImages.length]);
+
   const corkPieceProps = {
     poses: corkPoses,
     setPoses: setCorkPoses,
@@ -466,7 +494,7 @@ export function MemoryTimeline({
             index={index}
             className={`is-${piece.kind}${piece.kind === "photo" ? ` is-${piece.size}` : ""}`}
             onOpen={piece.kind === "scrap" ? undefined : () => {
-              const memory = memories.find(item => item.id === piece.memoryId);
+              const memory = displayMemories.find(item => item.id === piece.memoryId);
               if (memory) openViewer(memory, piece.kind === "photo" ? piece.photoIndex : 0);
             }}
             {...corkPieceProps}
@@ -517,7 +545,7 @@ export function MemoryTimeline({
         <div>
           <span className="eyebrow">OUR ARCHIVE · {new Date().getFullYear()}</span>
           <h1>함께여서 기억나는 장면들</h1>
-          <p>종이를 밀고 확대하며, 펜으로 장면 위에 남길 수 있어요.</p>
+          <p>종이를 밀고 확대하며, 펜과 텍스트로 남긴 표시는 커플끼리 함께 보여요.</p>
         </div>
       </div>
       <div className="page-actions date-planner-actions trip-planner-actions memory-page-actions">
@@ -657,42 +685,122 @@ export function MemoryTimeline({
         </div>
       )}
       {viewer && (
-        <div className="dialog-backdrop" role="presentation" onClick={() => !pending && closeViewer()}>
-          <article className={`memory-viewer ${!editing && activeViewerImage && !coverFailed ? "" : "is-letter"} ${editing ? "is-editing" : ""}`} onClick={event => event.stopPropagation()}>
-            {!editing && (
-              <div className="memory-viewer-media">
-                {activeViewerImage && !coverFailed ? (
-                  <img src={activeViewerImage.url} alt="" onError={() => setCoverFailed(true)} />
-                ) : (
-                  <MemoryFace memory={viewer} size="hero" />
-                )}
-                {activeViewerImage && !coverFailed && <MemoryTypeMark type={viewer.memoryType} className="memory-badge-ribbon" />}
-                {viewerImages.length > 1 && <span className="memory-photo-count">{viewerPhotoIndex + 1}/{viewerImages.length}</span>}
-              </div>
-            )}
-            {!editing ? <div>
-              {viewerImages.length > 1 && (
-                <div className="memory-viewer-thumbs" role="list">
-                  {viewerImages.map((image, index) => (
-                    <button type="button" key={image.id} className={index === viewerPhotoIndex ? "is-active" : ""} aria-label={`사진 ${index + 1}`} onClick={() => { setCoverFailed(false); setViewerPhotoIndex(index); }}>
-                      <img src={image.url} alt="" />
+        <div className="dialog-backdrop memory-viewer-backdrop" role="presentation" onClick={() => !pending && closeViewer()}>
+          <article
+            className={`memory-viewer memory-viewer-sheet ${editing ? "is-editing" : ""} ${activeViewerImage && !coverFailed ? "has-photo" : "is-text-only"}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="memory-viewer-title"
+            onClick={event => event.stopPropagation()}
+          >
+            {!editing ? (
+              <>
+                <header className="memory-viewer-header">
+                  <div className="memory-viewer-header-copy">
+                    <span className="memory-viewer-eyebrow">OUR MEMORY</span>
+                    {viewerImages.length > 1 ? (
+                      <span className="memory-viewer-index" aria-live="polite">{viewerPhotoIndex + 1} / {viewerImages.length}</span>
+                    ) : null}
+                  </div>
+                  <div className="memory-viewer-toolbar memory-viewer-header-toolbar" role="toolbar" aria-label="기억 보기">
+                    <button className="memory-viewer-btn memory-viewer-btn--danger" type="button" disabled={pending} onClick={() => void removeCurrentMemory()}>
+                      삭제
                     </button>
-                  ))}
+                    <button className="memory-viewer-btn memory-viewer-btn--ghost" type="button" onClick={() => beginEdit(viewer)}>수정</button>
+                    <button className="memory-viewer-btn memory-viewer-btn--primary" type="button" onClick={closeViewer}>확인</button>
+                  </div>
+                </header>
+                <div className="memory-viewer-layout">
+                  <div className="memory-viewer-stage" aria-label="추억 사진">
+                    {activeViewerImage && !coverFailed ? (
+                      <img
+                        className="memory-viewer-photo"
+                        src={activeViewerImage.url}
+                        alt=""
+                        onError={() => setCoverFailed(true)}
+                      />
+                    ) : (
+                      <div className="memory-viewer-fallback">
+                        <MemoryFace memory={viewer} size="hero" imageClassName="memory-viewer-photo" />
+                      </div>
+                    )}
+                    {activeViewerImage && !coverFailed ? <MemoryTypeMark type={viewer.memoryType} className="memory-badge-ribbon" /> : null}
+                    {viewerImages.length > 1 && activeViewerImage && !coverFailed ? (
+                      <>
+                        <button
+                          type="button"
+                          className="memory-viewer-nav is-prev"
+                          aria-label="이전 사진"
+                          onClick={() => {
+                            setCoverFailed(false);
+                            setViewerPhotoIndex(index => (index - 1 + viewerImages.length) % viewerImages.length);
+                          }}
+                        >
+                          ‹
+                        </button>
+                        <button
+                          type="button"
+                          className="memory-viewer-nav is-next"
+                          aria-label="다음 사진"
+                          onClick={() => {
+                            setCoverFailed(false);
+                            setViewerPhotoIndex(index => (index + 1) % viewerImages.length);
+                          }}
+                        >
+                          ›
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                  <div className="memory-viewer-body">
+                    {viewerImages.length > 1 ? (
+                      <div className="memory-viewer-thumbs" role="list" aria-label="사진 선택">
+                        {viewerImages.map((image, index) => (
+                          <button
+                            type="button"
+                            key={image.id}
+                            className={index === viewerPhotoIndex ? "is-active" : ""}
+                            aria-label={`사진 ${index + 1}`}
+                            aria-current={index === viewerPhotoIndex ? "true" : undefined}
+                            onClick={() => {
+                              setCoverFailed(false);
+                              setViewerPhotoIndex(index);
+                            }}
+                          >
+                            <img src={image.url} alt="" />
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p className="memory-viewer-meta">
+                      {formatKoDate(viewer.happenedOn)}
+                      {viewer.locationLabel ? ` · ${viewer.locationLabel}` : ""}
+                    </p>
+                    <h2 id="memory-viewer-title">{viewer.title}</h2>
+                    <p className="memory-viewer-lead">{viewer.description || "그날의 장면."}</p>
+                    {viewer.photos[viewerPhotoIndex] ? (
+                      <ul className="memory-viewer-facts" aria-label="사진 정보">
+                        <li>
+                          {viewer.photos[viewerPhotoIndex].capturedAt
+                            ? `촬영 ${new Date(viewer.photos[viewerPhotoIndex].capturedAt!).toLocaleString("ko-KR")}`
+                            : "촬영일 정보 없음"}
+                        </li>
+                        <li>
+                          {[viewer.photos[viewerPhotoIndex].cameraMake, viewer.photos[viewerPhotoIndex].cameraModel].filter(Boolean).join(" ")
+                            || "카메라 정보 없음"}
+                        </li>
+                        {viewer.coordinates ? (
+                          <li className="is-action">
+                            <Link className="memory-viewer-map-link" href="/our-map">지도에서 보기</Link>
+                          </li>
+                        ) : null}
+                      </ul>
+                    ) : null}
+                    {error ? <p className="form-error" role="alert">{error}</p> : null}
+                  </div>
                 </div>
-              )}
-              <span>{formatKoDate(viewer.happenedOn)}{viewer.locationLabel ? ` · ${viewer.locationLabel}` : ""}</span>
-              <h2>{viewer.title}</h2>
-              <p>{viewer.description || "그날의 장면."}</p>
-              {viewer.photos[viewerPhotoIndex] && (
-                <div className="memory-photo-facts">
-                  <span>{viewer.photos[viewerPhotoIndex].capturedAt ? `촬영 ${new Date(viewer.photos[viewerPhotoIndex].capturedAt!).toLocaleString("ko-KR")}` : "촬영일 정보 없음"}</span>
-                  <span>{[viewer.photos[viewerPhotoIndex].cameraMake, viewer.photos[viewerPhotoIndex].cameraModel].filter(Boolean).join(" ") || "카메라 정보 없음"}</span>
-                  {viewer.coordinates && <Link href="/our-map">지도에서 보기 →</Link>}
-                </div>
-              )}
-              {error && <p className="form-error" role="alert">{error}</p>}
-              <div className="dialog-actions memory-viewer-actions"><button className="danger-button" type="button" disabled={pending} onClick={() => void removeCurrentMemory()}>삭제</button><button className="outline-button" type="button" onClick={() => beginEdit(viewer)}>수정</button><button className="primary-button" type="button" onClick={closeViewer}>닫기</button></div>
-            </div> : (
+              </>
+            ) : (
               <form className="memory-edit-form" onSubmit={event => void saveEdit(event)}>
                 <div className="memory-edit-head">
                   <span className="eyebrow">EDIT MEMORY</span>

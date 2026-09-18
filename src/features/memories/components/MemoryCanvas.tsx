@@ -28,11 +28,25 @@ import {
   zoomAt,
   type Camera,
 } from "../canvasCamera";
+import { useAppSession } from "@/features/auth/components/SessionProvider";
 import {
+  isBoardEmpty,
+  mergeWallBoard,
   readBoardState,
   writeBoardState,
+  writeBoardSyncedAt,
+  type CorkBoardState,
   type CorkPose,
 } from "../corkLayout";
+import { saveMemoryWallBoard, loadMemoryWallBoard } from "../wallBoardActions";
+import { subscribeMemoryWallBoard } from "../wallBoardLive";
+import {
+  createWallText,
+  WALL_TEXT_SIZES,
+  type WallText,
+  type WallTextFont,
+  type WallTextWeight,
+} from "../wallText";
 import {
   createInkStroke,
   eraseStrokes,
@@ -45,7 +59,7 @@ import {
   type InkTool,
 } from "../inkStrokes";
 
-export type CanvasTool = "select" | "pan" | "pen" | "marker" | "eraser";
+export type CanvasTool = "select" | "pan" | "pen" | "marker" | "eraser" | "text";
 
 type CanvasContextValue = {
   zoom: number;
@@ -59,6 +73,7 @@ const TOOLS: ReadonlyArray<{ id: CanvasTool; label: string }> = [
   { id: "pan", label: "이동" },
   { id: "pen", label: "펜" },
   { id: "marker", label: "형광" },
+  { id: "text", label: "텍스트" },
   { id: "eraser", label: "지우개" },
 ];
 
@@ -100,8 +115,21 @@ function StudioIcon({ name }: { name: CanvasTool }) {
           <path d="M9.2 20h10.4" />
         </>
       )}
+      {name === "text" && (
+        <>
+          <path d="M6 5.5h12" />
+          <path d="M12 5.5V19" />
+          <path d="M8.5 19h7" />
+        </>
+      )}
     </svg>
   );
+}
+
+function nextTextLayerZ(poses: Record<string, CorkPose>, texts: WallText[]) {
+  const poseZ = Object.values(poses).map(item => item.z);
+  const textZ = texts.map(item => item.z);
+  return Math.max(40, ...poseZ, ...textZ) + 1;
 }
 
 export function MemoryCanvas({
@@ -121,48 +149,106 @@ export function MemoryCanvas({
   toolbarHost?: HTMLElement | null;
   children: ReactNode;
 }) {
+  const session = useAppSession();
+  const userId = session.mode === "authenticated" ? session.userId : null;
   const viewRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<Camera>({ x: 0, y: 0, zoom: 0.42 });
   const posesRef = useRef(poses);
   const strokesRef = useRef<InkStroke[]>([]);
+  const textsRef = useRef<WallText[]>([]);
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
   const panRef = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null);
   const pinchRef = useRef<{ camera: Camera; dist: number; world: { x: number; y: number } } | null>(null);
   const drawRef = useRef<{ pointerId: number; tool: InkTool | "eraser"; points: InkPoint[]; simulatePressure: boolean } | null>(null);
+  const textDragRef = useRef<{ pointerId: number; id: string; lastX: number; lastY: number } | null>(null);
   const historyRef = useRef<InkStroke[][]>([]);
   const futureRef = useRef<InkStroke[][]>([]);
   const saveTimer = useRef<number | null>(null);
+  const remoteSaveTimer = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
   const spaceRef = useRef(false);
   const loadedRef = useRef(false);
+  const applyingRemoteRef = useRef(false);
+  const lastSelfSaveAtRef = useRef(0);
   const coupleIdRef = useRef(coupleId);
   coupleIdRef.current = coupleId;
   const [camera, setCameraState] = useState<Camera>(cameraRef.current);
   const [strokes, setStrokes] = useState<InkStroke[]>([]);
+  const [texts, setTexts] = useState<WallText[]>([]);
   const [tool, setTool] = useState<CanvasTool>("select");
   const [color, setColor] = useState(INK_COLORS[0].color as string);
+  const [textColor, setTextColor] = useState(INK_COLORS[0].color as string);
+  const [textFont, setTextFont] = useState<WallTextFont>("hand");
+  const [textWeight, setTextWeight] = useState<WallTextWeight>("normal");
+  const [textSize, setTextSize] = useState<number>(WALL_TEXT_SIZES[1]);
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [penSize, setPenSize] = useState<number>(PEN_SIZES[1]);
   const [markerSize, setMarkerSize] = useState<number>(MARKER_SIZES[1]);
   const [livePath, setLivePath] = useState("");
   const [spacePan, setSpacePan] = useState(false);
   posesRef.current = poses;
   strokesRef.current = strokes;
+  textsRef.current = texts;
   cameraRef.current = camera;
 
-  const persist = useCallback((next?: { poses?: Record<string, CorkPose>; strokes?: InkStroke[]; camera?: Camera }) => {
+  const boardSnapshot = useCallback((): CorkBoardState => ({
+    v: 4,
+    camera: cameraRef.current,
+    poses: posesRef.current,
+    strokes: strokesRef.current,
+    texts: textsRef.current,
+  }), []);
+
+  const flushRemoteSave = useCallback((state: CorkBoardState) => {
+    if (remoteSaveTimer.current) window.clearTimeout(remoteSaveTimer.current);
+    remoteSaveTimer.current = window.setTimeout(() => {
+      lastSelfSaveAtRef.current = Date.now();
+      void saveMemoryWallBoard(state).then(result => {
+        if ("ok" in result) writeBoardSyncedAt(coupleIdRef.current, result.updatedAt);
+      });
+    }, 420);
+  }, []);
+
+  const persist = useCallback((next?: { poses?: Record<string, CorkPose>; strokes?: InkStroke[]; texts?: WallText[]; camera?: Camera }) => {
     if (next?.poses) posesRef.current = next.poses;
     if (next?.strokes) strokesRef.current = next.strokes;
+    if (next?.texts) textsRef.current = next.texts;
     if (next?.camera) cameraRef.current = next.camera;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      writeBoardState(coupleId, {
-        v: 3,
-        camera: cameraRef.current,
-        poses: posesRef.current,
-        strokes: strokesRef.current,
-      });
+      const state = boardSnapshot();
+      writeBoardState(coupleId, state);
+      if (!applyingRemoteRef.current) flushRemoteSave(state);
     }, 80);
-  }, [coupleId]);
+  }, [boardSnapshot, coupleId, flushRemoteSave]);
+
+  const applyBoard = useCallback((board: CorkBoardState) => {
+    posesRef.current = board.poses;
+    strokesRef.current = board.strokes;
+    textsRef.current = board.texts;
+    setPoses(board.poses);
+    setStrokes(board.strokes);
+    setTexts(board.texts);
+    if (board.camera) {
+      cameraRef.current = board.camera;
+      setCameraState(board.camera);
+    }
+  }, [setPoses]);
+
+  const patchText = useCallback((id: string, patch: Partial<WallText>) => {
+    const next = textsRef.current.map(item => (item.id === id ? { ...item, ...patch } : item));
+    setTexts(next);
+    persist({ texts: next });
+  }, [persist]);
+
+  const removeText = useCallback((id: string) => {
+    const next = textsRef.current.filter(item => item.id !== id);
+    setTexts(next);
+    setSelectedTextId(current => (current === id ? null : current));
+    setEditingTextId(current => (current === id ? null : current));
+    persist({ texts: next });
+  }, [persist]);
 
   const setCamera = useCallback((update: Camera | ((current: Camera) => Camera)) => {
     setCameraState(current => {
@@ -173,26 +259,78 @@ export function MemoryCanvas({
   }, [persist]);
 
   useEffect(() => {
+    let cancelled = false;
     loadedRef.current = false;
-    const board = readBoardState(coupleId);
-    setPoses(board.poses);
-    setStrokes(board.strokes);
-    strokesRef.current = board.strokes;
-    posesRef.current = board.poses;
-    const applyCamera = () => {
-      const view = viewRef.current?.getBoundingClientRect();
-      const framed = view ? fitRect(view, contentRect(Object.values(board.poses))) : { x: 0, y: 0, zoom: 0.8 };
-      const next = board.camera ?? framed;
-      cameraRef.current = next;
-      setCameraState(next);
-    };
-    applyCamera();
-    const frame = window.requestAnimationFrame(() => {
+    const local = readBoardState(coupleId);
+
+    const finishCamera = (board: CorkBoardState) => {
+      const applyCamera = () => {
+        const view = viewRef.current?.getBoundingClientRect();
+        const framed = view ? fitRect(view, contentRect(Object.values(board.poses))) : { x: 0, y: 0, zoom: 0.8 };
+        const next = board.camera ?? framed;
+        cameraRef.current = next;
+        setCameraState(next);
+      };
       applyCamera();
-      loadedRef.current = true;
+      window.requestAnimationFrame(() => {
+        applyCamera();
+        loadedRef.current = true;
+      });
+    };
+
+    void loadMemoryWallBoard().then(({ state: remote, updatedAt }) => {
+      if (cancelled) return;
+      const merged = mergeWallBoard(local, remote, updatedAt, coupleId);
+      applyBoard(merged);
+      writeBoardState(coupleId, merged);
+      if (updatedAt) writeBoardSyncedAt(coupleId, updatedAt);
+      finishCamera(merged);
+      if ((!remote || isBoardEmpty(remote)) && !isBoardEmpty(local)) {
+        void saveMemoryWallBoard(local).then(result => {
+          if ("ok" in result) writeBoardSyncedAt(coupleId, result.updatedAt);
+        });
+      }
+    }).catch(() => {
+      if (cancelled) return;
+      applyBoard(local);
+      finishCamera(local);
     });
-    return () => window.cancelAnimationFrame(frame);
-  }, [coupleId, setPoses]);
+
+    const live = subscribeMemoryWallBoard(coupleId, (remote, updatedAt, updatedBy) => {
+      if (cancelled) return;
+      if (updatedBy && userId && updatedBy === userId && Date.now() - lastSelfSaveAtRef.current < 1200) {
+        return;
+      }
+      if (drawRef.current || textDragRef.current) return;
+      applyingRemoteRef.current = true;
+      applyBoard(remote);
+      writeBoardState(coupleId, remote);
+      writeBoardSyncedAt(coupleId, updatedAt);
+      applyingRemoteRef.current = false;
+    });
+
+    let poll: number | undefined;
+    void live.connected.then(connected => {
+      if (cancelled || connected) return;
+      poll = window.setInterval(() => {
+        void loadMemoryWallBoard().then(({ state: remote, updatedAt }) => {
+          if (cancelled || !remote || drawRef.current) return;
+          const merged = mergeWallBoard(readBoardState(coupleId), remote, updatedAt, coupleId);
+          applyingRemoteRef.current = true;
+          applyBoard(merged);
+          writeBoardState(coupleId, merged);
+          if (updatedAt) writeBoardSyncedAt(coupleId, updatedAt);
+          applyingRemoteRef.current = false;
+        });
+      }, 5000);
+    });
+
+    return () => {
+      cancelled = true;
+      live.unsubscribe();
+      if (poll) window.clearInterval(poll);
+    };
+  }, [applyBoard, coupleId, userId]);
 
   useEffect(() => {
     if (!loadedRef.current) return;
@@ -201,15 +339,17 @@ export function MemoryCanvas({
 
   useEffect(() => () => {
     if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
-    if (saveTimer.current) {
-      window.clearTimeout(saveTimer.current);
-      writeBoardState(coupleIdRef.current, {
-        v: 3,
-        camera: cameraRef.current,
-        poses: posesRef.current,
-        strokes: strokesRef.current,
-      });
-    }
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    if (remoteSaveTimer.current) window.clearTimeout(remoteSaveTimer.current);
+    const state = {
+      v: 4 as const,
+      camera: cameraRef.current,
+      poses: posesRef.current,
+      strokes: strokesRef.current,
+      texts: textsRef.current,
+    };
+    writeBoardState(coupleIdRef.current, state);
+    void saveMemoryWallBoard(state);
   }, []);
 
   useEffect(() => {
@@ -218,6 +358,13 @@ export function MemoryCanvas({
         spaceRef.current = true;
         setSpacePan(true);
         event.preventDefault();
+      }
+      if ((event.key === "Backspace" || event.key === "Delete") && selectedTextId && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && active.isContentEditable) return;
+        event.preventDefault();
+        removeText(selectedTextId);
+        return;
       }
       const meta = event.metaKey || event.ctrlKey;
       if (meta && event.key.toLowerCase() === "z") {
@@ -249,7 +396,7 @@ export function MemoryCanvas({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [persist]);
+  }, [persist, removeText, selectedTextId]);
 
   useEffect(() => {
     const node = viewRef.current;
@@ -272,6 +419,20 @@ export function MemoryCanvas({
   const drawing = tool === "pen" || tool === "marker" || tool === "eraser";
   const panning = tool === "pan" || spacePan;
   const interactive = tool === "select" && !spacePan;
+
+  useEffect(() => {
+    if (!editingTextId) return;
+    const node = viewRef.current?.querySelector(`[data-text-id="${editingTextId}"] [contenteditable="true"]`) as HTMLElement | null;
+    if (!node) return;
+    node.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, [editingTextId, texts]);
 
   function applyInk(next: InkStroke[], historic: boolean) {
     if (historic) {
@@ -338,6 +499,34 @@ export function MemoryCanvas({
       beginPinch(cameraRef.current);
       return;
     }
+    const textHit = (event.target as HTMLElement).closest(".memory-wall-text") as HTMLElement | null;
+    const textId = textHit?.dataset.textId;
+    if (textId && (tool === "select" || tool === "text") && event.button === 0) {
+      setSelectedTextId(textId);
+      if (tool === "text") setEditingTextId(textId);
+      if (tool === "select") {
+        textDragRef.current = { pointerId: event.pointerId, id: textId, lastX: event.clientX, lastY: event.clientY };
+      }
+      return;
+    }
+    if (tool === "text" && event.button === 0) {
+      const world = screenToWorld(cameraRef.current, viewPoint(event));
+      const created = createWallText({
+        x: world.x,
+        y: world.y,
+        z: nextTextLayerZ(posesRef.current, textsRef.current),
+        color: textColor,
+        fontFamily: textFont,
+        fontWeight: textWeight,
+        fontSize: textSize,
+      });
+      const next = [...textsRef.current, created];
+      setTexts(next);
+      persist({ texts: next });
+      setSelectedTextId(created.id);
+      setEditingTextId(created.id);
+      return;
+    }
     const wantsPan = event.button === 1 || panning || (tool === "select" && event.currentTarget === view && !(event.target as HTMLElement).closest(".memory-cork-piece"));
     if (wantsPan && event.button !== 2) {
       panRef.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
@@ -382,6 +571,18 @@ export function MemoryCanvas({
       pan.lastY = event.clientY;
       return;
     }
+    const textDrag = textDragRef.current;
+    if (textDrag && textDrag.pointerId === event.pointerId) {
+      const scale = cameraRef.current.zoom || 1;
+      const dx = (event.clientX - textDrag.lastX) / scale;
+      const dy = (event.clientY - textDrag.lastY) / scale;
+      textDrag.lastX = event.clientX;
+      textDrag.lastY = event.clientY;
+      const origin = textsRef.current.find(item => item.id === textDrag.id);
+      if (!origin) return;
+      patchText(textDrag.id, { x: origin.x + dx, y: origin.y + dy });
+      return;
+    }
     const draw = drawRef.current;
     if (!draw || draw.pointerId !== event.pointerId) return;
     const point = inkPoint(event, cameraRef.current);
@@ -405,6 +606,7 @@ export function MemoryCanvas({
     pointersRef.current.delete(event.pointerId);
     if (pointersRef.current.size < 2) pinchRef.current = null;
     if (panRef.current?.pointerId === event.pointerId) panRef.current = null;
+    if (textDragRef.current?.pointerId === event.pointerId) textDragRef.current = null;
     const view = viewRef.current;
     if (view?.hasPointerCapture(event.pointerId)) view.releasePointerCapture(event.pointerId);
     const draw = drawRef.current;
@@ -487,13 +689,86 @@ export function MemoryCanvas({
           </div>
         </div>
       )}
+      {tool === "text" && (
+        <div className="memory-studio-ink">
+          <div className="memory-studio-fonts" aria-label="글꼴">
+            <button
+              className={textFont === "hand" ? "is-active" : ""}
+              type="button"
+              onClick={() => {
+                setTextFont("hand");
+                if (selectedTextId) patchText(selectedTextId, { fontFamily: "hand" });
+              }}
+            >
+              손글씨
+            </button>
+            <button
+              className={textFont === "sans" ? "is-active" : ""}
+              type="button"
+              onClick={() => {
+                setTextFont("sans");
+                if (selectedTextId) patchText(selectedTextId, { fontFamily: "sans" });
+              }}
+            >
+              고딕
+            </button>
+            <button
+              className={textWeight === "bold" ? "is-active" : ""}
+              type="button"
+              aria-pressed={textWeight === "bold"}
+              onClick={() => {
+                const next: WallTextWeight = textWeight === "bold" ? "normal" : "bold";
+                setTextWeight(next);
+                if (selectedTextId) patchText(selectedTextId, { fontWeight: next });
+              }}
+            >
+              굵게
+            </button>
+          </div>
+          <span className="memory-studio-rule" aria-hidden="true" />
+          <div className="memory-studio-swatches" aria-label="텍스트 색">
+            {INK_COLORS.map(item => (
+              <button
+                className={textColor === item.color ? "is-active" : ""}
+                type="button"
+                key={item.id}
+                aria-label={item.label}
+                title={item.label}
+                style={{ background: item.color }}
+                onClick={() => {
+                  setTextColor(item.color);
+                  if (selectedTextId) patchText(selectedTextId, { color: item.color });
+                }}
+              />
+            ))}
+          </div>
+          <span className="memory-studio-rule" aria-hidden="true" />
+          <div className="memory-studio-sizes memory-studio-text-sizes" aria-label="글자 크기">
+            {WALL_TEXT_SIZES.map(size => (
+              <button
+                className={textSize === size ? "is-active" : ""}
+                type="button"
+                key={size}
+                aria-label={`${size}px`}
+                title={`${size}px`}
+                onClick={() => {
+                  setTextSize(size);
+                  if (selectedTextId) patchText(selectedTextId, { fontSize: size });
+                }}
+              >
+                <span style={{ fontSize: Math.max(11, size * 0.42) }}>가</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 
   return (
     <MemoryCanvasContext.Provider value={context}>
       {toolbarHost ? createPortal(toolbar, toolbarHost) : null}
-      <div className={`memory-canvas ${drawing || panning ? `is-${tool}` : ""} ${spacePan ? "is-space" : ""}`}>
+      <div className={`memory-canvas ${drawing || panning || tool === "text" ? `is-${tool}` : ""} ${spacePan ? "is-space" : ""}`}>
         <div
           ref={viewRef}
           className={`memory-canvas-viewport ${panning ? "is-panning" : ""} ${drawing ? `is-${tool}` : ""}`}
@@ -512,6 +787,7 @@ export function MemoryCanvas({
             {tool === "pen" && "펜으로 벡터 획을 남깁니다. 두 손가락이나 스페이스로 종이를 움직일 수 있어요."}
             {tool === "marker" && "형광펜으로 장면 위에 표시를 남깁니다."}
             {tool === "eraser" && "획을 문질러 지웁니다. Ctrl+Z로 되돌릴 수 있어요."}
+            {tool === "text" && "사진 위 아무 곳이나 눌러 글을 남기세요. 선택 도구로 옮기고, Delete로 지울 수 있어요."}
           </p>
           <div
             className="memory-canvas-world"
@@ -523,6 +799,45 @@ export function MemoryCanvas({
           >
             <div className="memory-cork-stage">
               {children}
+            </div>
+            <div className="memory-wall-texts" aria-hidden={!texts.length}>
+              {texts.map(item => (
+                <div
+                  key={item.id}
+                  data-text-id={item.id}
+                  className={`memory-wall-text is-${item.fontFamily}${item.fontWeight === "bold" ? " is-bold" : ""}${selectedTextId === item.id ? " is-selected" : ""}`}
+                  style={{
+                    left: item.x,
+                    top: item.y,
+                    zIndex: item.z,
+                    color: item.color,
+                    fontSize: item.fontSize,
+                    transform: `rotate(${item.rotation}deg)`,
+                  }}
+                >
+                  {editingTextId === item.id ? (
+                    <span
+                      contentEditable
+                      suppressContentEditableWarning
+                      onBlur={event => {
+                        const value = event.currentTarget.textContent?.trim() || "우리의 한 줄";
+                        patchText(item.id, { text: value.slice(0, 280) });
+                        setEditingTextId(null);
+                      }}
+                      onKeyDown={event => {
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          event.currentTarget.blur();
+                        }
+                      }}
+                    >
+                      {item.text}
+                    </span>
+                  ) : (
+                    <span>{item.text}</span>
+                  )}
+                </div>
+              ))}
             </div>
             <svg className="memory-ink" viewBox={`0 0 ${WORLD_W} ${WORLD_H}`} width={WORLD_W} height={WORLD_H} aria-hidden="true">
               {strokes.map(stroke => (

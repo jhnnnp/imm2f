@@ -3,6 +3,7 @@ export type MemoryType = "free" | "trip" | "date";
 export type MemoryPhoto = {
   id: string;
   storageUrl: string;
+  storagePath: string | null;
   caption: string;
   sortOrder: number;
   latitude: number | null;

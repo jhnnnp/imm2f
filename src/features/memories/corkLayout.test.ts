@@ -48,12 +48,14 @@ describe("cork layout", () => {
     expect(Object.keys(poses)).toEqual(["one", "two"]);
     expect(poses.one.r).not.toBe(poses.two.r);
     const board = parseBoardState(JSON.stringify({
-      v: 3,
+      v: 4,
       camera: { x: 1, y: 2, zoom: 0.8 },
       poses: { a: { x: 40, y: 50, z: 1, r: 3 } },
       strokes: [{ id: "s", tool: "pen", color: "#2b312e", size: 8, points: [[1, 2, 0.5], [4, 6, 0.5]] }],
+      texts: [{ id: "t", x: 10, y: 20, z: 40, text: "hi", color: "#2b312e", fontFamily: "hand", fontWeight: "normal", fontSize: 24, rotation: 0 }],
     }));
     expect(board?.camera?.zoom).toBe(0.8);
     expect(board?.strokes).toHaveLength(1);
+    expect(board?.texts).toHaveLength(1);
   });
 });

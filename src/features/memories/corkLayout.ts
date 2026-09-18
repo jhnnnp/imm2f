@@ -1,23 +1,53 @@
 import { WORLD_H, WORLD_W, type Camera } from "./canvasCamera";
 import { parseInkStrokes, type InkStroke } from "./inkStrokes";
+import { parseWallTexts, type WallText } from "./wallText";
 
 export type CorkPose = { x: number; y: number; z: number; r: number };
 export type CorkBoardState = {
-  v: 3;
+  v: 4;
   camera: Camera | null;
   poses: Record<string, CorkPose>;
   strokes: InkStroke[];
+  texts: WallText[];
 };
 
 export const CORK_DRAG_GAP = 7;
-export const CORK_STORAGE_PREFIX = "only-us:cork-wall:v3:";
-const LEGACY_STORAGE_PREFIX = "only-us:cork-wall:v2:";
+export const CORK_STORAGE_PREFIX = "only-us:cork-wall:v4:";
+const LEGACY_STORAGE_PREFIX = "only-us:cork-wall:v3:";
+const LEGACY_STORAGE_PREFIX_V2 = "only-us:cork-wall:v2:";
 
 const TILTS = [-6.4, 3.8, -2.2, 5.6, -4.8, 2.4, 7.1, -3.4, 1.6, -5.2];
 const JITTERS = [-1.4, 2.1, -2.6, 1.3, 2.8, -1.8, 0.6, -2.2];
 
 export function corkStorageKey(coupleId: string) {
   return `${CORK_STORAGE_PREFIX}${coupleId}`;
+}
+
+export function boardSyncKey(coupleId: string) {
+  return `only-us:cork-wall:sync-at:v4:${coupleId}`;
+}
+
+export function readBoardSyncedAt(coupleId: string): string | null {
+  try {
+    return localStorage.getItem(boardSyncKey(coupleId));
+  } catch {
+    return null;
+  }
+}
+
+export function writeBoardSyncedAt(coupleId: string, iso: string) {
+  try {
+    localStorage.setItem(boardSyncKey(coupleId), iso);
+  } catch {
+    return;
+  }
+}
+
+export function isBoardEmpty(state: CorkBoardState): boolean {
+  return !state.camera
+    && !Object.keys(state.poses).length
+    && !state.strokes.length
+    && !state.texts.length;
 }
 
 export function clamp(value: number, min: number, max: number) {
@@ -96,7 +126,17 @@ function migrateLegacyPoses(poses: Record<string, CorkPose>) {
 }
 
 export function emptyBoardState(): CorkBoardState {
-  return { v: 3, camera: null, poses: {}, strokes: [] };
+  return { v: 4, camera: null, poses: {}, strokes: [], texts: [] };
+}
+
+function boardFromRecord(parsed: Record<string, unknown>): CorkBoardState {
+  return {
+    v: 4,
+    camera: cameraFromUnknown(parsed.camera),
+    poses: parsePoseMap((parsed.poses as Record<string, unknown>) ?? {}),
+    strokes: parseInkStrokes(parsed.strokes),
+    texts: parseWallTexts(parsed.texts),
+  };
 }
 
 export function parseBoardState(raw: string | null): CorkBoardState | null {
@@ -104,23 +144,39 @@ export function parseBoardState(raw: string | null): CorkBoardState | null {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (!parsed || typeof parsed !== "object") return null;
-    if (parsed.v === 3) {
-      return {
-        v: 3,
-        camera: cameraFromUnknown(parsed.camera),
-        poses: parsePoseMap((parsed.poses as Record<string, unknown>) ?? {}),
-        strokes: parseInkStrokes(parsed.strokes),
-      };
+    if (parsed.v === 4 || parsed.v === 3) {
+      return boardFromRecord(parsed);
     }
     return {
-      v: 3,
+      v: 4,
       camera: null,
       poses: migrateLegacyPoses(parsePoseMap(parsed)),
       strokes: [],
+      texts: [],
     };
   } catch {
     return null;
   }
+}
+
+export function mergeWallBoard(
+  local: CorkBoardState,
+  remote: CorkBoardState | null,
+  remoteAt: string | null,
+  coupleId: string,
+): CorkBoardState {
+  if (!remote || isBoardEmpty(remote)) {
+    return local;
+  }
+  if (isBoardEmpty(local)) {
+    return remote;
+  }
+  const remoteMs = remoteAt ? Date.parse(remoteAt) : 0;
+  const localMs = Date.parse(readBoardSyncedAt(coupleId) ?? "") || 0;
+  if (!remoteMs || remoteMs >= localMs) {
+    return remote;
+  }
+  return local;
 }
 
 function cameraFromUnknown(value: unknown): Camera | null {
@@ -137,9 +193,11 @@ export function readBoardState(coupleId: string): CorkBoardState {
   try {
     const current = parseBoardState(localStorage.getItem(corkStorageKey(coupleId)));
     if (current) return current;
-    const legacy = localStorage.getItem(`${LEGACY_STORAGE_PREFIX}${coupleId}`);
-    const migrated = parseBoardState(legacy);
-    return migrated ?? emptyBoardState();
+    for (const prefix of [LEGACY_STORAGE_PREFIX, LEGACY_STORAGE_PREFIX_V2]) {
+      const migrated = parseBoardState(localStorage.getItem(`${prefix}${coupleId}`));
+      if (migrated) return migrated;
+    }
+    return emptyBoardState();
   } catch {
     return emptyBoardState();
   }

@@ -41,10 +41,16 @@ type PhotoRow = {
   location_source: "none" | "exif" | "place" | "manual";
 };
 
+function isPublicPhotoUrl(value: string | null | undefined) {
+  return Boolean(value && /^https?:\/\//i.test(value));
+}
+
 function toPhoto(row: PhotoRow, signedUrl?: string): MemoryPhoto {
+  const publicUrl = isPublicPhotoUrl(row.storage_url) ? row.storage_url : "";
   return {
     id: row.id,
-    storageUrl: signedUrl || row.storage_url,
+    storageUrl: signedUrl || publicUrl,
+    storagePath: row.storage_path,
     caption: row.caption,
     sortOrder: row.sort_order,
     latitude: row.latitude,
@@ -110,25 +116,51 @@ const loadMemories = cache(async (photoMode: "all" | "cover" | "none"): Promise<
     : { data: [] as PhotoRow[] };
 
   const photoRows = (photos ?? []) as PhotoRow[];
-  const toSign = photoMode === "cover" ? coverPhotos(photoRows) : photoRows;
-  const signedEntries = await Promise.all(toSign.filter(photo => photo.storage_path).map(async photo => {
-    const signed = await supabase.storage.from("memory-photos").createSignedUrl(photo.storage_path!, 60 * 60);
-    return [photo.id, signed.data?.signedUrl ?? ""] as const;
-  }));
-  const signedUrls = new Map(signedEntries.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
   const mappedPhotos = photoMode === "cover" ? coverPhotos(photoRows) : photoRows;
 
   return {
     persist: true,
-    memories: (data as MemoryRow[]).map(row => toMemory(row, mappedPhotos, signedUrls)),
+    memories: (data as MemoryRow[]).map(row => toMemory(row, mappedPhotos)),
   };
 });
+
+export async function signMemoryPhotoUrls(photoIds: string[]): Promise<Record<string, string>> {
+  const unique = [...new Set(photoIds.filter(Boolean))].slice(0, 48);
+  if (!unique.length) return {};
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return {};
+  const supabase = await createClient();
+  if (!supabase) return {};
+
+  const { data: photos } = await supabase
+    .from("memory_photos")
+    .select("id, storage_path, memory_id")
+    .in("id", unique);
+  if (!photos?.length) return {};
+
+  const memoryIds = [...new Set(photos.map(row => row.memory_id))];
+  const { data: memories } = await supabase
+    .from("memories")
+    .select("id")
+    .eq("couple_id", session.coupleId)
+    .in("id", memoryIds);
+  const allowed = new Set((memories ?? []).map(row => row.id));
+  const signedEntries = await Promise.all(
+    photos
+      .filter(row => allowed.has(row.memory_id) && row.storage_path)
+      .map(async row => {
+        const signed = await supabase.storage.from("memory-photos").createSignedUrl(row.storage_path!, 60 * 60);
+        return [row.id, signed.data?.signedUrl ?? ""] as const;
+      }),
+  );
+  return Object.fromEntries(signedEntries.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
+}
 
 export async function listMemories(options?: { photos?: "all" | "cover" | "none" }) {
   return loadMemories(options?.photos ?? "all");
 }
 
-export async function listMemoryCalendarMarks(): Promise<Array<{ id: string; title: string; happenedOn: string }>> {
+export const listMemoryCalendarMarks = cache(async (): Promise<Array<{ id: string; title: string; happenedOn: string }>> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return [];
   const supabase = await createClient();
@@ -143,7 +175,7 @@ export async function listMemoryCalendarMarks(): Promise<Array<{ id: string; tit
     title: row.title,
     happenedOn: row.happened_on,
   }));
-}
+});
 
 export async function createMemory(input: CreateMemoryInput): Promise<{ memory: Memory } | { error: string }> {
   const session = await getAppSession();
