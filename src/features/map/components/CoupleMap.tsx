@@ -16,6 +16,8 @@ import { distanceMeters } from "@/features/places/geo";
 import { asPlanCoordinates } from "@/features/planning/planCoordinates";
 import { curveRoute } from "@/features/trip/planRoute";
 import { useRoadRoute } from "@/features/map/routing/useRoadRoute";
+import { useHydratePlanCoordinates } from "@/features/planning/useHydratePlanCoordinates";
+import { useResolvedMemories } from "@/features/memories/resolvePhotoUrls";
 import { MapRouteOverlay } from "./MapRouteOverlay";
 
 const MAP_STYLE: StyleSpecification = memoryCityStyle({
@@ -201,16 +203,18 @@ function framePins(map: MapLibreMap, pins: MapPin[], viewMode: ViewMode, duratio
     duration,
   });
 }
-export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, archivedTrips: initialArchivedTrips }: { places: Place[]; memories: Memory[]; trip: CouplePlan; archivedTrips: ArchivedTripPlan[] }) {
+export function CoupleMap({ places: initialPlaces, memories: initialMemories, trip: initialTrip, archivedTrips: initialArchivedTrips }: { places: Place[]; memories: Memory[]; trip: CouplePlan; archivedTrips: ArchivedTripPlan[] }) {
+  const memories = useResolvedMemories(initialMemories);
   const mapHostRef = useRef<HTMLDivElement>(null);
   const container = useRef<HTMLDivElement>(null);
   const sheetRef = useRef<HTMLElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
   const selectionViewportRef = useRef<MapViewportSnapshot | null>(null);
-  const clearMapSelectionRef = useRef<(restoreView?: boolean) => void>(() => {});
+  const clearMapSelectionRef = useRef<(restoreView?: boolean) => void>(() => { });
   const [places, setPlaces] = useState(initialPlaces);
   const [tripItems, setTripItems] = useState(initialTrip.items);
+  useHydratePlanCoordinates("trip", tripItems, setTripItems);
   const [tripTitle, setTripTitle] = useState(initialTrip.title || "우리가 고른 여행");
   const [tripDayCount, setTripDayCount] = useState(Math.max(1, initialTrip.dayCount));
   const [archivedTrips] = useState<ArchivedTripPlan[]>(initialArchivedTrips);
@@ -365,9 +369,9 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     });
     setSheetAnchor(current => (
       current
-      && current.x === next.x
-      && current.y === next.y
-      && current.placement === next.placement
+        && current.x === next.x
+        && current.y === next.y
+        && current.placement === next.placement
         ? current
         : next
     ));
