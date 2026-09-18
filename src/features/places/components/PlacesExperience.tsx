@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ContextPanel } from "@/components/layout/ContextPanel";
@@ -122,29 +123,37 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
 
   const runDiscover = useCallback(async (input: Parameters<typeof searchDiscoverPlaces>[0], append = false) => {
     const requestId = ++discoverRequestRef.current;
-    setDiscoverPending(true);
-    setDiscoverError("");
-    setSearched(true);
-    const result = await searchDiscoverPlaces(input);
-    if (requestId !== discoverRequestRef.current) return;
-    setDiscoverPending(false);
-    if (!result.ok) {
+    flushSync(() => {
+      setDiscoverPending(true);
+      setDiscoverError("");
+      setSearched(true);
       if (!append) {
         setDiscover([]);
+        setDiscoverIsEnd(false);
+        setDiscoverPage(1);
       }
-      setDiscoverError(result.error);
-      setDiscoverIsEnd(true);
-      return;
-    }
-    const ranking = "ranking" in result ? result.ranking : undefined;
-    const merged = result.places.map(item => {
-      const row = ranking?.find(entry => entry.externalPlaceId === item.externalPlaceId && entry.externalSource === item.externalSource);
-      return mergeCandidateWithSaved(item, placesRef.current, row ? { userFit: row.userFit, partnerFit: row.partnerFit, recommendReason: row.reason } : undefined);
     });
-    setDiscover(previous => uniqueByExternalId(append ? [...previous, ...merged] : merged));
-    setDiscoverPage(result.page);
-    setDiscoverIsEnd(result.isEnd);
-    if (!append && merged[0]) setSelectedId(merged[0].id);
+    try {
+      const result = await searchDiscoverPlaces(input);
+      if (requestId !== discoverRequestRef.current) return;
+      if (!result.ok) {
+        if (!append) {
+          setDiscover([]);
+        }
+        setDiscoverError(result.error);
+        setDiscoverIsEnd(true);
+        return;
+      }
+      const merged = result.places.map(item => mergeCandidateWithSaved(item, placesRef.current));
+      setDiscover(previous => uniqueByExternalId(append ? [...previous, ...merged] : merged));
+      setDiscoverPage(result.page);
+      setDiscoverIsEnd(result.isEnd);
+      if (!append && merged[0]) setSelectedId(merged[0].id);
+    } finally {
+      if (requestId === discoverRequestRef.current) {
+        setDiscoverPending(false);
+      }
+    }
   }, []);
 
   async function persistStatus(id: string, status: PlacePreferenceStatus) {
@@ -430,20 +439,43 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
       )}
 
       {section === "search" && (
-        <form className="discover-search" action={formData => void handleSearch(formData)}>
-          <div className="discover-search-bar">
+        <form
+          className="discover-search"
+          onSubmit={event => {
+            event.preventDefault();
+            handleSearch(new FormData(event.currentTarget));
+          }}
+          aria-busy={discoverPending}
+        >
+          <div className={`discover-search-bar${discoverPending ? " is-pending" : ""}`}>
+            {discoverPending ? <i className="discover-search-spinner" aria-hidden="true" /> : null}
             <input
               name="query"
               value={searchQuery}
               onChange={event => setSearchQuery(event.target.value)}
               placeholder="성수 대림창고, 연남동 카페"
               aria-label="장소 이름 검색"
+              disabled={discoverPending}
             />
-            <button className="primary-button" type="submit" disabled={discoverPending}>{discoverPending ? "검색 중..." : "검색"}</button>
+            <button className="primary-button" type="submit" disabled={discoverPending}>
+              {discoverPending ? <><i className="button-spinner" aria-hidden="true" />검색 중</> : "검색"}
+            </button>
           </div>
+          {discoverPending && (
+            <p className="discover-search-status" role="status" aria-live="polite">
+              <i aria-hidden="true" />
+              <span><b>장소를 찾고 있어요</b> 카카오·구석구석에서 후보를 모으는 중이에요.</span>
+            </p>
+          )}
           <div className="chip-row discover-cats">
-            <button className={searchCategory === "all" ? "is-active" : ""} type="button" onClick={() => setSearchCategory("all")}>전체</button>
-            {PLACE_CATEGORIES.map(item => <button className={searchCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSearchCategory(item.id)} key={item.id}><PlaceCategoryIcon category={item.id} />{item.label}</button>)}
+            <button className={searchCategory === "all" ? "is-active" : ""} type="button" disabled={discoverPending} onClick={() => {
+              setSearchCategory("all");
+              if (searchQuery.trim()) void runDiscover({ query: searchQuery.trim(), category: "all", page: 1 });
+            }}>전체</button>
+            {PLACE_CATEGORIES.map(item => <button className={searchCategory === item.id ? "is-active" : ""} type="button" disabled={discoverPending} onClick={() => {
+              setSearchCategory(item.id);
+              if (searchQuery.trim()) void runDiscover({ query: searchQuery.trim(), category: item.id, page: 1 });
+            }} key={item.id}><PlaceCategoryIcon category={item.id} />{item.label}</button>)}
           </div>
         </form>
       )}

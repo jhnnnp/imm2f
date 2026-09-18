@@ -8,8 +8,7 @@ import { compactEventYmd, formatEventPeriod, isEndedFestival, koreaTodayYmd, ldo
 const TOUR_BASE = "https://apis.data.go.kr/B551011/KorService2";
 const PAGE_SIZE = 15;
 const FESTIVAL_PAGE_SIZE = 30;
-const FESTIVAL_HYDRATE_CHUNK = 5;
-const FESTIVAL_SKIP_EMPTY_PAGES = 3;
+const FESTIVAL_SKIP_EMPTY_PAGES = 2;
 
 const CONTENT_TYPE: Record<"tourist" | "festival" | "stay", string> = {
   tourist: "12",
@@ -203,36 +202,12 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
   }
 }
 
-async function hydrateFestivalDates(items: TourItem[]): Promise<TourItem[]> {
-  const missing = items.filter(item => !festivalHasPeriod(item));
-  if (!missing.length) return items;
-  const dates = new Map<string, { start?: string; end?: string }>();
-  for (let index = 0; index < missing.length; index += FESTIVAL_HYDRATE_CHUNK) {
-    const chunk = missing.slice(index, index + FESTIVAL_HYDRATE_CHUNK);
-    await Promise.all(chunk.map(async item => {
-      const id = String(item.contentid ?? item.contentId ?? "").trim();
-      if (!id) return;
-      const intro = await tourFetch("detailIntro2", { contentId: id, contentTypeId: CONTENT_TYPE.festival });
-      if (!intro.ok) return;
-      const introItem = asItems(intro.payload.response)[0];
-      if (!introItem) return;
-      dates.set(id, { start: festivalStart(introItem), end: festivalEnd(introItem) });
-    }));
-  }
-  return items.map(item => {
-    const id = String(item.contentid ?? item.contentId ?? "").trim();
-    const extra = dates.get(id);
-    if (!extra) return item;
-    return {
-      ...item,
-      eventstartdate: extra.start || item.eventstartdate,
-      eventenddate: extra.end || item.eventenddate,
-    };
+/** List rows from searchFestival2 already use eventStartDate; skip per-item detailIntro2 on browse. */
+function discoverFestivalItems(items: TourItem[]) {
+  return items.filter(item => {
+    if (!festivalHasPeriod(item)) return true;
+    return !isEndedFestival(festivalStart(item), festivalEnd(item));
   });
-}
-
-function currentFestivalItems(items: TourItem[]) {
-  return items.filter(item => !isEndedFestival(festivalStart(item), festivalEnd(item)));
 }
 
 function haversineMeters(lng1: number, lat1: number, lng2: number, lat2: number) {
@@ -368,7 +343,7 @@ export async function searchTourPlacesRemote(input: KakaoSearchInput): Promise<K
   let totalCount = fetched.payload.response?.body?.totalCount ?? 0;
   let items = asItems(fetched.payload.response);
   if (category === "festival") {
-    items = currentFestivalItems(await hydrateFestivalDates(items)).filter(item => festivalItemMatches(item, tokens, origin));
+    items = discoverFestivalItems(items).filter(item => festivalItemMatches(item, tokens, origin));
     let skipped = 0;
     while (items.length === 0 && pageNo * rows < totalCount && skipped < FESTIVAL_SKIP_EMPTY_PAGES) {
       pageNo += 1;
@@ -376,7 +351,7 @@ export async function searchTourPlacesRemote(input: KakaoSearchInput): Promise<K
       fetched = await fetchPage(pageNo);
       if (!fetched.ok) break;
       totalCount = fetched.payload.response?.body?.totalCount ?? totalCount;
-      items = currentFestivalItems(await hydrateFestivalDates(asItems(fetched.payload.response))).filter(item => festivalItemMatches(item, tokens, origin));
+      items = discoverFestivalItems(asItems(fetched.payload.response)).filter(item => festivalItemMatches(item, tokens, origin));
     }
     if (!fetched.ok) return fetched;
   }

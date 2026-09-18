@@ -31,10 +31,12 @@ export function PlaceDiscoverResults({
 }) {
   if (error) return <div className="empty-inline" role="alert"><h2>검색을 불러오지 못했어요.</h2><p>{error}</p></div>;
   if (pending && !places.length) return (
-    <div className="discover-loading-panel" role="status" aria-live="polite">
+    <div className="discover-loading-panel" role="status" aria-live="polite" aria-label="장소 검색 중">
       <div className="discover-loading-copy"><i /><div><b>장소를 찾고 있어요</b><span>선택한 조건에 맞는 후보를 모으고 있어요.</span></div></div>
-      <div className="discover-skeleton-grid" aria-hidden="true">
-        {[0, 1, 2].map(item => <span key={item}><i /><b /><small /><small /></span>)}
+      <div className={layout === "list" ? "discover-skeleton-list" : "discover-skeleton-grid"} aria-hidden="true">
+        {(layout === "list" ? [0, 1, 2, 3, 4] : [0, 1, 2, 3, 4, 5]).map(item => (
+          <span key={item}>{layout === "list" ? <><b /><small /></> : <><i /><b /><small /><small /></>}</span>
+        ))}
       </div>
     </div>
   );

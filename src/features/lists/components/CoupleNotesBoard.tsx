@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatKoDate } from "@/lib/dates";
 import { createNote, deleteNote, updateNoteStatus } from "../actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
+import { VaultScreenshotImport } from "./VaultScreenshotImport";
 import { NOTE_COPY, NOTE_STATUS, type CoupleNote, type NoteKind } from "../types";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 
@@ -149,6 +150,17 @@ export function CoupleNotesBoard({
   const [openStatusId, setOpenStatusId] = useState<string | null>(null);
   const [selectedNote, setSelectedNote] = useState<CoupleNote | null>(null);
   const [quickTitle, setQuickTitle] = useState("");
+  const [vaultScanPreview, setVaultScanPreview] = useState(false);
+
+  const onVaultPreviewChange = useCallback((preview: boolean) => {
+    setVaultScanPreview(preview);
+  }, []);
+
+  function closeDialog() {
+    setOpen(false);
+    setVaultScanPreview(false);
+    setError("");
+  }
 
   const visibleNotes = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("ko-KR");
@@ -181,7 +193,7 @@ export function CoupleNotesBoard({
     }
     setNotes(current => [result.note, ...current]);
     emitCoupleActivitiesChanged();
-    setOpen(false);
+    closeDialog();
     setTitle("");
     setDetail("");
     setExtra("");
@@ -357,7 +369,11 @@ export function CoupleNotesBoard({
             <p>{copy.lead}</p>
           </div>
         </div>
-        {kind !== "bucket" && <button className="date-action-button is-primary" type="button" onClick={() => setOpen(true)}><HeaderActionIcon name="plus" /><span>{meta.addLabel}</span></button>}
+        {kind !== "bucket" && (
+          <button className="date-action-button is-primary" type="button" onClick={() => setOpen(true)} disabled={pending}>
+            <HeaderActionIcon name="plus" /><span>{meta.addLabel}</span>
+          </button>
+        )}
         <div className="notes-overview" aria-label="목록 요약">
           <div><span>전체</span><strong>{notes.length}</strong><small>개의 기록</small></div>
           <div><span>{statuses.find(item => item.id === highlightStatus)?.label}</span><strong>{highlightCount}</strong><small>{highlightUnit}</small></div>
@@ -410,17 +426,35 @@ export function CoupleNotesBoard({
       )}
       {error && !open && <p className="notes-toast" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></p>}
       {open && (
-        <div className="dialog-backdrop" role="presentation" onClick={() => !pending && setOpen(false)}>
+        <div className="dialog-backdrop" role="presentation" onClick={() => !pending && closeDialog()}>
           <form className={`place-create-dialog note-create-dialog note-create-dialog-${kind}`} role="dialog" aria-modal="true" aria-labelledby="note-dialog-title" onClick={event => event.stopPropagation()} onSubmit={event => void submit(event)}>
             <div className="dialog-head">
               <div className="note-dialog-title">
                 <span className="notes-kind-mark"><NoteKindIcon kind={kind} /></span>
                 <div><span className="eyebrow">NEW · {copy.eyebrow}</span><h2 id="note-dialog-title">{meta.dialogTitle}</h2></div>
               </div>
-              <button className="icon-button" type="button" aria-label="닫기" onClick={() => setOpen(false)}>×</button>
+              <button className="icon-button" type="button" aria-label="닫기" onClick={() => closeDialog()}>×</button>
             </div>
             <div className="note-dialog-content">
               <div className="note-dialog-fields">
+                {kind === "vault" && (
+                  <VaultScreenshotImport
+                    persist={persist}
+                    disabled={pending}
+                    onBusy={setPending}
+                    onError={setError}
+                    onPreviewChange={onVaultPreviewChange}
+                    onSaved={saved => {
+                      setNotes(current => [...saved, ...current]);
+                      emitCoupleActivitiesChanged();
+                      closeDialog();
+                      router.refresh();
+                    }}
+                  />
+                )}
+                {kind === "vault" && !vaultScanPreview && <p className="vault-scan-divider" aria-hidden="true"><span>또는 직접 입력</span></p>}
+                {!vaultScanPreview && (
+                  <>
                 <label className="field">
                   <span>{meta.titleLabel}</span>
                   <input value={title} onChange={event => setTitle(event.target.value)} placeholder={copy.placeholder} required />
@@ -448,11 +482,13 @@ export function CoupleNotesBoard({
                     {statuses.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}
                   </select>
                 </label>
-                {error && <p className="form-error" role="alert">{error}</p>}
                 <div className="dialog-actions">
-                  <button className="outline-button" type="button" onClick={() => setOpen(false)} disabled={pending}>취소</button>
+                  <button className="outline-button" type="button" onClick={() => closeDialog()} disabled={pending}>취소</button>
                   <button className="primary-button" type="submit" disabled={pending}>{pending ? "저장 중..." : kind === "gift" ? "선물 플랜 저장" : "저장"}</button>
                 </div>
+                  </>
+                )}
+                {error && <p className="form-error" role="alert">{error}</p>}
               </div>
               {kind === "gift" && (
                 <aside className={`gift-web-preview ${isWebLink(extra) ? "has-link" : ""}`} aria-live="polite">

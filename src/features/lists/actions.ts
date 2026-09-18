@@ -46,6 +46,28 @@ export async function listNotes(kind: NoteKind): Promise<{ persist: boolean; not
   return { persist: true, notes: data.map(row => toNote(row as NoteRow)) };
 }
 
+export async function createNotesBatch(
+  kind: NoteKind,
+  items: ReadonlyArray<{ title: string; detail: string; extra: string; status?: string }>,
+): Promise<{ notes: CoupleNote[] } | { error: string }> {
+  const created: CoupleNote[] = [];
+  for (const item of items) {
+    const result = await createNote(kind, {
+      title: item.title,
+      detail: item.detail,
+      extra: item.extra,
+      status: item.status ?? NOTE_STATUS[kind][0].id,
+    });
+    if ("error" in result) {
+      return created.length
+        ? { error: `${result.error} (${created.length}개는 저장됐어요.)` }
+        : { error: result.error };
+    }
+    created.push(result.note);
+  }
+  return { notes: created };
+}
+
 export async function createNote(kind: NoteKind, input: { title: string; detail: string; extra: string; status: string }): Promise<{ note: CoupleNote } | { error: string }> {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { error: "로그인 후 남길 수 있어요." };

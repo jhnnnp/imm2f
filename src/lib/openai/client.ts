@@ -2,6 +2,12 @@ import { getOpenAiApiKey, getOpenAiModel } from "./env";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
+type VisionContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
+
+type VisionMessage = { role: "system" | "user"; content: string | VisionContentPart[] };
+
 function usesReasoning(model: string) {
   return /^gpt-5/i.test(model);
 }
@@ -12,6 +18,78 @@ function usesReasoning(model: string) {
  * heuristic fallback, which reads as "the bot is not really an LLM".
  */
 const DEFAULT_JSON_TIMEOUT_MS = 25000;
+
+export async function completeJsonFromImage<T>(input: {
+  instructions: string;
+  imageDataUrl: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+}): Promise<T | null> {
+  const model = getOpenAiModel();
+  const timeoutMs = input.timeoutMs ?? 45000;
+  const reasoning = usesReasoning(model);
+  const messages: VisionMessage[] = [
+    { role: "system", content: input.instructions },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Read this reservation screenshot and reply with JSON only." },
+        { type: "image_url", image_url: { url: input.imageDataUrl, detail: "high" } },
+      ],
+    },
+  ];
+  const bodyBase = {
+    model,
+    response_format: { type: "json_object" as const },
+    messages,
+  };
+  const reasoningBody = {
+    ...bodyBase,
+    max_completion_tokens: input.maxTokens ?? 4000,
+    reasoning_effort: "low" as const,
+  };
+  const classicBody = {
+    ...bodyBase,
+    temperature: 0.1,
+    max_tokens: input.maxTokens ?? 2500,
+  };
+
+  const parse = async (response: Response) => {
+    if (!response.ok) {
+      console.error("OpenAI vision completion failed", response.status, (await response.text()).slice(0, 300));
+      return null;
+    }
+    const body = await response.json() as { choices?: Array<{ message?: { content?: string | null } }> };
+    const content = body.choices?.[0]?.message?.content;
+    if (!content) return null;
+    try {
+      return JSON.parse(content) as T;
+    } catch {
+      return null;
+    }
+  };
+
+  try {
+    const first = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${getOpenAiApiKey()}`, "Content-Type": "application/json" },
+      body: JSON.stringify(reasoning ? reasoningBody : classicBody),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const parsed = await parse(first);
+    if (parsed) return parsed;
+    if (!reasoning) return null;
+    const retry = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${getOpenAiApiKey()}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...bodyBase, max_completion_tokens: input.maxTokens ?? 4000 }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return parse(retry);
+  } catch {
+    return null;
+  }
+}
 
 export async function completeJson<T>(input: {
   messages: ChatMessage[];

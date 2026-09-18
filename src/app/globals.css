@@ -3124,8 +3124,8 @@ dialog {
 }
 
 dialog::backdrop {
-  background: rgba(37, 41, 39, .38);
-  backdrop-filter: blur(3px)
+  background: rgba(255, 251, 245, .52);
+  backdrop-filter: blur(2px) saturate(1.02)
 }
 
 .command-search {
@@ -5724,8 +5724,9 @@ a.primary-button {
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(37, 41, 39, .38);
-  backdrop-filter: blur(3px);
+  background: rgba(255, 251, 245, .52);
+  backdrop-filter: blur(2px) saturate(1.02);
+  -webkit-backdrop-filter: blur(2px) saturate(1.02);
   display: grid;
   place-items: center;
   z-index: 40;
@@ -14124,8 +14125,63 @@ a.activity-line:hover {
   height: 38px
 }
 
+.discover-search-bar.is-pending {
+  border-color: rgba(83, 111, 99, .34);
+  background: rgba(237, 243, 239, .92);
+  box-shadow: 0 0 0 3px rgba(83, 111, 99, .08)
+}
+
+.discover-search-spinner {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(83, 111, 99, .2);
+  border-top-color: var(--sage-deep);
+  border-radius: 50%;
+  animation: ui-spin .7s linear infinite
+}
+
+.discover-search-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -4px 0 0;
+  padding: 11px 14px;
+  border: 1px solid rgba(83, 111, 99, .16);
+  border-radius: 12px;
+  background: #edf3ef;
+  color: var(--sage-deep)
+}
+
+.discover-search-status i {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(83, 111, 99, .22);
+  border-top-color: var(--sage-deep);
+  border-radius: 50%;
+  animation: ui-spin .7s linear infinite
+}
+
+.discover-search-status span {
+  display: grid;
+  gap: 2px;
+  font-size: .58rem;
+  color: var(--muted)
+}
+
+.discover-search-status b {
+  font-size: .68rem;
+  color: var(--sage-deep)
+}
+
 .discover-cats {
   margin: 0
+}
+
+.discover-cats button:disabled {
+  opacity: .55;
+  cursor: wait
 }
 
 .discover-browse {
@@ -14422,7 +14478,42 @@ a.activity-line:hover {
 .discover-loading-panel {
   display: grid;
   gap: 18px;
+  min-height: 280px;
   padding: 20px 0
+}
+
+.discover-skeleton-list {
+  display: grid;
+  gap: 10px
+}
+
+.discover-skeleton-list>span {
+  display: grid;
+  gap: 8px;
+  min-height: 62px;
+  padding: 14px 16px;
+  border: 1px solid rgba(107, 120, 112, .12);
+  border-radius: 12px;
+  background: #fff
+}
+
+.discover-skeleton-list b {
+  width: 42%;
+  height: 14px
+}
+
+.discover-skeleton-list small {
+  width: 72%;
+  height: 11px
+}
+
+.discover-skeleton-list b,
+.discover-skeleton-list small {
+  display: block;
+  border-radius: 8px;
+  background: linear-gradient(100deg, #eceae4 25%, #f7f5ef 42%, #eceae4 58%);
+  background-size: 220% 100%;
+  animation: skeleton-shift 1.25s ease-in-out infinite
 }
 
 .discover-loading-copy,
@@ -16704,6 +16795,32 @@ a.activity-line:hover {
   line-height: 1.7
 }
 
+.notes-hero-actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-self: start;
+  justify-self: end
+}
+
+.notes-hero-actions .date-action-button {
+  height: 42px
+}
+
+.notes-hero-actions .date-action-button.is-primary {
+  border-color: var(--note-accent-deep);
+  background: var(--note-accent-deep);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--note-accent) 20%, transparent)
+}
+
+.notes-hero-actions .date-action-button.is-primary:hover {
+  border-color: var(--note-accent-deep);
+  background: var(--note-accent-deep);
+  filter: brightness(.93)
+}
+
 .notes-hero>.date-action-button {
   position: relative;
   z-index: 1;
@@ -17351,6 +17468,150 @@ a.activity-line:hover {
 .note-dialog-fields {
   display: grid;
   gap: 13px
+}
+
+.vault-scan-upload {
+  display: grid;
+  gap: 8px
+}
+
+.vault-scan-drop {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px dashed color-mix(in srgb, var(--note-accent) 36%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--note-accent) 6%, #fffefb);
+  cursor: pointer;
+  transition: border-color .16s, background .16s
+}
+
+.vault-scan-drop:hover,
+.vault-scan-upload.is-scanning .vault-scan-drop {
+  border-color: var(--note-accent);
+  background: color-mix(in srgb, var(--note-accent) 10%, #fffefb)
+}
+
+.vault-scan-drop b {
+  font-size: .92rem
+}
+
+.vault-scan-drop p,
+.vault-scan-privacy,
+.vault-scan-preview-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .68rem;
+  line-height: 1.55
+}
+
+.vault-scan-hint {
+  font-size: .62rem;
+  letter-spacing: .06em;
+  color: var(--note-accent-deep)
+}
+
+.vault-scan-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0;
+  color: var(--muted);
+  font-size: .62rem;
+  letter-spacing: .08em;
+  text-transform: uppercase
+}
+
+.vault-scan-divider::before,
+.vault-scan-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line)
+}
+
+.vault-scan-preview {
+  display: grid;
+  gap: 12px
+}
+
+.vault-scan-preview-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start
+}
+
+.vault-scan-preview-head b {
+  display: block;
+  margin-top: 4px;
+  font-size: .95rem
+}
+
+.vault-scan-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--line)
+}
+
+.vault-scan-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: min(46vh, 420px);
+  overflow: auto
+}
+
+.vault-scan-list li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fffefb
+}
+
+.vault-scan-list li.is-off {
+  opacity: .55
+}
+
+.vault-scan-check {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: .62rem;
+  color: var(--muted)
+}
+
+.vault-scan-fields {
+  display: grid;
+  gap: 8px
+}
+
+.vault-scan-fields input,
+.vault-scan-fields textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: .78rem;
+  background: #fff
+}
+
+.vault-scan-fields textarea {
+  resize: vertical;
+  min-height: 72px
+}
+
+.vault-scan-actions {
+  margin-top: 4px
 }
 
 .note-create-dialog-gift {
@@ -18266,8 +18527,13 @@ a.activity-line:hover {
     font-size: 1.75rem
   }
 
-  .notes-hero>.date-action-button {
+  .notes-hero>.date-action-button,
+  .notes-hero-actions {
     width: 100%
+  }
+
+  .notes-hero-actions .date-action-button {
+    flex: 1 1 auto
   }
 
   .notes-overview {

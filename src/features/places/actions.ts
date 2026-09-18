@@ -9,7 +9,6 @@ import { looksLikeNonVenue } from "@/lib/kakao/dateCandidate";
 import { searchKakaoPlacesRemote, type KakaoSearchInput, type KakaoSearchResult } from "@/lib/kakao/local";
 import { loadTourPlaceDetail as loadTourPlaceDetailRemote, searchTourPlacesRemote } from "@/lib/tourapi/client";
 import { shouldSearchFestivals } from "@/lib/tourapi/festivalSchedule";
-import { applyRanking, rankDiscoverCandidates, type RankedCandidate } from "@/lib/openai/rank";
 import { mapPlaceRow, visualToneForCategory } from "./mappers";
 import { discoverSearchCategories, isAllowedKakaoDiscoverPlace, kakaoGroupCode } from "./config/kakaoCategories";
 import { PLACE_CATEGORIES, usesTourApi } from "./config/placeCategories";
@@ -37,7 +36,7 @@ export type SaveKakaoPlaceInput = {
 };
 
 export type DiscoverSearchResult =
-  | { ok: true; places: DiscoverCandidate[]; isEnd: boolean; page: number; totalCount: number; ranking?: RankedCandidate[] }
+  | { ok: true; places: DiscoverCandidate[]; isEnd: boolean; page: number; totalCount: number }
   | { ok: false; code: string; error: string };
 
 export type DiscoverSearchInput = KakaoSearchInput | (Omit<KakaoSearchInput, "category"> & { categories: PlaceCategoryId[] });
@@ -139,12 +138,7 @@ export async function searchDiscoverPlaces(input: DiscoverSearchInput | string):
   const searches = categories.flatMap(category => discoverCategorySearches(params, category));
   let raw: DiscoverSearchResult = mergeDiscoverResults(await Promise.all(searches), params.page ?? 1);
   if (!raw.ok) return raw;
-  raw = { ...raw, places: raw.places.filter(keepDiscoverPlace) };
-  if ((params.page ?? 1) > 1 || raw.places.length < 2) return raw;
-  const { places: saved } = await listPlaces();
-  const ranking = await rankDiscoverCandidates(raw.places, saved);
-  if (!ranking) return raw;
-  return { ...raw, places: applyRanking(raw.places, ranking), ranking };
+  return { ...raw, places: raw.places.filter(keepDiscoverPlace) };
 }
 
 async function ensureWantPreference(placeId: string, userId: string) {
