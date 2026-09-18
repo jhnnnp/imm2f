@@ -446,7 +446,7 @@ function PlaceIndexCard({
   index: number;
 }) {
   return (
-    <Link className={`home-index tilt-${index % 3} tone-${place.visualTone}`} href={href} style={{ animationDelay: `${index * 70}ms` }}>
+    <Link className={`home-index tilt-${index % 3} tone-${place.visualTone}`} href={href} role="listitem" style={{ animationDelay: `${index * 70}ms` }}>
       <span className="home-index-mark" aria-hidden="true">
         <PlaceCategoryIcon category={place.category} variant="mark" />
       </span>
@@ -484,14 +484,15 @@ export function HomeDashboard({
   const liveTrip = { items: tripItems, title: tripTitle, startDate: tripStartDate, dayCount: tripDayCount };
   const liveDate = { items: dateItems, title: dateTitle, startDate: dateStartDate };
 
-  const shared = livePlaces.filter(bothWant).slice(0, 3);
-  const mine = livePlaces.filter(place => ["want", "must_visit", "revisit"].includes(place.userStatus)).slice(0, 3);
+  const shared = livePlaces.filter(bothWant);
+  const mine = livePlaces.filter(place => ["want", "must_visit", "revisit"].includes(place.userStatus));
   const partnerOnly = livePlaces.filter(place =>
     ["want", "must_visit", "revisit"].includes(place.partnerStatus)
     && !["want", "must_visit", "revisit"].includes(place.userStatus),
-  ).slice(0, 3);
+  );
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? "파트너" : "파트너";
   const shownPlaces = shared.length ? shared : mine;
+  const shownPlacesLabel = shared.length ? "둘 다 가고 싶은 곳" : "내가 담아 둔 곳";
   const memory = memories[0] ?? null;
   const cover = memory ? memoryCover(memory) : null;
   const heading = journeyHeadline(liveTrip.title, liveTrip.items, livePlaces, liveTrip.dayCount);
@@ -627,7 +628,7 @@ export function HomeDashboard({
         <Link className="quiet-link" href="/places">모두 보기 →</Link>
       </div>
       {shownPlaces.length ? (
-        <div className="home-index-strip">
+        <div className="home-index-strip" role="list" aria-label={shownPlacesLabel}>
           {shownPlaces.map((place, index) => (
             <PlaceIndexCard
               key={place.id}
@@ -652,7 +653,7 @@ export function HomeDashboard({
             <Link className="quiet-link" href="/places">더 둘러보기 →</Link>
           </div>
           {partnerOnly.length ? (
-            <div className="home-index-strip">
+            <div className="home-index-strip" role="list" aria-label={`${partnerName}가 담아 둔 곳`}>
               {partnerOnly.map((place, index) => (
                 <PlaceIndexCard
                   key={`partner-${place.id}`}

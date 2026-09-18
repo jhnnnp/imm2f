@@ -22933,16 +22933,33 @@ a.home-note {
 }
 
 .home-index-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
   gap: 16px;
   align-items: stretch;
-  padding: 2px 0 8px
+  padding: 2px 2px 12px;
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(43, 49, 46, .22) transparent
+}
+
+.home-index-strip::-webkit-scrollbar {
+  height: 6px
+}
+
+.home-index-strip::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(43, 49, 46, .2)
 }
 
 a.home-index {
   display: flex;
   flex-direction: column;
+  flex: 0 0 min(260px, 78vw);
+  scroll-snap-align: start;
   min-height: 168px;
   padding: 18px 18px 16px;
   border: 1px solid rgba(43, 49, 46, .1);
@@ -23142,10 +23159,6 @@ a.home-index:hover {
 }
 
 @media(max-width:600px) {
-  .home-index-strip {
-    grid-template-columns: 1fr
-  }
-
   .home-index.tilt-0,
   .home-index.tilt-1,
   .home-index.tilt-2 {
