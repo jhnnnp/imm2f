@@ -4,8 +4,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { useTossDismiss } from "@/lib/useTossDismiss";
 import { emitCoupleActivitiesChanged } from "../activityClient";
-import { groupActivities, withoutDismissedActivities } from "../activityFeed";
-import { useCoupleActivityFeed } from "../activityLive";
+import { groupActivities } from "../activityFeed";
+import { useCoupleActivityFeed, hideCoupleActivitiesInFeed, restoreCoupleActivitiesInFeed } from "../activityLive";
 import { clearCoupleActivities, dismissCoupleActivities } from "../actions";
 import { hrefForActivity, type CoupleActivity } from "../types";
 
@@ -89,8 +89,6 @@ export function ActivityPanel() {
   const skipClick = useRef(false);
   const dragged = useRef<string[] | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dismissedIdsRef = useRef(new Set<string>());
-  const [dismissTick, setDismissTick] = useState(0);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -99,10 +97,7 @@ export function ActivityPanel() {
   const dismissing = useTossDismiss(Boolean(draggingId), feedRef);
   const dismissingRef = useRef(false);
   dismissingRef.current = dismissing;
-  const items = useMemo(
-    () => withoutDismissedActivities(live.items, dismissedIdsRef.current),
-    [live.items, dismissTick],
-  );
+  const items = live.items;
   const groups = useMemo(() => groupActivities(items), [items]);
   const loaded = live.loaded;
   const feedError = error || live.error;
@@ -114,14 +109,12 @@ export function ActivityPanel() {
   }, []);
 
   const toss = (ids: string[]) => {
-    ids.forEach(id => dismissedIdsRef.current.add(id));
-    setDismissTick(value => value + 1);
+    hideCoupleActivitiesInFeed(ids);
     setError("");
     setStatus(ids.length > 1 ? "같은 이야기를 지웠어요" : "이야기를 지웠어요");
     void dismissCoupleActivities(ids).then(result => {
       if (result.error) {
-        ids.forEach(id => dismissedIdsRef.current.delete(id));
-        setDismissTick(value => value + 1);
+        restoreCoupleActivitiesInFeed(ids);
         setError(result.error);
         setStatus("");
         return;
@@ -140,13 +133,11 @@ export function ActivityPanel() {
     if (confirmTimer.current) clearTimeout(confirmTimer.current);
     setConfirmClear(false);
     const ids = items.map(item => item.id);
-    ids.forEach(id => dismissedIdsRef.current.add(id));
-    setDismissTick(value => value + 1);
+    hideCoupleActivitiesInFeed(ids);
     setStatus("오늘의 이야기를 비웠어요");
     void clearCoupleActivities().then(result => {
       if (result.error) {
-        ids.forEach(id => dismissedIdsRef.current.delete(id));
-        setDismissTick(value => value + 1);
+        restoreCoupleActivitiesInFeed(ids);
         setError(result.error);
         setStatus("");
         return;

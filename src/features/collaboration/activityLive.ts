@@ -5,6 +5,7 @@ import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { createClient } from "@/lib/supabase/client";
 import { COUPLE_ACTIVITIES_CHANGED } from "./activityClient";
 import { mapActivityRows, type ActivityRecord } from "./activityMap";
+import { forgetDismissedIds, rememberDismissedIds, withoutDismissedActivities } from "./activityFeed";
 import type { CoupleActivity } from "./types";
 
 const FEED_LIMIT = 20;
@@ -93,6 +94,7 @@ export function subscribeCoupleActivities(coupleId: string, onChange: () => void
 
 type FeedStore = {
   items: CoupleActivity[];
+  dismissed: Set<string>;
   loaded: boolean;
   error: string;
   listeners: Set<() => void>;
@@ -100,16 +102,54 @@ type FeedStore = {
 };
 
 const feeds = new Map<string, FeedStore>();
+const dismissedByCouple = new Map<string, Set<string>>();
+
+function dismissedSet(coupleId: string) {
+  let dismissed = dismissedByCouple.get(coupleId);
+  if (!dismissed) {
+    dismissed = new Set();
+    dismissedByCouple.set(coupleId, dismissed);
+  }
+  return dismissed;
+}
+
+function visibleFeedItems(store: Pick<FeedStore, "items" | "dismissed"> | undefined) {
+  if (!store) return [] as CoupleActivity[];
+  return withoutDismissedActivities(store.items, store.dismissed);
+}
 
 function notifyFeed(store: FeedStore) {
   store.listeners.forEach(listener => listener());
+}
+
+function applyIncoming(store: FeedStore, incoming: CoupleActivity[]) {
+  store.items = incoming;
+  store.loaded = true;
+  store.error = "";
+  notifyFeed(store);
+}
+
+export function hideCoupleActivitiesInFeed(ids: string[]) {
+  for (const [coupleId, store] of feeds) {
+    store.dismissed = rememberDismissedIds(store.dismissed, ids);
+    dismissedByCouple.set(coupleId, store.dismissed);
+    notifyFeed(store);
+  }
+}
+
+export function restoreCoupleActivitiesInFeed(ids: string[]) {
+  for (const [coupleId, store] of feeds) {
+    store.dismissed = forgetDismissedIds(store.dismissed, ids);
+    dismissedByCouple.set(coupleId, store.dismissed);
+    notifyFeed(store);
+  }
 }
 
 function ensureFeed(coupleId: string) {
   let store = feeds.get(coupleId);
   if (store) return store;
 
-  store = { items: [], loaded: false, error: "", listeners: new Set(), stop: null };
+  store = { items: [], dismissed: dismissedSet(coupleId), loaded: false, error: "", listeners: new Set(), stop: null };
   feeds.set(coupleId, store);
 
   let debounce: ReturnType<typeof setTimeout> | undefined;
@@ -119,10 +159,7 @@ function ensureFeed(coupleId: string) {
   const reload = () => {
     void fetchCoupleActivitiesLive(coupleId, FEED_LIMIT).then(next => {
       if (cancelled) return;
-      store!.items = next;
-      store!.loaded = true;
-      store!.error = "";
-      notifyFeed(store!);
+      applyIncoming(store!, next);
     }).catch(() => {
       if (cancelled) return;
       store!.error = "이야기를 불러오지 못했어요.";
@@ -182,7 +219,7 @@ export function useCoupleActivityFeed(limit = FEED_LIMIT) {
   if (!coupleId) return { items: [] as CoupleActivity[], loaded: true, error: "" };
   const store = feeds.get(coupleId);
   return {
-    items: (store?.items ?? []).slice(0, limit),
+    items: visibleFeedItems(store).slice(0, limit),
     loaded: store?.loaded ?? false,
     error: store?.error ?? "",
   };

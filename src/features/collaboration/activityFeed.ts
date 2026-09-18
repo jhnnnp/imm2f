@@ -4,6 +4,18 @@ export function withoutDismissedActivities<T extends { id: string }>(items: T[],
   return items.filter(item => !skip.has(item.id));
 }
 
+export function rememberDismissedIds(dismissed: Iterable<string>, ids: Iterable<string>) {
+  const next = dismissed instanceof Set ? new Set(dismissed) : new Set(dismissed);
+  for (const id of ids) if (id) next.add(id);
+  return next;
+}
+
+export function forgetDismissedIds(dismissed: Iterable<string>, ids: Iterable<string>) {
+  const next = dismissed instanceof Set ? new Set(dismissed) : new Set(dismissed);
+  for (const id of ids) next.delete(id);
+  return next;
+}
+
 export type ActivityGroup<T extends { id: string; action: string; title: string; actorUserId: string | null }> = T & {
   items: T[];
 };

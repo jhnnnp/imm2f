@@ -118,13 +118,14 @@ export async function dismissCoupleActivities(ids: string[]) {
   const service = createServiceClient();
   const scopedDelete = async (client: NonNullable<typeof supabase> | NonNullable<typeof service>) => {
     const result = await client.from("activities").delete().in("id", unique).eq("couple_id", session.coupleId).select("id");
-    return Boolean(result.error);
+    if (result.error) return { failed: true, deleted: 0 };
+    return { failed: false, deleted: result.data?.length ?? 0 };
   };
 
-  let failed = true;
-  if (supabase) failed = await scopedDelete(supabase);
-  if (failed && service) failed = await scopedDelete(service);
-  if (failed) return { error: "이야기를 지우지 못했어요." };
+  let last = { failed: true, deleted: 0 };
+  if (supabase) last = await scopedDelete(supabase);
+  if ((last.failed || last.deleted === 0) && service) last = await scopedDelete(service);
+  if (last.failed || (unique.length > 0 && last.deleted === 0)) return { error: "이야기를 지우지 못했어요." };
   return { ok: true as const };
 }
 
@@ -135,13 +136,14 @@ export async function clearCoupleActivities() {
   const service = createServiceClient();
   const scopedClear = async (client: NonNullable<typeof supabase> | NonNullable<typeof service>) => {
     const result = await client.from("activities").delete().eq("couple_id", session.coupleId).select("id");
-    return Boolean(result.error);
+    if (result.error) return { failed: true as const };
+    return { failed: false as const };
   };
 
-  let failed = true;
-  if (supabase) failed = await scopedClear(supabase);
-  if (failed && service) failed = await scopedClear(service);
-  if (failed) return { error: "이야기를 지우지 못했어요." };
+  let last: { failed: boolean } = { failed: true };
+  if (supabase) last = await scopedClear(supabase);
+  if (last.failed && service) last = await scopedClear(service);
+  if (last.failed) return { error: "이야기를 지우지 못했어요." };
   return { ok: true as const };
 }
 

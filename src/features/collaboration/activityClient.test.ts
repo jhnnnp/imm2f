@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupActivities, withoutDismissedActivities } from "./activityFeed";
+import { groupActivities, forgetDismissedIds, rememberDismissedIds, withoutDismissedActivities } from "./activityFeed";
 
 describe("withoutDismissedActivities", () => {
   it("keeps stories that were not tossed away", () => {
@@ -10,6 +10,17 @@ describe("withoutDismissedActivities", () => {
   it("does not restore a story the partner already removed", () => {
     const stale = [{ id: "keep" }, { id: "gone" }];
     expect(withoutDismissedActivities(stale, new Set(["gone"]))).toEqual([{ id: "keep" }]);
+  });
+
+  it("keeps tossed stories hidden even if a later fetch still returns them", () => {
+    const dismissed = rememberDismissedIds(["gone"], ["stale"]);
+    const incoming = [{ id: "keep" }, { id: "stale" }, { id: "gone" }];
+    expect(withoutDismissedActivities(incoming, dismissed).map(item => item.id)).toEqual(["keep"]);
+  });
+
+  it("puts a story back when delete fails", () => {
+    const dismissed = forgetDismissedIds(["keep", "gone"], ["gone"]);
+    expect([...dismissed]).toEqual(["keep"]);
   });
 });
 
