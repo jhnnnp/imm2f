@@ -20,6 +20,7 @@
     "maplibre-gl": "^6.9.1",
     "next": "^16.3.5",
     "page-flip": "^2.0.7",
+    "perfect-freehand": "^1.2.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

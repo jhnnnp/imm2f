@@ -1,9 +1,9 @@
 import { loadCouplePlan } from "@/features/planning/actions";
-import { listMemories } from "@/features/memories/actions";
+import { listMemoryCalendarMarks } from "@/features/memories/actions";
 import { CalendarBoard } from "@/features/calendar/components/CalendarBoard";
 
 export default async function CalendarPage() {
-  const [trip, date, memories] = await Promise.all([loadCouplePlan("trip"), loadCouplePlan("date"), listMemories()]);
+  const [trip, date, memories] = await Promise.all([loadCouplePlan("trip"), loadCouplePlan("date"), listMemoryCalendarMarks()]);
   return (
     <>
       <div className="page-title-row">
@@ -16,7 +16,7 @@ export default async function CalendarPage() {
       <CalendarBoard
         trip={trip}
         date={date}
-        memories={memories.memories.map(item => ({ id: item.id, title: item.title, happenedOn: item.happenedOn }))}
+        memories={memories}
       />
     </>
   );

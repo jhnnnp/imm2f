@@ -59,6 +59,7 @@ export type CreateMemoryInput = {
   placeId?: string | null;
   coverUrl?: string;
   photo?: PhotoMetadataInput;
+  photos?: PhotoMetadataInput[];
   lng?: number | null;
   lat?: number | null;
 };
@@ -74,4 +75,5 @@ export type UpdateMemoryInput = {
   lat: number | null;
   coverUrl?: string;
   photo?: PhotoMetadataInput;
+  photos?: PhotoMetadataInput[];
 };

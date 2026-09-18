@@ -113,6 +113,23 @@ export async function listMemories(): Promise<{ persist: boolean; memories: Memo
   };
 }
 
+export async function listMemoryCalendarMarks(): Promise<Array<{ id: string; title: string; happenedOn: string }>> {
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return [];
+  const supabase = await createClient();
+  if (!supabase) return [];
+  const { data } = await supabase
+    .from("memories")
+    .select("id, title, happened_on")
+    .eq("couple_id", session.coupleId)
+    .order("happened_on", { ascending: false });
+  return (data ?? []).map(row => ({
+    id: row.id,
+    title: row.title,
+    happenedOn: row.happened_on,
+  }));
+}
+
 export async function createMemory(input: CreateMemoryInput): Promise<{ memory: Memory } | { error: string }> {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { error: "로그인 후 추억을 남길 수 있어요." };
@@ -164,43 +181,43 @@ export async function createMemory(input: CreateMemoryInput): Promise<{ memory: 
     .single();
   if (error || !data) return { error: error?.message ?? "추억을 저장하지 못했어요." };
 
-  let photos: PhotoRow[] = [];
-  if (coverUrl) {
-    const photoInput = input.photo;
-    const { data: photo, error: photoError } = await supabase
-      .from("memory_photos")
-      .insert({
-        memory_id: data.id,
-        storage_url: coverUrl,
-        caption: "",
-        sort_order: 0,
-        latitude: lat,
-        longitude: lng,
-        captured_at: photoInput?.capturedAt ?? null,
-        storage_path: photoInput?.storagePath ?? null,
-        original_filename: photoInput?.originalFilename ?? "",
-        mime_type: photoInput?.mimeType ?? "",
-        file_size: photoInput?.fileSize ?? null,
-        width: photoInput?.width ?? null,
-        height: photoInput?.height ?? null,
-        camera_make: photoInput?.cameraMake ?? "",
-        camera_model: photoInput?.cameraModel ?? "",
-        orientation: photoInput?.orientation ?? null,
-        location_source: photoInput?.locationSource ?? (placeId ? "place" : "none"),
-        metadata: photoInput?.metadata ?? {},
-      })
-      .select("*")
-      .single();
+  const photoInputs = input.photos?.length
+    ? input.photos
+    : input.photo || coverUrl
+      ? [{ ...input.photo, storagePath: input.photo?.storagePath ?? null }]
+      : [];
+  if (photoInputs.length || coverUrl) {
+    const rows = (photoInputs.length ? photoInputs : [{ storagePath: null }]).map((photoInput, index) => ({
+      memory_id: data.id,
+      storage_url: photoInput.storagePath || coverUrl,
+      caption: "",
+      sort_order: index,
+      latitude: photoInput.latitude ?? lat,
+      longitude: photoInput.longitude ?? lng,
+      captured_at: photoInput.capturedAt ?? null,
+      storage_path: photoInput.storagePath ?? null,
+      original_filename: photoInput.originalFilename ?? "",
+      mime_type: photoInput.mimeType ?? "",
+      file_size: photoInput.fileSize ?? null,
+      width: photoInput.width ?? null,
+      height: photoInput.height ?? null,
+      camera_make: photoInput.cameraMake ?? "",
+      camera_model: photoInput.cameraModel ?? "",
+      orientation: photoInput.orientation ?? null,
+      location_source: photoInput.locationSource ?? (placeId ? "place" : "none"),
+      metadata: photoInput.metadata ?? {},
+    }));
+    const { error: photoError } = await supabase.from("memory_photos").insert(rows);
     if (photoError) return { error: photoError.message };
-    if (photo) {
-      const signed = photo.storage_path
-        ? await supabase.storage.from("memory-photos").createSignedUrl(photo.storage_path, 60 * 60)
-        : null;
-      photos = [{ ...photo, storage_url: signed?.data?.signedUrl || photo.storage_url } as PhotoRow];
-    }
   }
 
-  const memory = toMemory(data as MemoryRow, photos);
+  const { data: photoData } = await supabase.from("memory_photos").select("*").eq("memory_id", data.id).order("sort_order");
+  const photos = (photoData ?? []) as PhotoRow[];
+  const signedEntries = await Promise.all(photos.filter(photo => photo.storage_path).map(async photo => {
+    const signed = await supabase.storage.from("memory-photos").createSignedUrl(photo.storage_path!, 60 * 60);
+    return [photo.id, signed.data?.signedUrl ?? ""] as const;
+  }));
+  const memory = toMemory(data as MemoryRow, photos, new Map(signedEntries.filter((entry): entry is readonly [string, string] => Boolean(entry[1]))));
   await recordCoupleActivity({
     coupleId: session.coupleId,
     actorUserId: session.userId,
@@ -249,35 +266,34 @@ export async function updateMemory(input: UpdateMemoryInput): Promise<{ memory: 
     location_source: hasCoordinates ? "manual" : "none",
   }).eq("memory_id", input.id);
 
-  const coverUrl = input.coverUrl?.trim() || "";
-  if (coverUrl) {
+  const incomingPhotos = input.photos?.length
+    ? input.photos
+    : input.coverUrl?.trim()
+      ? [{ ...input.photo, storagePath: input.photo?.storagePath ?? input.coverUrl.trim() }]
+      : [];
+  if (incomingPhotos.length) {
     const { data: existingPhotos } = await supabase.from("memory_photos").select("id, sort_order").eq("memory_id", input.id).order("sort_order");
-    if (existingPhotos?.length) {
-      await Promise.all(existingPhotos.map((photo, index) => (
-        supabase.from("memory_photos").update({ sort_order: index + 1 }).eq("id", photo.id)
-      )));
-    }
-    const photoInput = input.photo;
-    const { error: photoError } = await supabase.from("memory_photos").insert({
+    const start = existingPhotos?.length ?? 0;
+    const { error: photoError } = await supabase.from("memory_photos").insert(incomingPhotos.map((photoInput, index) => ({
       memory_id: input.id,
-      storage_url: coverUrl,
+      storage_url: photoInput.storagePath || input.coverUrl?.trim() || "",
       caption: "",
-      sort_order: 0,
-      latitude: hasCoordinates ? input.lat : photoInput?.latitude ?? null,
-      longitude: hasCoordinates ? input.lng : photoInput?.longitude ?? null,
-      captured_at: photoInput?.capturedAt ?? null,
-      storage_path: photoInput?.storagePath ?? null,
-      original_filename: photoInput?.originalFilename ?? "",
-      mime_type: photoInput?.mimeType ?? "",
-      file_size: photoInput?.fileSize ?? null,
-      width: photoInput?.width ?? null,
-      height: photoInput?.height ?? null,
-      camera_make: photoInput?.cameraMake ?? "",
-      camera_model: photoInput?.cameraModel ?? "",
-      orientation: photoInput?.orientation ?? null,
-      location_source: photoInput?.locationSource ?? (hasCoordinates ? "manual" : "none"),
-      metadata: photoInput?.metadata ?? {},
-    });
+      sort_order: start + index,
+      latitude: hasCoordinates ? input.lat : photoInput.latitude ?? null,
+      longitude: hasCoordinates ? input.lng : photoInput.longitude ?? null,
+      captured_at: photoInput.capturedAt ?? null,
+      storage_path: photoInput.storagePath ?? null,
+      original_filename: photoInput.originalFilename ?? "",
+      mime_type: photoInput.mimeType ?? "",
+      file_size: photoInput.fileSize ?? null,
+      width: photoInput.width ?? null,
+      height: photoInput.height ?? null,
+      camera_make: photoInput.cameraMake ?? "",
+      camera_model: photoInput.cameraModel ?? "",
+      orientation: photoInput.orientation ?? null,
+      location_source: photoInput.locationSource ?? (hasCoordinates ? "manual" : "none"),
+      metadata: photoInput.metadata ?? {},
+    })));
     if (photoError) return { error: photoError.message };
   }
 
