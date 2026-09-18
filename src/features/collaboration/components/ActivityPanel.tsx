@@ -1,14 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useAppSession } from "@/features/auth/components/SessionProvider";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { useTossDismiss } from "@/lib/useTossDismiss";
-import { invalidateCoupleActivities, preloadCoupleActivities } from "../activityClient";
+import { emitCoupleActivitiesChanged } from "../activityClient";
+import { groupActivities, withoutDismissedActivities } from "../activityFeed";
+import { useCoupleActivityFeed } from "../activityLive";
 import { clearCoupleActivities, dismissCoupleActivities } from "../actions";
 import { hrefForActivity, type CoupleActivity } from "../types";
-
-type ActivityGroup = CoupleActivity & { ids: string[]; count: number };
 
 function ActivityIcon({ action }: { action: string }) {
   const type = action.startsWith("TRIP") ? "trip" : action.startsWith("DATE") ? "calendar" :
@@ -25,64 +24,88 @@ function ActivityIcon({ action }: { action: string }) {
   return <span className={`activity-symbol is-${type}`} aria-hidden="true"><svg viewBox="0 0 24 24">{paths}</svg></span>;
 }
 
-function groupActivities(items: CoupleActivity[]) {
-  return items.reduce<ActivityGroup[]>((groups, item) => {
-    const last = groups[groups.length - 1];
-    if (last && last.action === item.action && last.title === item.title && last.actorUserId === item.actorUserId) {
-      last.ids.push(item.id);
-      last.count += 1;
-      return groups;
-    }
-    groups.push({ ...item, ids: [item.id], count: 1 });
-    return groups;
-  }, []);
+function ActivityCard({
+  item,
+  count,
+  stacked,
+  open,
+  nested,
+  active,
+  tossing,
+  onActivate,
+  onDragStart,
+  onDragEnd,
+}: {
+  item: CoupleActivity;
+  count: number;
+  stacked?: boolean;
+  open?: boolean;
+  nested?: boolean;
+  active: boolean;
+  tossing: boolean;
+  onActivate: () => void;
+  onDragStart: (event: DragEvent<HTMLElement>) => void;
+  onDragEnd: () => void;
+}) {
+  const stackedCount = stacked && count > 1;
+  const label = stackedCount
+    ? `${item.title}. 같은 이야기 ${count}개. ${open ? "누르면 접혀요." : "누르면 아래에 열려요."} 바깥으로 끌면 함께 지워져요.`
+    : `${item.title}. 바깥으로 끌면 지워져요.`;
+
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onActivate();
+  };
+
+  return (
+    <article
+      className={`activity-item ${item.important ? "important" : ""}${stackedCount ? " is-stack" : ""}${open ? " is-open" : ""}${nested ? " is-nested" : ""}${active ? " is-dragging" : ""}${active && tossing ? " is-toss" : ""}`}
+      draggable
+      role={stackedCount ? "button" : "link"}
+      tabIndex={0}
+      aria-expanded={stackedCount ? open : undefined}
+      aria-label={label}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={onActivate}
+      onKeyDown={onKeyDown}
+    >
+      <ActivityIcon action={item.action} />
+      <div className="activity-copy">
+        <b>{item.title}</b>
+        <small>{item.actorName} · {item.createdAt}</small>
+        {!open && item.detail ? <p>{item.detail}</p> : null}
+        {stackedCount ? <em className="activity-count">{open ? "이야기 접기" : `같은 이야기 ${count}개`}</em> : null}
+      </div>
+    </article>
+  );
 }
 
-export function ActivityPanel({ initialItems }: { initialItems?: CoupleActivity[] }) {
+export function ActivityPanel() {
   const router = useRouter();
-  const session = useAppSession();
+  const live = useCoupleActivityFeed(20);
   const feedRef = useRef<HTMLDivElement>(null);
   const skipClick = useRef(false);
   const dragged = useRef<string[] | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [items, setItems] = useState<CoupleActivity[]>(initialItems ?? []);
-  const [loaded, setLoaded] = useState(initialItems !== undefined || session.mode !== "authenticated");
+  const dismissedIdsRef = useRef(new Set<string>());
+  const [dismissTick, setDismissTick] = useState(0);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
   const dismissing = useTossDismiss(Boolean(draggingId), feedRef);
   const dismissingRef = useRef(false);
   dismissingRef.current = dismissing;
+  const items = useMemo(
+    () => withoutDismissedActivities(live.items, dismissedIdsRef.current),
+    [live.items, dismissTick],
+  );
   const groups = useMemo(() => groupActivities(items), [items]);
-
-  useEffect(() => {
-    if (initialItems !== undefined) {
-      setItems(initialItems);
-      setLoaded(true);
-      return;
-    }
-    if (session.mode !== "authenticated") {
-      setItems([]);
-      setLoaded(true);
-      return;
-    }
-
-    let cancelled = false;
-    setLoaded(false);
-    setError("");
-    void preloadCoupleActivities().then(next => {
-      if (cancelled) return;
-      setItems(next);
-    }).catch(() => {
-      if (!cancelled) setError("이야기를 불러오지 못했어요.");
-    }).finally(() => {
-      if (!cancelled) setLoaded(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [initialItems, session.mode]);
+  const loaded = live.loaded;
+  const feedError = error || live.error;
 
   useEffect(() => {
     return () => {
@@ -90,23 +113,20 @@ export function ActivityPanel({ initialItems }: { initialItems?: CoupleActivity[
     };
   }, []);
 
-  const refresh = () => {
-    invalidateCoupleActivities();
-    void preloadCoupleActivities(8, true);
-    void preloadCoupleActivities(20, true);
-  };
-
   const toss = (ids: string[]) => {
-    const previous = items;
-    setItems(current => current.filter(item => !ids.includes(item.id)));
+    ids.forEach(id => dismissedIdsRef.current.add(id));
+    setDismissTick(value => value + 1);
+    setError("");
     setStatus(ids.length > 1 ? "같은 이야기를 지웠어요" : "이야기를 지웠어요");
-    refresh();
     void dismissCoupleActivities(ids).then(result => {
       if (result.error) {
-        setItems(previous);
+        ids.forEach(id => dismissedIdsRef.current.delete(id));
+        setDismissTick(value => value + 1);
         setError(result.error);
         setStatus("");
+        return;
       }
+      emitCoupleActivitiesChanged();
     });
   };
 
@@ -119,16 +139,53 @@ export function ActivityPanel({ initialItems }: { initialItems?: CoupleActivity[
     }
     if (confirmTimer.current) clearTimeout(confirmTimer.current);
     setConfirmClear(false);
-    const previous = items;
-    setItems([]);
+    const ids = items.map(item => item.id);
+    ids.forEach(id => dismissedIdsRef.current.add(id));
+    setDismissTick(value => value + 1);
     setStatus("오늘의 이야기를 비웠어요");
-    refresh();
     void clearCoupleActivities().then(result => {
       if (result.error) {
-        setItems(previous);
+        ids.forEach(id => dismissedIdsRef.current.delete(id));
+        setDismissTick(value => value + 1);
         setError(result.error);
         setStatus("");
+        return;
       }
+      emitCoupleActivitiesChanged();
+    });
+  };
+
+  const beginDrag = (event: DragEvent<HTMLElement>, ids: string[], dragId: string) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", dragId);
+    dragged.current = ids;
+    skipClick.current = true;
+    setDraggingId(dragId);
+  };
+
+  const endDrag = () => {
+    if (dismissingRef.current && dragged.current) toss(dragged.current);
+    dragged.current = null;
+    setDraggingId(null);
+    window.setTimeout(() => {
+      skipClick.current = false;
+    }, 0);
+  };
+
+  const activate = (next: () => void) => {
+    if (skipClick.current) {
+      skipClick.current = false;
+      return;
+    }
+    next();
+  };
+
+  const toggleGroup = (key: string) => {
+    setOpenKeys(current => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
     });
   };
 
@@ -155,60 +212,47 @@ export function ActivityPanel({ initialItems }: { initialItems?: CoupleActivity[
         data-toss-hint="바깥에 놓으면 지워져요"
       >
         {!loaded && <div className="panel-loading" aria-label="이야기 불러오는 중"><i /><i /><i /></div>}
-        {error && <p className="panel-error" role="alert">{error}</p>}
+        {feedError && <p className="panel-error" role="alert">{feedError}</p>}
         {status && <p className="sr-only" role="status">{status}</p>}
         {loaded && !items.length && (
           <p className="form-hint">아직 기록이 없어요. 장소를 저장하거나 일정을 바꾸면 여기에 쌓여요.</p>
         )}
         {groups.map(group => {
-          const active = draggingId === group.id;
+          const ids = group.items.map(item => item.id);
+          const stacked = ids.length > 1;
+          const open = stacked && openKeys.has(group.id);
           const href = hrefForActivity(group.action);
           return (
-            <article
-              className={`activity-item ${group.important ? "important" : ""}${group.count > 1 ? " is-stack" : ""}${active ? " is-dragging" : ""}${active && dismissing ? " is-toss" : ""}`}
-              key={group.ids.join("-")}
-              draggable
-              role="link"
-              tabIndex={0}
-              aria-label={group.count > 1
-                ? `${group.title}. 같은 이야기 ${group.count}개. 바깥으로 끌면 함께 지워져요.`
-                : `${group.title}. 바깥으로 끌면 지워져요.`}
-              onDragStart={event => {
-                event.dataTransfer.effectAllowed = "move";
-                event.dataTransfer.setData("text/plain", group.id);
-                dragged.current = group.ids;
-                skipClick.current = true;
-                setDraggingId(group.id);
-              }}
-              onDragEnd={() => {
-                if (dismissingRef.current && dragged.current) toss(dragged.current);
-                dragged.current = null;
-                setDraggingId(null);
-                window.setTimeout(() => {
-                  skipClick.current = false;
-                }, 0);
-              }}
-              onClick={() => {
-                if (skipClick.current) {
-                  skipClick.current = false;
-                  return;
-                }
-                router.push(href);
-              }}
-              onKeyDown={event => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                router.push(href);
-              }}
-            >
-              <ActivityIcon action={group.action} />
-              <div className="activity-copy">
-                <b>{group.title}</b>
-                <small>{group.actorName} · {group.createdAt}</small>
-                {group.detail ? <p>{group.detail}</p> : null}
-                {group.count > 1 ? <em className="activity-count">같은 이야기 {group.count}개</em> : null}
-              </div>
-            </article>
+            <div className={`activity-stack${open ? " is-open" : ""}`} key={group.id}>
+              <ActivityCard
+                item={group}
+                count={ids.length}
+                stacked={stacked}
+                open={open}
+                active={draggingId === group.id}
+                tossing={dismissing}
+                onActivate={() => activate(() => stacked ? toggleGroup(group.id) : router.push(href))}
+                onDragStart={event => beginDrag(event, ids, group.id)}
+                onDragEnd={endDrag}
+              />
+              {open ? (
+                <div className="activity-stack-list">
+                  {group.items.map(item => (
+                    <ActivityCard
+                      key={item.id}
+                      item={item}
+                      count={1}
+                      nested
+                      active={draggingId === item.id}
+                      tossing={dismissing}
+                      onActivate={() => activate(() => router.push(hrefForActivity(item.action)))}
+                      onDragStart={event => beginDrag(event, [item.id], item.id)}
+                      onDragEnd={endDrag}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
           );
         })}
       </div>

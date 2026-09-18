@@ -7,6 +7,7 @@ import { withSubjectParticle } from "@/features/auth/koreanName";
 import { calculatePreferenceInsight } from "@/lib/openai/analyzePreferences";
 import type { Place } from "@/features/places/types/place";
 import { saveTasteProfile } from "../actions";
+import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { emptyTasteInput, inputFromProfile } from "../parse";
 import { profileFacets } from "../profileFacets";
 import type { TasteBoard, TasteProfile } from "../types";
@@ -147,6 +148,7 @@ export function TasteStudio({ initial, places }: { initial: TasteBoard; places: 
       }
       setBoard(result);
       setEditing(false);
+      emitCoupleActivitiesChanged();
     });
   }
 

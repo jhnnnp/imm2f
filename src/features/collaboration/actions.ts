@@ -3,44 +3,10 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import type { Json } from "@/lib/supabase/database.types";
+import { mapActivityRows, type ActivityRecord } from "./activityMap";
 import type { ActivityAction, CoupleActivity } from "./types";
 
-type ActivityRow = {
-  id: string;
-  action: string;
-  title: string;
-  detail: string;
-  actor_user_id: string | null;
-  created_at: string;
-};
-
-const IMPORTANT_ACTIONS = new Set([
-  "PLACE_ADDED",
-  "TRIP_CREATED",
-  "TRIP_UPDATED",
-  "DATE_CREATED",
-  "DATE_UPDATED",
-  "PARTNER_JOINED",
-  "PARTNER_LEFT",
-  "TASTE_UPDATED",
-  "MEMORY_ADDED",
-  "MEMORY_UPDATED",
-  "VAULT_UPDATED",
-  "GIFT_UPDATED",
-  "BUCKET_UPDATED",
-]);
-
-function relativeTime(iso: string) {
-  const diff = Date.now() - new Date(iso).getTime();
-  const minutes = Math.max(0, Math.floor(diff / 60000));
-  if (minutes < 1) return "방금";
-  if (minutes < 60) return `${minutes}분 전`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}시간 전`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return "어제";
-  return `${days}일 전`;
-}
+type ActivityRow = ActivityRecord;
 
 async function loadNames(userIds: Array<string | null | undefined>) {
   const ids = [...new Set(userIds.filter((id): id is string => Boolean(id)))];
@@ -152,7 +118,7 @@ export async function dismissCoupleActivities(ids: string[]) {
   const service = createServiceClient();
   const scopedDelete = async (client: NonNullable<typeof supabase> | NonNullable<typeof service>) => {
     const result = await client.from("activities").delete().in("id", unique).eq("couple_id", session.coupleId).select("id");
-    return Boolean(result.error) || !result.data?.length;
+    return Boolean(result.error);
   };
 
   let failed = true;
@@ -169,7 +135,7 @@ export async function clearCoupleActivities() {
   const service = createServiceClient();
   const scopedClear = async (client: NonNullable<typeof supabase> | NonNullable<typeof service>) => {
     const result = await client.from("activities").delete().eq("couple_id", session.coupleId).select("id");
-    return Boolean(result.error) || !result.data?.length;
+    return Boolean(result.error);
   };
 
   let failed = true;
@@ -195,15 +161,5 @@ export async function loadCoupleActivities(limit = 20): Promise<CoupleActivity[]
 
   const rows = (data ?? []) as ActivityRow[];
   const names = await loadNames(rows.map(row => row.actor_user_id));
-
-  return rows.map(row => ({
-    id: row.id,
-    action: row.action,
-    title: row.title,
-    detail: row.detail,
-    actorName: row.actor_user_id ? names.get(row.actor_user_id) ?? "파트너" : "시스템",
-    actorUserId: row.actor_user_id,
-    important: IMPORTANT_ACTIONS.has(row.action),
-    createdAt: relativeTime(row.created_at),
-  }));
+  return mapActivityRows(rows, names);
 }

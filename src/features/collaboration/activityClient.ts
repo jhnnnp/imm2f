@@ -1,20 +1,11 @@
 "use client";
 
-import { loadCoupleActivities } from "./actions";
-import type { CoupleActivity } from "./types";
+export { withoutDismissedActivities } from "./activityFeed";
 
-const requests = new Map<number, Promise<CoupleActivity[]>>();
+export const COUPLE_ACTIVITIES_CHANGED = "couple-activities-changed";
 
-export function invalidateCoupleActivities() {
-  requests.clear();
-}
-
-export function preloadCoupleActivities(limit = 20, refresh = false) {
-  if (refresh || !requests.has(limit)) {
-    requests.set(limit, loadCoupleActivities(limit).catch(error => {
-      requests.delete(limit);
-      throw error;
-    }));
+export function emitCoupleActivitiesChanged() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(COUPLE_ACTIVITIES_CHANGED));
   }
-  return requests.get(limit)!;
 }

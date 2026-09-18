@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { createPlace, saveKakaoPlace } from "../actions";
+import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import type { DiscoverCandidate, Place, PlaceCategoryId } from "../types/place";
 
 export function PlaceCreateDialog({
@@ -56,6 +57,7 @@ export function PlaceCreateDialog({
       return;
     }
     onSaved(result.place, result.duplicate ? `${result.place.name}은 이미 저장된 장소예요.` : `${result.place.name}을 우리의 장소에 저장했어요.`);
+    emitCoupleActivitiesChanged();
     onClose();
   }
 
@@ -84,6 +86,7 @@ export function PlaceCreateDialog({
       return;
     }
     onSaved(result.place, `${result.place.name}을 우리의 장소에 저장했어요.`);
+    emitCoupleActivitiesChanged();
     onClose();
   }
 

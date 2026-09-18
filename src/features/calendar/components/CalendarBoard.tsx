@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { saveCouplePlan } from "@/features/planning/actions";
+import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import type { CouplePlan } from "@/features/planning/types/plan";
 import { addDays, formatKoDate, toIsoDate } from "@/lib/dates";
 
@@ -103,6 +104,7 @@ export function CalendarBoard({
     if (kind === "trip") setTripStart(startDate);
     else setDateStart(startDate);
     setNotice(kind === "trip" ? "여행 시작일을 붙였어요." : "데이트 날짜를 붙였어요.");
+    emitCoupleActivitiesChanged();
   }
 
   if (!cursor) {

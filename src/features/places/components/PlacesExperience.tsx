@@ -9,6 +9,7 @@ import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { PLACE_ADMINISTRATIVE_AREAS, PLACE_AREA_GROUPS, areaGroupById, browseDiscoverInput } from "../config/regions";
 import { searchDiscoverPlaces, loadTourPlaceDetail, updateMyPlaceStatus } from "../actions";
 import { addItemToCouplePlan } from "@/features/planning/actions";
+import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { isDiscoverPlace, mergeCandidateWithSaved, placeToCandidate, uniqueByExternalId } from "../discover";
 import type { DiscoverCandidate, Place, PlaceCategoryId, PlacePreferenceStatus } from "../types/place";
 import { PlaceCard } from "./PlaceCard";
@@ -160,7 +161,10 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
       return;
     }
     const result = await updateMyPlaceStatus(id, status);
-    if (!("error" in result)) return;
+    if (!("error" in result)) {
+      emitCoupleActivitiesChanged();
+      return;
+    }
     setNotice(result.error);
     if (!previous) return;
     const restore = (current: Place[]) => current.map(place => place.id === id ? { ...place, userStatus: previous.userStatus } : place);
@@ -262,6 +266,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
       return;
     }
     setNotice(result.duplicate ? `${selected.name}은 이미 ${label}에 있어요.` : `${withObjectParticle(selected.name)} ${label}에 넣었어요.`);
+    emitCoupleActivitiesChanged();
   }
 
   function handleSearch(formData?: FormData) {

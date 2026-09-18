@@ -73,13 +73,10 @@ const loadAppSession = cache(async (): Promise<AppSession> => {
   }
 
   const { data: members } = await supabase.from("couple_members").select("user_id, role").eq("couple_id", coupleId);
-
-  const memberIds = (members ?? []).map(member => member.user_id);
-  const { data: profiles } = memberIds.length
-    ? await supabase.from("profiles").select("id, display_name").in("id", memberIds)
-    : { data: [] as Array<{ id: string; display_name: string }> };
-
-  const partnerRow = (profiles ?? []).find(item => item.id !== userId);
+  const partnerId = (members ?? []).find(member => member.user_id !== userId)?.user_id;
+  const { data: partnerRow } = partnerId
+    ? await supabase.from("profiles").select("id, display_name").eq("id", partnerId).maybeSingle()
+    : { data: null };
 
   return {
     mode: "authenticated",

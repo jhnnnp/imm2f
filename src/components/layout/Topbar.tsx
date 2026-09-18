@@ -6,8 +6,8 @@ import { CommandPalette } from "@/components/shared/CommandPalette";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { initialFromName } from "@/features/auth/types";
 import { signOut } from "@/features/auth/session";
-import { preloadCoupleActivities } from "@/features/collaboration/activityClient";
-import { hrefForActivity, type CoupleActivity } from "@/features/collaboration/types";
+import { useCoupleActivityFeed } from "@/features/collaboration/activityLive";
+import { hrefForActivity } from "@/features/collaboration/types";
 
 function todayLabel() {
   return new Date().toLocaleDateString("ko-KR", {
@@ -22,31 +22,16 @@ export function Topbar() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifyOpen, setNotifyOpen] = useState(false);
-  const [activities, setActivities] = useState<CoupleActivity[]>([]);
-  const [notifyLoaded, setNotifyLoaded] = useState(false);
   const [today, setToday] = useState("");
   const notifyRef = useRef<HTMLDivElement>(null);
-  const notifyLoadingRef = useRef(false);
   const session = useAppSession();
+  const { items: activities, loaded: notifyLoaded } = useCoupleActivityFeed(8);
   const label = session.mode === "authenticated" || session.mode === "setup_error" ? initialFromName(session.displayName) : "나";
   const unread = useMemo(() => activities.filter(item => item.important).length, [activities]);
 
   useEffect(() => {
     setToday(todayLabel());
-    if (session.mode === "authenticated") {
-      notifyLoadingRef.current = true;
-      void preloadCoupleActivities(8).then(next => {
-        setActivities(next);
-        setNotifyLoaded(true);
-      }).catch(() => {
-        setNotifyLoaded(true);
-      }).finally(() => {
-        notifyLoadingRef.current = false;
-      });
-    } else {
-      setNotifyLoaded(true);
-    }
-  }, [session.mode]);
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -62,13 +47,6 @@ export function Topbar() {
   const openNotifications = () => {
     setNotifyOpen(open => !open);
     setMenuOpen(false);
-    if (notifyLoaded || notifyLoadingRef.current) return;
-    notifyLoadingRef.current = true;
-    void preloadCoupleActivities(8).then(next => {
-      setActivities(next);
-      setNotifyLoaded(true);
-      notifyLoadingRef.current = false;
-    });
   };
 
   useEffect(() => {

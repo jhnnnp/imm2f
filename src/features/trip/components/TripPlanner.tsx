@@ -9,6 +9,7 @@ import { DatePickerButton } from "@/components/shared/DatePickerButton";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import type { CourseKeepInput, CourseKeepResult } from "@/features/ai/courseKeep";
 import { archiveTripPlan, listArchivedTripPlans, loadCouplePlan, saveCouplePlan, type ArchivedTripPlan } from "@/features/planning/actions";
+import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { stripLegacyDemoArchive, stripLegacyDemoPlan } from "@/features/planning/legacyDemo";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import type { CouplePlan, PlanChange, PlanItem } from "@/features/planning/types/plan";
@@ -67,6 +68,7 @@ export function TripPlanner({
     if (!items.length) return;
     const result = await archiveTripPlan({ title, startDate, dayCount, items });
     if ("error" in result) { setSaveError(result.error); return; }
+    emitCoupleActivitiesChanged();
     setArchivedTrips(await listArchivedTripPlans());
     setArchiveNotice("둘이 공유하는 지난 여행에 보관했어요.");
     setTab("archive");
@@ -86,6 +88,7 @@ export function TripPlanner({
       });
       if ("version" in result) {
         revisionRef.current = result.revision;
+        emitCoupleActivitiesChanged();
       } else setSaveError(result.error);
       setSaved(true);
     });
@@ -131,6 +134,7 @@ export function TripPlanner({
       setSaveError(result.error);
       return result;
     }
+    emitCoupleActivitiesChanged();
     router.push("/date");
     return { ok: true };
   };

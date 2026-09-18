@@ -12,6 +12,7 @@ import { applyDateSwitch, emptyDateDay, hasDateContent, landingDateDay, upsertDa
 import type { CourseKeepInput, CourseKeepResult } from "@/features/ai/courseKeep";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import { archiveDatePlan, listArchivedDatePlans, loadCouplePlan, openDateDay, saveCouplePlan, saveDateDraft, type ArchivedDatePlan } from "@/features/planning/actions";
+import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import type { CouplePlan, PlanChange, PlanItem } from "@/features/planning/types/plan";
 import type { TasteDateSeed } from "@/features/taste/types";
 import { formatKoDate } from "@/lib/dates";
@@ -118,6 +119,7 @@ export function DatePlanner({
       });
       if ("version" in result) {
         revisionRef.current = result.revision;
+        emitCoupleActivitiesChanged();
         if (nextDate) {
           await saveDateDraft({ date: nextDate, title: nextTitle, notes: nextNotes, items: mapped });
         }
@@ -163,7 +165,10 @@ export function DatePlanner({
           dayCount: 1,
           expectedRevision: revisionRef.current,
         });
-        if ("version" in saved) revisionRef.current = saved.revision;
+        if ("version" in saved) {
+          revisionRef.current = saved.revision;
+          emitCoupleActivitiesChanged();
+        }
         else setSaveError(saved.error);
         setNotesSaveState("saved");
         return;
@@ -216,6 +221,7 @@ export function DatePlanner({
       setSaveError(result.error);
       return result;
     }
+    emitCoupleActivitiesChanged();
     router.push("/trip");
     return { ok: true };
   };
@@ -230,6 +236,7 @@ export function DatePlanner({
       setRecording(false);
       return;
     }
+    emitCoupleActivitiesChanged();
     const remaining = drafts.filter(day => day.date !== startDate);
     const next = remaining[0] ?? emptyDateDay("");
     await saveDateDraft(emptyDateDay(startDate));

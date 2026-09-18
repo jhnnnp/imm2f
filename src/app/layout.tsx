@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { Nanum_Pen_Script } from "next/font/google";
 import { SessionProvider } from "@/features/auth/components/SessionProvider";
-import { getAppSession } from "@/features/auth/session";
 import "./globals.css";
 import "./map-polish.css";
 
@@ -36,12 +35,11 @@ export const metadata: Metadata = {
   icons: { icon: "/favicon.svg" },
 };
 
-export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const session = await getAppSession();
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ko" className={`${hand.variable} ${accentScript.variable}`} data-scroll-behavior="smooth">
       <body>
-        <SessionProvider initialSession={session}>{children}</SessionProvider>
+        <SessionProvider>{children}</SessionProvider>
       </body>
     </html>
   );

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatKoDate } from "@/lib/dates";
 import { createNote, deleteNote, updateNoteStatus } from "../actions";
+import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { NOTE_COPY, NOTE_STATUS, type CoupleNote, type NoteKind } from "../types";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 
@@ -179,6 +180,7 @@ export function CoupleNotesBoard({
       return;
     }
     setNotes(current => [result.note, ...current]);
+    emitCoupleActivitiesChanged();
     setOpen(false);
     setTitle("");
     setDetail("");
@@ -204,6 +206,7 @@ export function CoupleNotesBoard({
       return;
     }
     setNotes(current => [...current, result.note]);
+    emitCoupleActivitiesChanged();
     setQuickTitle("");
     router.refresh();
   }
