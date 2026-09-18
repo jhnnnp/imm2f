@@ -11,6 +11,8 @@ import { proposePlanEditsWithOpenAi } from "@/lib/openai/editPlan";
 import { generatePlanOptionsWithOpenAi } from "@/lib/openai/generatePlan";
 import { recommendDatePlanWithOpenAi } from "@/lib/openai/recommendDatePlan";
 import { interpretDateRequest } from "@/lib/openai/interpretDateRequest";
+import { loadTasteBoard } from "@/features/taste/actions";
+import { applyTasteFallback, applyTasteHarshAllow, seedFromProfile, violatesTasteAvoid } from "@/features/taste/compare";
 import { applyRanking } from "@/lib/openai/rank";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
 import { searchTourPlacesRemote } from "@/lib/tourapi/client";
@@ -34,9 +36,17 @@ import {
   selectedAreas,
   slotQuestion,
   uniqueStrings,
+  isTravelPlan,
+  dateSpine,
+  discoveryActivities,
+  rescueSearchQueries,
+  missingWantedSlots,
+  fitsWantedActivities,
+  isExclusiveCrawl,
 } from "@/features/ai/dateBrief";
-import { allowsHarshDateMeal, applyCourseDelta, diversifyDateCatalog, isOffDateVenue, preferredSavedNames, recentPlaceNames, toDateRanking } from "@/features/ai/dateCourse";
+import { allowsHarshDateMeal, applyCourseDelta, bothWantNames, candidateActivitySlot, diversifyDateCatalog, isOffDateVenue, preferredSavedNames, recentPlaceNames, toDateRanking } from "@/features/ai/dateCourse";
 import { chatSituationFromMessage, dateChatCard, cardToText } from "@/lib/openai/composeDateChat";
+import { hydrateDateCandidates } from "@/lib/places/detailCache";
 import type { AIChatCard, AIPlannerClarification, AIPlannerResult, AIPlannerState, DateChatTurn, DateIntakeSlot, DatePreviousStop, PlanChange, PlanItem, PlanKind, PlanOption } from "@/features/planning/types/plan";
 import type { Place } from "@/features/places/types/place";
 
@@ -260,26 +270,34 @@ export async function recommendDatePlan(input: {
   const previousStops = input.previousStops?.length
     ? input.previousStops
     : (input.previousPlaceNames ?? []).map(name => ({ name, category: "" }));
-  if (!message && missingSlot(previousState)) {
-    const slot = missingSlot(previousState)!;
-    const question = slotQuestion(slot, previousState);
+  const tasteBoard = await loadTasteBoard();
+  const tasteSeed = tasteBoard.compare?.seed ?? (tasteBoard.you ? seedFromProfile(tasteBoard.you) : null);
+  const avoidFoods = tasteSeed?.avoidFoods ?? [];
+  const filledPrevious = previousState && tasteSeed ? applyTasteFallback(previousState, tasteSeed) : previousState;
+  if (!message && missingSlot(filledPrevious)) {
+    const slot = missingSlot(filledPrevious)!;
+    const question = slotQuestion(slot, filledPrevious);
     const card = slot === "area"
-      ? dateChatCard({ situation: "need_area", userMessage: "", state: previousState! })
+      ? dateChatCard({ situation: "need_area", userMessage: "", state: filledPrevious! })
       : { headline: "", lines: [question.message], suggestions: question.options };
-    return clarificationReply(slot, previousState!, card);
+    return clarificationReply(slot, filledPrevious!, card);
   }
 
   const interpretation = message
     ? await interpretDateRequest({
       message,
-      previousState,
+      previousState: filledPrevious,
       previousPlaceNames: previousStops.map(stop => stop.name),
       dateLabel: input.dateLabel,
       conversation: input.conversation,
     })
-    : { state: { ...previousState!, dateLabel: input.dateLabel || previousState?.dateLabel || null, pendingSlot: missingSlot(previousState) }, slot: missingSlot(previousState), reply: "" };
+    : {
+      state: { ...filledPrevious!, dateLabel: input.dateLabel || filledPrevious?.dateLabel || null, pendingSlot: missingSlot(filledPrevious) },
+      slot: missingSlot(filledPrevious),
+      reply: "",
+    };
 
-  const interpreted = applyCourseDelta({
+  const interpretedRaw = applyCourseDelta({
     message,
     previousStops,
     state: {
@@ -288,6 +306,7 @@ export async function recommendDatePlan(input: {
       requiredPlaces: interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|만화카페|VR(?:카페|\s*체험)?|실내(?:\s*놀거리)?)$/.test(place)),
     },
   });
+  const interpreted = tasteSeed ? applyTasteFallback(interpretedRaw, tasteSeed) : interpretedRaw;
   const slot = missingSlot(interpreted);
   const situation = message ? chatSituationFromMessage(message) : null;
   if (situation) {
@@ -331,22 +350,32 @@ export async function recommendDatePlan(input: {
   const directQueries = uniqueStrings([...state.requiredPlaces, ...retainedPlaces]).filter(name => !state.excludedPlaces.includes(name));
   const keywordIntents = searchIntents(state);
   const geoIntents = activitySearchIntents(state);
-  const allowHarsh = allowsHarshDateMeal(message, state.cuisine);
+  const allowHarsh = applyTasteHarshAllow(allowsHarshDateMeal(message, state.cuisine), message, avoidFoods);
   const searchKeyword = (page: number) => Promise.all(keywordIntents.map(intent => searchKakaoPlacesRemote({
     region: intent.region,
     category: intent.category,
     query: intent.query,
     page,
   })));
-  const [explicitSearches, areaSearches, intentSearches] = await Promise.all([
+  const [explicitSearches, areaSearches, intentSearches, intentSearches2] = await Promise.all([
     Promise.all(directQueries.map(query => searchKakaoPlacesRemote({ query, region: searchRegions.at(-1), page: 1 }))),
     Promise.all(selectedRegions.map(region => searchKakaoPlacesRemote({ query: region, page: 1 }))),
     searchKeyword(1),
+    searchKeyword(2),
   ]);
 
   const unique = new Map<string, Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number]>();
-  const remember = (candidate: Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number], searchRegion?: string) => {
-    unique.set(`${candidate.externalSource}:${candidate.externalPlaceId}`, searchRegion ? { ...candidate, searchRegion } : candidate);
+  const slotIngest = new Map<string, number>();
+  const remember = (candidate: Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number], searchRegion?: string, required = false) => {
+    const key = `${candidate.externalSource}:${candidate.externalPlaceId}`;
+    if (unique.has(key)) return;
+    if (!required && isOffDateVenue(candidate, { allowHarsh, allowKaraoke: state.activities.includes("indoor") })) return;
+    const slot = candidateActivitySlot(candidate);
+    const cap = slot === "cafe" ? 8 : 12;
+    const count = slotIngest.get(slot) ?? 0;
+    if (!required && count >= cap) return;
+    slotIngest.set(slot, count + 1);
+    unique.set(key, searchRegion ? { ...candidate, searchRegion } : candidate);
   };
   const ingestKeyword = (results: typeof intentSearches) => {
     for (const [index, result] of results.entries()) {
@@ -356,15 +385,20 @@ export async function recommendDatePlan(input: {
   };
   for (const result of explicitSearches) {
     if (!result.ok) continue;
-    for (const candidate of result.places) remember(candidate);
+    for (const candidate of result.places) remember(candidate, undefined, true);
   }
   ingestKeyword(intentSearches);
+  ingestKeyword(intentSearches2);
+  const preferredSaved = preferredSavedNames(saved);
+  const discovery = discoveryActivities(state);
   for (const place of saved) {
     if (["dislike", "not_interested"].includes(place.userStatus) && ["dislike", "not_interested"].includes(place.partnerStatus)) continue;
     const candidate = placeToCandidate(place);
     if (!candidate) continue;
-    if (state.activities.length && !state.activities.some(activity => matchesActivity(candidate, activity))) continue;
-    remember(candidate, searchRegions[0]);
+    const preferred = preferredSaved.has(place.name);
+    const wanted = isExclusiveCrawl(state) ? state.activities : discovery;
+    if (!preferred && wanted.length && !wanted.some(activity => matchesActivity(candidate, activity))) continue;
+    remember(candidate, searchRegions[0], true);
   }
 
   const locatedAnchors = areaSearches.flatMap((result, index) => {
@@ -402,7 +436,7 @@ export async function recommendDatePlan(input: {
       for (const candidate of result.places.slice(0, 15)) remember(candidate, selectedRegions[0]);
     }
   };
-  await ingestGeo(1, true);
+  await Promise.all([ingestGeo(1, true), ingestGeo(2, false)]);
   const decorate = (candidate: Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number]) => {
     const nearestAnchor = locatedAnchors
       .map(anchor => ({ ...anchor, meters: distanceMeters(anchor.candidate.coordinates, candidate.coordinates) }))
@@ -418,6 +452,7 @@ export async function recommendDatePlan(input: {
     const required = state.requiredPlaces.some(name => candidate.name.includes(name) || name.includes(candidate.name));
     return isDateCourseCandidate(candidate, state.requiredPlaces)
       && !state.excludedPlaces.some(name => candidate.name.includes(name) || name.includes(candidate.name))
+      && !violatesTasteAvoid(`${candidate.name} ${candidate.categoryLabel} ${candidate.detailedCategory ?? ""}`, avoidFoods)
       && (candidate.category !== "festival" || festivalPeriodCoversYmd(candidate.openingHours, planDayYmd(state)))
       && (required || !isOffDateVenue(candidate, { allowHarsh, allowKaraoke: state.activities.includes("indoor") }));
   };
@@ -433,17 +468,22 @@ export async function recommendDatePlan(input: {
     return scoped.length >= 2 ? scoped : [...unique.values()].filter(admit).map(decorate);
   };
   let pool = currentPool();
-  if (pool.length < 18) {
-    const extraPages = await Promise.all([searchKeyword(2), ingestGeo(2, false)]);
-    ingestKeyword(extraPages[0]);
+  const wantedSlots = discovery;
+  const poolSlots = () => new Set(pool.map(candidateActivitySlot));
+  if (pool.length < 8 || missingWantedSlots(poolSlots(), wantedSlots).length) {
+    const extras = await Promise.all(selectedRegions.flatMap(region => (
+      rescueSearchQueries(region, wantedSlots).map(query => searchKakaoPlacesRemote({ query, page: 1 }))
+    )));
+    for (const result of extras) {
+      if (!result.ok) continue;
+      for (const candidate of result.places) remember(candidate, selectedRegions[0]);
+    }
     pool = currentPool();
   }
   if (pool.length < 2) {
-    const extras = await Promise.all(selectedRegions.flatMap(region => [
-      searchKakaoPlacesRemote({ query: `${region} 카페`, page: 1 }),
-      searchKakaoPlacesRemote({ query: `${region} 맛집`, page: 1 }),
-      searchKakaoPlacesRemote({ query: `${region} 공원`, page: 1 }),
-    ]));
+    const extras = await Promise.all(selectedRegions.flatMap(region => (
+      rescueSearchQueries(region, wantedSlots).map(query => searchKakaoPlacesRemote({ query, page: 2 }))
+    )));
     for (const result of extras) {
       if (!result.ok) continue;
       for (const candidate of result.places) remember(candidate, selectedRegions[0]);
@@ -452,12 +492,19 @@ export async function recommendDatePlan(input: {
   }
   const rankContext = {
     savedPositive: preferredSavedNames(saved),
+    savedBoth: bothWantNames(saved),
     recentlyVisited: new Set(recentlyVisited),
-    commonTastes: (insight?.commonTastes ?? []).map(item => item.label).filter(Boolean),
-    activities: state.activities,
+    commonTastes: [...(tasteBoard.compare?.overlaps ?? []), ...(insight?.commonTastes ?? []).map(item => item.label)].filter(Boolean),
+    activities: dateSpine(state),
     allowHarsh,
+    trip: isTravelPlan(state),
   };
-  const candidates = diversifyDateCatalog(applyRanking(pool, toDateRanking(pool, rankContext)), 40);
+  const ranked = applyRanking(pool, toDateRanking(pool, rankContext));
+  const onMix = isExclusiveCrawl(state) && state.activities.length
+    ? ranked.filter(candidate => fitsWantedActivities(candidate, state.activities))
+    : ranked;
+  const catalog = diversifyDateCatalog(onMix.length >= 8 ? onMix : ranked, 40);
+  const candidates = await hydrateDateCandidates(catalog, saved);
   if (candidates.length < 2) {
     const suggestions = nearbyAreaSuggestions(state);
     const card = dateChatCard({
@@ -484,11 +531,16 @@ export async function recommendDatePlan(input: {
     state,
     recentlyVisited,
     conversation: input.conversation,
-    coupleTaste: insight ? {
-      summary: insight.summary,
-      commonTastes: insight.commonTastes,
-      youHighlights: insight.youHighlights,
-      partnerHighlights: insight.partnerHighlights,
-    } : null,
+    currentCourse: previousStops,
+    coupleTaste: {
+      summary: tasteBoard.compare?.summary ?? insight?.summary ?? "",
+      commonTastes: [
+        ...(tasteBoard.compare?.overlaps ?? []).map(label => ({ label })),
+        ...(insight?.commonTastes ?? []),
+      ],
+      youHighlights: tasteBoard.you ? tasteBoard.you.areas.slice(0, 2) : insight?.youHighlights ?? [],
+      partnerHighlights: tasteBoard.partner ? tasteBoard.partner.areas.slice(0, 2) : insight?.partnerHighlights ?? [],
+      avoidFoods,
+    },
   });
 }

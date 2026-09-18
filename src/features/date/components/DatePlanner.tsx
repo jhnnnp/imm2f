@@ -13,6 +13,7 @@ import type { CourseKeepInput, CourseKeepResult } from "@/features/ai/courseKeep
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import { archiveDatePlan, listArchivedDatePlans, loadCouplePlan, openDateDay, saveCouplePlan, saveDateDraft, type ArchivedDatePlan } from "@/features/planning/actions";
 import type { CouplePlan, PlanChange, PlanItem } from "@/features/planning/types/plan";
+import type { TasteDateSeed } from "@/features/taste/types";
 import { formatKoDate } from "@/lib/dates";
 
 const AIPlanEditor = dynamic(
@@ -27,11 +28,13 @@ export function DatePlanner({
   initialArchives,
   initialDrafts = [],
   today,
+  tasteSeed = null,
 }: {
   initialPlan: CouplePlan;
   initialArchives: ArchivedDatePlan[];
   initialDrafts?: DateDaySnapshot[];
   today: string;
+  tasteSeed?: TasteDateSeed | null;
 }) {
   const landed = landingDateDay({ plan: initialPlan, drafts: initialDrafts, today });
   const router = useRouter();
@@ -40,7 +43,7 @@ export function DatePlanner({
   const [notes, setNotes] = useState(landed.focus.notes);
   const [startDate, setStartDate] = useState(landed.focus.date);
   const [drafts, setDrafts] = useState<DateDaySnapshot[]>(landed.drafts);
-  const [panel, setPanel] = useState<Panel>(null);
+  const [panel, setPanel] = useState<Panel>(tasteSeed ? "ai" : null);
   const [saveError, setSaveError] = useState("");
   const [notesSaveState, setNotesSaveState] = useState<"saved" | "typing" | "saving">("saved");
   const [showArchive, setShowArchive] = useState(false);
@@ -244,7 +247,7 @@ export function DatePlanner({
     <>
       {panel === "ai" && (
         <ContextPanel>
-          <AIPlanEditor kind="date" items={items} startDate={startDate} onApply={apply} onReplace={replace} onKeep={keepCourse} />
+          <AIPlanEditor kind="date" items={items} startDate={startDate} onApply={apply} onReplace={replace} onKeep={keepCourse} tasteSeed={tasteSeed} />
         </ContextPanel>
       )}
       <div className="page-title-row date-planner-header">

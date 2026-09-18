@@ -21,6 +21,8 @@ const IMPORTANT_ACTIONS = new Set([
   "DATE_CREATED",
   "DATE_UPDATED",
   "PARTNER_JOINED",
+  "PARTNER_LEFT",
+  "TASTE_UPDATED",
   "MEMORY_ADDED",
   "MEMORY_UPDATED",
   "VAULT_UPDATED",
@@ -97,14 +99,25 @@ export async function recordCoupleActivity(input: {
     }
   }
 
-  await client.from("activities").insert({
+  const inserted = await client.from("activities").insert({
     couple_id: input.coupleId,
     actor_user_id: input.actorUserId,
     entity_type: input.entityType,
     entity_id: entityId,
     action: input.action,
     ...payload,
-  });
+  }).select("id");
+  if (!inserted.error && inserted.data?.length) return;
+  if (service && client !== service) {
+    await service.from("activities").insert({
+      couple_id: input.coupleId,
+      actor_user_id: input.actorUserId,
+      entity_type: input.entityType,
+      entity_id: entityId,
+      action: input.action,
+      ...payload,
+    });
+  }
 }
 
 export async function queuePartnerEmail(input: {

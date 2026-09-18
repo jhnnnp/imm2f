@@ -12,8 +12,8 @@ type ActivityGroup = CoupleActivity & { ids: string[]; count: number };
 
 function ActivityIcon({ action }: { action: string }) {
   const type = action.startsWith("TRIP") ? "trip" : action.startsWith("DATE") ? "calendar" :
-    action.startsWith("PLACE") ? "place" : action.startsWith("MEMORY") ? "heart" :
-      action === "PARTNER_JOINED" ? "couple" : "note";
+    action.startsWith("PLACE") ? "place" :       action.startsWith("MEMORY") ? "heart" :
+      action.startsWith("PARTNER") ? "couple" : "note";
   const paths = {
     trip: <><path d="M4 15.5 20 8l-7.5 16-2-6.5L4 15.5Z"/><path d="m10.5 17.5 3-3"/></>,
     calendar: <><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M8 3v4M16 3v4M4 10h16M8 14h3"/></>,

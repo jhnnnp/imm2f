@@ -198,6 +198,63 @@ export type Database = {
         Update: { result?: Json };
         Relationships: [];
       };
+      taste_profiles: {
+        Row: {
+          couple_id: string;
+          user_id: string;
+          areas: string[];
+          pace: string;
+          activities: string[];
+          cuisines: string[];
+          avoid_foods: string[];
+          setting: string;
+          crowd: string;
+          budget: string;
+          time_window: string;
+          area_scope: string;
+          date_flow: string;
+          drink: string;
+          indoor_play: string;
+          note: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          couple_id: string;
+          user_id: string;
+          areas: string[];
+          pace: string;
+          activities: string[];
+          cuisines: string[];
+          avoid_foods?: string[];
+          setting: string;
+          crowd: string;
+          budget: string;
+          time_window: string;
+          area_scope: string;
+          date_flow?: string;
+          drink?: string;
+          indoor_play?: string;
+          note?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          areas?: string[];
+          pace?: string;
+          activities?: string[];
+          cuisines?: string[];
+          avoid_foods?: string[];
+          setting?: string;
+          crowd?: string;
+          budget?: string;
+          time_window?: string;
+          area_scope?: string;
+          note?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       date_drafts: {
         Row: {
           id: string;
@@ -540,6 +597,55 @@ export type Database = {
         };
         Relationships: [];
       };
+      place_details_cache: {
+        Row: {
+          external_source: "kakao" | "tourapi";
+          external_place_id: string;
+          name: string;
+          leaf: string;
+          phone: string | null;
+          map_url: string | null;
+          image: string | null;
+          hours: string | null;
+          rating: number | null;
+          rating_count: number | null;
+          food: string | null;
+          source_url: string | null;
+          blurb: string | null;
+          fetched_at: string;
+        };
+        Insert: {
+          external_source: "kakao" | "tourapi";
+          external_place_id: string;
+          name?: string;
+          leaf?: string;
+          phone?: string | null;
+          map_url?: string | null;
+          image?: string | null;
+          hours?: string | null;
+          rating?: number | null;
+          rating_count?: number | null;
+          food?: string | null;
+          source_url?: string | null;
+          blurb?: string | null;
+          fetched_at?: string;
+        };
+        Update: {
+          name?: string;
+          leaf?: string;
+          phone?: string | null;
+          map_url?: string | null;
+          image?: string | null;
+          hours?: string | null;
+          rating?: number | null;
+          rating_count?: number | null;
+          food?: string | null;
+          source_url?: string | null;
+          blurb?: string | null;
+          fetched_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -548,6 +654,7 @@ export type Database = {
       create_couple_invite: { Args: Record<string, never>; Returns: Json };
       accept_couple_invite: { Args: { invite_token: string }; Returns: string };
       get_invite_preview: { Args: { invite_token: string }; Returns: Json };
+      leave_couple: { Args: Record<string, never>; Returns: string };
       save_couple_plan_atomic: {
         Args: {
           target_kind: string;

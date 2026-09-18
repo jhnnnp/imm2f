@@ -44,7 +44,7 @@ export function dateChatCard(input: {
   if (input.situation === "no_places") {
     return {
       headline: `${region || "그 근처"}에서 장소를 더 찾지 못했습니다`,
-      lines: ["다른 동네로 바꾸거나, 카페·맛집만 다시 찾아 달라고 해 주세요."],
+      lines: ["다른 동네로 바꾸거나, 카페나 식당만 다시 찾아 달라고 해 주세요."],
       suggestions: nearby.length ? nearby : ["제주", "부산", "전주", "성수"],
     };
   }

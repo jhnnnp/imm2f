@@ -4,13 +4,16 @@ import type { RankedCandidate } from "@/lib/openai/rank";
 import type { AIPlannerState, DateActivityId } from "@/features/planning/types/plan";
 import {
   courseSize,
+  dateSpine,
   extractAreasFromText,
-  extractPlacesFromText,
   isAdditiveRequest,
+  isExclusiveCrawl,
+  isTravelPlan,
   matchesActivity,
   matchesCuisine,
   matchesIndoorType,
   matchesTerm,
+  assumedTimeWindow,
   selectedAreas,
   uniqueStrings,
   withAreas,
@@ -38,17 +41,22 @@ export type HarshMealAllow = {
 
 export type DateRankContext = {
   savedPositive: Set<string>;
+  savedBoth?: Set<string>;
   recentlyVisited: Set<string>;
   commonTastes: string[];
   activities: DateActivityId[];
   allowHarsh?: HarshMealAllow;
+  trip?: boolean;
 };
 
 const HARSH_HOE = /회집|횟집|활어회|수산시장/;
-const HARSH_MEAT = /고깃집|삼겹살|곱창|막창|대창|닭발|족발|보쌈/;
+const HARSH_MEAT = /막창|대창|닭발|족발|보쌈/;
 const HARSH_BAR = /포차|호프|주점|실내포차/;
 const HARSH_OTHER = /편의점|마트|슈퍼마켓|PC방|피시방|모텔|여관|병원|의원|약국|부동산|주차장|주유소|사주|타로|점집|신점|운세|철학관|작명/;
-const STRONG_DATE = /카페|베이커리|브런치|파스타|이탈리|양식|와인|디저트|티룸|갤러리|전시|공원|루프탑|북카페/;
+const DATE_JUNK = /분식|패스트푸드|패스트\s*푸드|도시락|김밥|컵밥|맥도날드|롯데리아|버거킹|맘스터치|서브웨이|노브랜드버거|\bKFC\b|테마카페|룸카페/;
+const TAKEOUT_COFFEE = /메가\s*MGC|메가MGC|메가커피|컴포즈\s*커피|컴포즈커피|\bCompose\s*Coffee\b|빽다방|Paik'?s\s*Coffee|더\s*벤티|더벤티|The\s*Venti/i;
+const STRONG_DATE = /베이커리|브런치|파스타|이탈리|양식|한식|일식|중식|레스토랑|다이닝|와인|디저트|티룸|갤러리|전시|공원|루프탑|북카페|한옥|전망|미술관|박물관|수목원|계곡|호수|시장|관광|고깃집/;
+const ACTIVITY_SLOT_ORDER: Array<DateActivityId | "other"> = ["meal", "walk", "exhibit", "indoor", "nightview", "other", "cafe"];
 
 export function venueBlob(candidate: DiscoverCandidate) {
   return `${candidate.name} ${candidate.categoryLabel} ${candidate.detailedCategory ?? ""}`;
@@ -64,7 +72,7 @@ export function allowsHarshDateMeal(message: string, cuisine: AIPlannerState["cu
 
 export function isOffDateVenue(candidate: DiscoverCandidate, ctx?: { allowHarsh?: HarshMealAllow; allowKaraoke?: boolean }) {
   const blob = venueBlob(candidate);
-  if (HARSH_OTHER.test(blob)) return true;
+  if (HARSH_OTHER.test(blob) || DATE_JUNK.test(blob) || TAKEOUT_COFFEE.test(blob)) return true;
   if (!ctx?.allowKaraoke && /노래방|코인노래/.test(blob)) return true;
   const allow = ctx?.allowHarsh ?? { hoe: false, meat: false, bar: false };
   if (!allow.hoe && HARSH_HOE.test(blob)) return true;
@@ -76,11 +84,19 @@ export function isOffDateVenue(candidate: DiscoverCandidate, ctx?: { allowHarsh?
 export function dateVenueBonus(candidate: DiscoverCandidate) {
   const blob = venueBlob(candidate);
   let bonus = 0;
-  if (candidate.category === "cafe" || candidate.kakaoCategoryGroupCode === "CE7") bonus += 8;
   if (STRONG_DATE.test(blob)) bonus += 8;
   if (candidate.phone) bonus += 2;
   if (candidate.image) bonus += 6;
   return bonus;
+}
+
+export function candidateActivitySlot(candidate: DiscoverCandidate): DateActivityId | "other" {
+  return ACTIVITY_SLOT_ORDER.find(slot => slot !== "other" && matchesActivity(candidate, slot)) ?? "other";
+}
+
+function slotPriority(slot: DateActivityId | "other") {
+  const index = ACTIVITY_SLOT_ORDER.indexOf(slot);
+  return index === -1 ? ACTIVITY_SLOT_ORDER.length : index;
 }
 
 export function dateCandidateKey(item: { externalSource?: string; externalPlaceId: string }) {
@@ -103,6 +119,13 @@ export function preferredSavedNames(saved: Place[]) {
   )).map(place => place.name));
 }
 
+export function bothWantNames(saved: Place[]) {
+  return new Set(saved.filter(place => (
+    ["want", "must_visit", "revisit"].includes(place.userStatus)
+    && ["want", "must_visit", "revisit"].includes(place.partnerStatus)
+  )).map(place => place.name));
+}
+
 export function recentPlaceNames(entries: Array<{ items?: Array<{ placeName?: string }> }>, limit = 8) {
   return new Set(
     entries.slice(0, limit).flatMap(entry => (entry.items ?? []).map(item => String(item.placeName ?? "").trim())).filter(Boolean),
@@ -115,6 +138,10 @@ export function isSwapRequest(message: string) {
 
 export function isRedoRequest(message: string) {
   return /다시\s*짜|처음부터|새로|에서만|그쪽으로만|전부\s*바꿔|리셋/.test(message);
+}
+
+export function isSoftReroll(message: string) {
+  return /조금\s*다르게|다른\s*(?:코스|일정)|다시\s*추천|코스\s*(?:바꿔|변경)/.test(message);
 }
 
 const PLACE_ALIASES = [
@@ -136,10 +163,18 @@ export function placeMentionedInText(message: string, name: string) {
 
 export function categoryLeaf(detailed: string | undefined, fallback = "") {
   const parts = (detailed ?? "").split(">").map(part => part.trim()).filter(Boolean);
-  const generic = new Set(["음식점", "관광명소", "문화시설", "여행", "서비스,산업"]);
-  const useful = parts.filter(part => !generic.has(part));
+  const generic = new Set(["음식점", "관광명소", "문화시설", "여행", "서비스,산업", "맛집"]);
+  const useful = parts.filter(part => !generic.has(part) && part !== "맛집");
   if (useful.length >= 2) return useful.slice(-2).join(" · ");
-  return useful[0] || parts.at(-1) || fallback;
+  const leaf = useful[0] || parts.filter(part => part !== "맛집").at(-1) || fallback;
+  return leaf === "맛집" ? "음식점" : leaf;
+}
+
+export function dateCategoryLabel(candidate: DiscoverCandidate) {
+  const leaf = categoryLeaf(candidate.detailedCategory, "");
+  if (leaf) return leaf;
+  if (candidate.category === "restaurant" || candidate.categoryLabel === "맛집") return "음식점";
+  return candidate.categoryLabel;
 }
 
 export function claimContradictsPlace(reason: string, candidate: DiscoverCandidate) {
@@ -160,11 +195,15 @@ export function groundedStopReason(input: {
   previous?: DiscoverCandidate | null;
   meters?: number | null;
   saved?: boolean;
+  bothWant?: boolean;
 }) {
   if (input.candidate.category === "festival" && input.candidate.openingHours) {
     return `진행 중 · ${input.candidate.openingHours}`;
   }
-  if (input.saved) return "저장한 곳";
+  const leaf = dateCategoryLabel(input.candidate);
+  if (input.bothWant) return leaf ? `둘이 가고 싶다고 한 곳 · ${leaf}` : "둘이 가고 싶다고 한 곳";
+  if (input.saved) return leaf ? `저장한 곳 · ${leaf}` : "저장한 곳";
+  if (leaf) return leaf;
   if (input.previous && input.meters != null) {
     if (input.meters < 80) return `${input.previous.name} 바로 옆`;
     if (input.meters < 1000) return `앞에서 ${input.meters}m`;
@@ -173,9 +212,14 @@ export function groundedStopReason(input: {
   return "";
 }
 
-function exhibitCap(state: AIPlannerState) {
-  if (state.activities.length === 1 && state.activities[0] === "exhibit") return 3;
-  if (state.activities.includes("exhibit")) return 2;
+function slotCapPerDay(state: AIPlannerState, slot: DateActivityId): number {
+  if (slot === "meal") return 2;
+  if (slot === "cafe") return 2;
+  if (slot === "exhibit") return isExclusiveCrawl(state) ? 3 : 2;
+  return 2;
+}
+
+function festivalCapPerDay() {
   return 1;
 }
 
@@ -253,25 +297,28 @@ export function applyCourseDelta(input: {
     };
   }
 
-  if (isRedoRequest(message)) {
+  if (isRedoRequest(message) || isSoftReroll(message)) {
     const addedAreas = extractAreasFromText(message);
     const nextAreas = uniqueStrings([...selectedAreas(input.state), ...addedAreas], 3);
     const nextState = addedAreas.length ? withAreas(input.state, nextAreas) : input.state;
     return {
       ...nextState,
+      intent: "create",
       pinOrder: [],
       preserveExistingPlaces: false,
+      addStop: false,
       requiredPlaces: [],
     };
   }
 
-  const keepCourse = isAdditiveRequest(message)
-    || extractPlacesFromText(message).length > 0
-    || /여유|알차게|천천히|오래|한 곳 빼/.test(message);
-  if (input.state.preserveExistingPlaces && keepCourse) {
+  const keepCourse = input.state.addStop
+    || isAdditiveRequest(message)
+    || /여유|천천히|알차게|짧게/.test(message);
+  if (keepCourse && input.state.intent !== "reset") {
     return {
       ...input.state,
       pinOrder: names,
+      preserveExistingPlaces: true,
       requiredPlaces: uniqueStrings([...names.filter(name => !input.state.excludedPlaces.includes(name)), ...input.state.requiredPlaces], 8),
     };
   }
@@ -298,7 +345,66 @@ export function travelGapMinutes(from: [number, number] | null | undefined, to: 
   return Math.min(25, Math.max(8, Math.round(hop / 80)));
 }
 
-export function preferredHopScore(meters: number) {
+function clockMinutes(time: string) {
+  const [hour, minute] = time.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function formatClock(total: number) {
+  const wrapped = ((total % (24 * 60)) + (24 * 60)) % (24 * 60);
+  return `${String(Math.floor(wrapped / 60)).padStart(2, "0")}:${String(wrapped % 60).padStart(2, "0")}`;
+}
+
+export function mealAnchorMinutes(state: AIPlannerState, dayStart: string) {
+  if (state.timeWindow === "night") return [19 * 60];
+  if (state.timeWindow === "evening") return [18 * 60];
+  const startHour = Number(dayStart.slice(0, 2));
+  if (state.stayKind === "overnight" || state.stayKind === "daytrip" || startHour <= 11) return [12 * 60, 18 * 60];
+  return [18 * 60];
+}
+
+export function assignStartTimes(
+  rows: DateCourseRow[],
+  candidates: DiscoverCandidate[],
+  state: AIPlannerState,
+  dayStart = assumedTimeWindow(state).startTime,
+): DateCourseRow[] {
+  const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
+  const anchors = mealAnchorMinutes(state, dayStart);
+  let cursor = clockMinutes(dayStart);
+  let meals = 0;
+  let lastDay = 0;
+  return rows.map((row, index) => {
+    const day = Number(row.day_index ?? 0);
+    if (index === 0 || day !== lastDay) {
+      cursor = clockMinutes(dayStart);
+      meals = 0;
+    }
+    lastDay = day;
+    const candidate = byId.get(String(row.id ?? ""));
+    if (candidate && matchesActivity(candidate, "meal")) {
+      cursor = Math.max(cursor, anchors[Math.min(meals, anchors.length - 1)]);
+      meals += 1;
+    }
+    const duration = row.duration_minutes ?? (candidate ? defaultDuration(candidate, state.pace) : 70);
+    const previous = index > 0 && Number(rows[index - 1]?.day_index ?? 0) === day
+      ? byId.get(String(rows[index - 1]?.id ?? ""))
+      : undefined;
+    const start = formatClock(cursor);
+    cursor += duration + travelGapMinutes(previous?.coordinates, candidate?.coordinates);
+    return { ...row, start_time: start, duration_minutes: duration };
+  });
+}
+
+export function preferredHopScore(meters: number, trip = false) {
+  if (trip) {
+    if (meters < 80) return 0;
+    if (meters < 1500) return 8;
+    if (meters < 4000) return 12;
+    if (meters < 8000) return 6;
+    if (meters < 15000) return 2;
+    return 0;
+  }
   if (meters < 80) return 0;
   if (meters < 250) return 5;
   if (meters < 1000) return 12;
@@ -326,19 +432,36 @@ export function diversifyDateCatalog(candidates: DiscoverCandidate[], limit = 30
   const order = [bands[1], bands[0], bands[2]];
   const picked: DiscoverCandidate[] = [];
   const used = new Set<string>();
+  const slotCount = new Map<string, number>();
+  const takeFrom = (bucket: DiscoverCandidate[]) => {
+    let bestIndex = -1;
+    let bestCount = Infinity;
+    let bestSlotRank = Infinity;
+    for (let index = 0; index < bucket.length; index += 1) {
+      const next = bucket[index];
+      if (used.has(dateCandidateKey(next))) continue;
+      const slot = candidateActivitySlot(next);
+      const count = slotCount.get(slot) ?? 0;
+      const rank = slotPriority(slot);
+      if (count < bestCount || (count === bestCount && rank < bestSlotRank)) {
+        bestCount = count;
+        bestSlotRank = rank;
+        bestIndex = index;
+      }
+    }
+    if (bestIndex < 0) return false;
+    const next = bucket.splice(bestIndex, 1)[0];
+    used.add(dateCandidateKey(next));
+    const slot = candidateActivitySlot(next);
+    slotCount.set(slot, (slotCount.get(slot) ?? 0) + 1);
+    picked.push(next);
+    return true;
+  };
   while (picked.length < limit) {
     let added = false;
     for (const bucket of order) {
       if (picked.length >= limit) break;
-      while (bucket.length) {
-        const next = bucket.shift()!;
-        const key = dateCandidateKey(next);
-        if (used.has(key)) continue;
-        used.add(key);
-        picked.push(next);
-        added = true;
-        break;
-      }
+      if (takeFrom(bucket)) added = true;
     }
     if (!added) break;
   }
@@ -357,7 +480,12 @@ export function scoreDateCandidate(candidate: DiscoverCandidate, ctx: DateRankCo
     if (taste && details.includes(taste)) score += 12;
   }
   if (candidate.distanceMeters != null) score += proximityToAreaScore(candidate.distanceMeters);
-  if (ctx.activities.length && ctx.activities.some(activity => matchesActivity(candidate, activity))) score += 8;
+  if (ctx.trip && (candidate.category === "tourist" || candidate.category === "nature" || candidate.category === "festival")) score += 12;
+  if (ctx.savedBoth?.has(candidate.name)) score += 12;
+  if (ctx.activities.length) {
+    if (ctx.activities.some(activity => matchesActivity(candidate, activity))) score += 8;
+    else score -= 12;
+  }
   return score;
 }
 
@@ -389,43 +517,63 @@ export function toDateRanking(candidates: DiscoverCandidate[], ctx: DateRankCont
 export function orderByRoute(selected: DiscoverCandidate[], state: AIPlannerState) {
   if (selected.length <= 1) return selected;
   const remaining = [...selected];
-  const startIndex = state.timeWindow === "night"
+  const trip = isTravelPlan(state);
+  const startIndex = state.timeWindow === "night" || state.timeWindow === "evening"
     ? remaining.findIndex(candidate => matchesActivity(candidate, "meal"))
-    : 0;
+    : remaining.findIndex(candidate => !matchesActivity(candidate, "meal"));
   const ordered: DiscoverCandidate[] = [remaining.splice(Math.max(0, startIndex), 1)[0]];
   while (remaining.length) {
     const previous = ordered.at(-1)!;
     remaining.sort((a, b) => {
       const hopA = distanceMeters(previous.coordinates, a.coordinates);
       const hopB = distanceMeters(previous.coordinates, b.coordinates);
-      return preferredHopScore(hopB) - preferredHopScore(hopA) || hopA - hopB;
+      return preferredHopScore(hopB, trip) - preferredHopScore(hopA, trip) || hopA - hopB;
     });
     ordered.push(remaining.shift()!);
   }
   return ordered;
 }
 
-function pickOpenDay(candidates: DiscoverCandidate[], required: string[], limit: number) {
+function pickByActivities(
+  candidates: DiscoverCandidate[],
+  state: AIPlannerState,
+  wanted: DateActivityId[],
+) {
   const picked: DiscoverCandidate[] = [];
   const used = new Set<string>();
-  const usedCategory = new Set<string>();
+  const size = courseSize(state);
   const take = (candidate: DiscoverCandidate | undefined) => {
     if (!candidate) return;
     const key = semanticPlaceKey(candidate);
     if (used.has(key)) return;
     used.add(key);
-    usedCategory.add(candidate.category);
     picked.push(candidate);
   };
-  for (const place of required) take(candidates.find(candidate => matchesTerm(candidate, place)));
-  take(candidates.find(candidate => candidate.category === "festival"));
-  for (const candidate of candidates) {
-    if (picked.length >= limit) break;
-    if (usedCategory.has(candidate.category) && picked.length < Math.min(3, limit)) continue;
-    take(candidate);
+  const slots: DateActivityId[] = wanted.length ? wanted : [];
+  for (const place of state.requiredPlaces) take(candidates.find(candidate => matchesTerm(candidate, place)));
+  if (slots.includes("exhibit")) take(candidates.find(candidate => candidate.category === "festival"));
+  const rounds = Math.max(1, size.days);
+  for (let round = 0; round < rounds; round += 1) {
+    for (const activity of slots) {
+      if (picked.length >= size.max) break;
+      if (activity === "meal") {
+        take(candidates.find(candidate => matchesActivity(candidate, "meal") && matchesCuisine(candidate, state.cuisine) && !used.has(semanticPlaceKey(candidate))));
+      }
+      if (activity === "indoor") {
+        take(candidates.find(candidate => matchesIndoorType(candidate, state.indoorPlay) && !used.has(semanticPlaceKey(candidate))));
+      }
+      take(candidates.find(candidate => matchesActivity(candidate, activity) && !used.has(semanticPlaceKey(candidate))));
+    }
   }
   for (const candidate of candidates) {
-    if (picked.length >= limit) break;
+    if (picked.length >= size.max) break;
+    const slot = candidateActivitySlot(candidate);
+    const usedCount = picked.filter(item => candidateActivitySlot(item) === slot).length;
+    if (isExclusiveCrawl(state) && slots.length) {
+      if (slot === "cafe" && !slots.includes("cafe")) continue;
+      if (slot !== "other" && !slots.includes(slot)) continue;
+    }
+    if (slot !== "other" && usedCount >= slotCapPerDay(state, slot)) continue;
     take(candidate);
   }
   return picked;
@@ -433,31 +581,59 @@ function pickOpenDay(candidates: DiscoverCandidate[], required: string[], limit:
 
 export function pickCoverage(candidates: DiscoverCandidate[], state: AIPlannerState, savedNames = new Set<string>()) {
   const ranked = [...candidates].sort((a, b) => Number(savedNames.has(b.name)) - Number(savedNames.has(a.name)));
-  const limit = courseSize(state).max;
-  if (!state.activities.length) return pickOpenDay(ranked, state.requiredPlaces, limit);
+  return pickByActivities(ranked, state, dateSpine(state));
+}
 
+export function courseOrderMessage(stops: Array<{ name: string }>, region: string) {
+  const names = stops.map(stop => stop.name.trim()).filter(Boolean);
+  if (names.length < 2) return `${region} ${names.length}곳`;
+  if (names.length === 2) return `${region}에서 ${names[0]} 다음에 ${names[1]} 순으로 이어가요.`;
+  return `${region}에서 ${names[0]} 다음에 ${names[1]}, 이어서 ${names[2]} 순으로 이어가요.`;
+}
+
+export function pickCourseMessage(modelMessage: string, stops: Array<{ name: string }>, region: string) {
+  const talk = courseOrderMessage(stops, region);
+  const model = modelMessage.trim();
+  const first = stops[0]?.name;
+  const last = stops.at(-1)?.name;
+  if (model.length >= 12 && first && last && model.includes(first) && model.includes(last)) {
+    return model.slice(0, 140);
+  }
+  return talk;
+}
+
+export function curatorSlotCatalog(
+  candidates: DiscoverCandidate[],
+  wanted: DateActivityId[],
+  savedNames = new Set<string>(),
+  perSlot = 5,
+) {
   const picked: DiscoverCandidate[] = [];
   const used = new Set<string>();
-  const take = (candidate: DiscoverCandidate | undefined) => {
-    if (!candidate) return;
-    const key = semanticPlaceKey(candidate);
-    if (used.has(key)) return;
+  const take = (candidate: DiscoverCandidate) => {
+    const key = dateCandidateKey(candidate);
+    if (used.has(key)) return false;
     used.add(key);
     picked.push(candidate);
+    return true;
   };
-  for (const place of state.requiredPlaces) take(ranked.find(candidate => matchesTerm(candidate, place)));
-  for (const activity of state.activities) {
-    if (picked.some(candidate => matchesActivity(candidate, activity))) continue;
-    if (activity === "meal") {
-      take(ranked.find(candidate => matchesActivity(candidate, "meal") && matchesCuisine(candidate, state.cuisine)));
+  for (const candidate of candidates) {
+    if (savedNames.has(candidate.name)) take(candidate);
+  }
+  const slots = wanted.length ? wanted : [...new Set(
+    candidates.map(candidate => candidateActivitySlot(candidate)).filter((slot): slot is DateActivityId => slot !== "other"),
+  )];
+  for (const slot of slots) {
+    let count = 0;
+    for (const candidate of candidates) {
+      if (count >= perSlot) break;
+      if (!matchesActivity(candidate, slot)) continue;
+      if (used.has(dateCandidateKey(candidate))) {
+        count += 1;
+        continue;
+      }
+      if (take(candidate)) count += 1;
     }
-    if (activity === "exhibit") {
-      take(ranked.find(candidate => candidate.category === "festival"));
-    }
-    if (activity === "indoor") {
-      take(ranked.find(candidate => matchesIndoorType(candidate, state.indoorPlay) && !used.has(semanticPlaceKey(candidate))));
-    }
-    take(ranked.find(candidate => matchesActivity(candidate, activity) && !used.has(semanticPlaceKey(candidate))));
   }
   return picked;
 }
@@ -476,28 +652,109 @@ export function heuristicRows(
   const selected = orderByRoute(coverage, state).slice(0, courseSize(state).max);
   const days = courseSize(state).days;
   const perDay = Math.max(2, Math.ceil(selected.length / days));
-  let cursor = Number(startTime.slice(0, 2)) * 60 + Number(startTime.slice(3));
-  return selected.map((candidate, index) => {
+  const rows = selected.map((candidate, index) => {
     const dayIndex = Math.min(days - 1, Math.floor(index / perDay));
-    if (index > 0 && dayIndex !== Math.min(days - 1, Math.floor((index - 1) / perDay))) {
-      cursor = Number(startTime.slice(0, 2)) * 60 + Number(startTime.slice(3));
-    }
-    const start = `${String(Math.floor(cursor / 60) % 24).padStart(2, "0")}:${String(cursor % 60).padStart(2, "0")}`;
-    const duration = defaultDuration(candidate, state.pace);
-    const previous = selected[index - 1];
-    cursor += duration + travelGapMinutes(previous?.coordinates, candidate.coordinates);
     return {
       id: dateCandidateKey(candidate),
-      start_time: start,
-      duration_minutes: duration,
+      duration_minutes: defaultDuration(candidate, state.pace),
       expected_cost: 0,
       day_index: dayIndex,
       reasons: [
-        index === 0 ? "하루의 시작으로 두기 좋은 거리예요." : "앞에서 이어지는 동선으로 골랐어요.",
-        preferredSavedNames(saved).has(candidate.name) ? "둘이 저장해 둔 곳이라 넣었어요." : "실제 장소 좌표 기준으로 이어 봤어요.",
-      ],
+        preferredSavedNames(saved).has(candidate.name) ? "저장한 곳" : dateCategoryLabel(candidate),
+      ].filter(Boolean),
     };
   });
+  return assignStartTimes(rows, candidates, state, startTime);
+}
+
+function spineFillCandidate(
+  candidates: DiscoverCandidate[],
+  next: DateCourseRow[],
+  state: AIPlannerState,
+  slot: DateActivityId,
+  candidateOf: (row: DateCourseRow) => DiscoverCandidate | undefined,
+  allowHarsh: HarshMealAllow,
+) {
+  const previous = candidateOf(next.at(-1) ?? { id: "" });
+  const size = courseSize(state);
+  return [...candidates]
+    .sort((a, b) => {
+      if (!previous) return 0;
+      const hopA = distanceMeters(previous.coordinates, a.coordinates);
+      const hopB = distanceMeters(previous.coordinates, b.coordinates);
+      return preferredHopScore(hopB, isTravelPlan(state)) - preferredHopScore(hopA, isTravelPlan(state)) || hopA - hopB;
+    })
+    .find(candidate => {
+      if (!matchesActivity(candidate, slot)) return false;
+      if (next.some(row => row.id === dateCandidateKey(candidate))) return false;
+      if (state.excludedPlaces.some(term => matchesTerm(candidate, term))) return false;
+      if (isOffDateVenue(candidate, { allowHarsh, allowKaraoke: state.activities.includes("indoor") })) return false;
+      const day = Math.min(size.days - 1, Math.floor(next.length / Math.max(2, Math.ceil(size.min / size.days))));
+      if (candidate.category === "festival") {
+        const count = next.filter(row => {
+          const current = candidateOf(row);
+          return current && Number(row.day_index ?? 0) === day && current.category === "festival";
+        }).length;
+        if (count >= festivalCapPerDay()) return false;
+      }
+      const usedSlot = candidateActivitySlot(candidate);
+      if (usedSlot !== "other") {
+        const count = next.filter(row => {
+          const current = candidateOf(row);
+          return current && Number(row.day_index ?? 0) === day && candidateActivitySlot(current) === usedSlot;
+        }).length;
+        if (count >= slotCapPerDay(state, usedSlot)) return false;
+      }
+      return true;
+    });
+}
+
+function ensureDateSpine(
+  next: DateCourseRow[],
+  candidates: DiscoverCandidate[],
+  state: AIPlannerState,
+  candidateOf: (row: DateCourseRow) => DiscoverCandidate | undefined,
+  allowHarsh: HarshMealAllow,
+) {
+  const size = courseSize(state);
+  for (const slot of dateSpine(state)) {
+    if (next.some(row => {
+      const candidate = candidateOf(row);
+      return Boolean(candidate && matchesActivity(candidate, slot));
+    })) continue;
+    const extra = spineFillCandidate(candidates, next, state, slot, candidateOf, allowHarsh);
+    if (!extra) continue;
+    const row: DateCourseRow = {
+      id: dateCandidateKey(extra),
+      duration_minutes: defaultDuration(extra, state.pace),
+      day_index: Math.min(size.days - 1, Math.floor(next.length / Math.max(2, Math.ceil(size.min / size.days)))),
+      reasons: ["동선에 맞춰 한 곳을 더 이었어요."],
+    };
+    if (next.length < size.max) {
+      next.push(row);
+      continue;
+    }
+    const counts = new Map<string, number>();
+    for (const item of next) {
+      const candidate = candidateOf(item);
+      if (!candidate) continue;
+      const used = candidateActivitySlot(candidate);
+      counts.set(used, (counts.get(used) ?? 0) + 1);
+    }
+    let replaceAt = -1;
+    for (let index = next.length - 1; index >= 0; index -= 1) {
+      const candidate = candidateOf(next[index]);
+      if (!candidate) continue;
+      if (state.requiredPlaces.some(place => matchesTerm(candidate, place))) continue;
+      const used = candidateActivitySlot(candidate);
+      if ((counts.get(used) ?? 0) > 1) {
+        replaceAt = index;
+        break;
+      }
+    }
+    if (replaceAt >= 0) next[replaceAt] = row;
+  }
+  return next.slice(0, size.max);
 }
 
 export function validateModelRows(
@@ -511,6 +768,7 @@ export function validateModelRows(
 
   const candidateOf = (row: DateCourseRow) => byId.get(String(row.id ?? ""));
   const allowHarsh = allowsHarshDateMeal(state.conversationNotes.join(" "), state.cuisine);
+  const wanted = dateSpine(state);
   const keep = (row: DateCourseRow, at?: number) => {
     const candidate = candidateOf(row);
     if (!candidate) return;
@@ -529,12 +787,11 @@ export function validateModelRows(
     if (!candidate || state.excludedPlaces.some(term => matchesTerm(candidate, term))) continue;
     const requiredPlace = state.requiredPlaces.some(place => matchesTerm(candidate, place));
     if (!requiredPlace && isOffDateVenue(candidate, { allowHarsh, allowKaraoke: state.activities.includes("indoor") })) continue;
-    if (state.activities.length && matchesActivity(candidate, "meal") && !state.activities.includes("meal") && !requiredPlace) continue;
-    if (state.activities.length && matchesActivity(candidate, "indoor") && !state.activities.includes("indoor") && !requiredPlace) continue;
+    if (isExclusiveCrawl(state) && wanted.length && !requiredPlace && !wanted.some(activity => matchesActivity(candidate, activity))) continue;
     keep(row);
   }
 
-  if (state.activities.includes("meal") && state.cuisine && state.cuisine !== "any") {
+  if (wanted.includes("meal") && state.cuisine && state.cuisine !== "any") {
     const mealIndex = selected.findIndex(row => {
       const candidate = candidateOf(row);
       return Boolean(candidate && matchesActivity(candidate, "meal"));
@@ -558,42 +815,34 @@ export function validateModelRows(
   }
 
   const size = courseSize(state);
-  const restaurantsPerDay = size.days > 1 || state.stayKind === "daytrip" ? 2 : 1;
-  const restaurantsByDay = new Map<number, number>();
-  const exhibitsByDay = new Map<number, number>();
+  const slotCountByDay = new Map<string, number>();
   const festivalsByDay = new Map<number, number>();
-  const maxExhibits = exhibitCap(state);
-  const mealOnly = state.activities.length === 1 && state.activities[0] === "meal";
+  const bump = (key: string) => {
+    const count = (slotCountByDay.get(key) ?? 0) + 1;
+    slotCountByDay.set(key, count);
+    return count;
+  };
   const limited = selected.filter(row => {
     const candidate = candidateOf(row);
     if (!candidate) return false;
     const day = Number(row.day_index ?? 0);
     const requiredPlace = state.requiredPlaces.some(place => matchesTerm(candidate, place));
-    if (candidate.category === "festival" && !requiredPlace) {
+    if (requiredPlace) return true;
+    if (candidate.category === "festival") {
       const count = (festivalsByDay.get(day) ?? 0) + 1;
       festivalsByDay.set(day, count);
-      if (count > 1) return false;
+      if (count > festivalCapPerDay()) return false;
     }
-    if (!mealOnly && matchesActivity(candidate, "meal")) {
-      const count = (restaurantsByDay.get(day) ?? 0) + 1;
-      restaurantsByDay.set(day, count);
-      if (count > restaurantsPerDay) return false;
-    }
-    if (matchesActivity(candidate, "exhibit") && !requiredPlace) {
-      const count = (exhibitsByDay.get(day) ?? 0) + 1;
-      exhibitsByDay.set(day, count);
-      if (count > maxExhibits) return false;
-    }
-    return true;
+    const slot = candidateActivitySlot(candidate);
+    if (slot === "other") return true;
+    return bump(`${day}:${slot}`) <= slotCapPerDay(state, slot);
   });
   const next = limited.slice(0, size.max);
   while (next.length < size.min) {
-    const fillPriority = !state.activities.length
-      ? (["cafe", "meal", "walk", "exhibit"] as const).filter(activity => !next.some(row => {
+    const fillPriority = wanted.filter(activity => !next.some(row => {
         const candidate = candidateOf(row);
         return candidate && matchesActivity(candidate, activity);
-      }))
-      : [];
+      }));
     const previous = candidateOf(next.at(-1) ?? { id: "" });
     const extra = [...candidates]
       .sort((a, b) => {
@@ -606,21 +855,28 @@ export function validateModelRows(
         if (!previous) return 0;
         const hopA = distanceMeters(previous.coordinates, a.coordinates);
         const hopB = distanceMeters(previous.coordinates, b.coordinates);
-        return preferredHopScore(hopB) - preferredHopScore(hopA) || hopA - hopB;
+        return preferredHopScore(hopB, isTravelPlan(state)) - preferredHopScore(hopA, isTravelPlan(state)) || hopA - hopB;
       })
       .find(candidate => {
         if (next.some(row => row.id === dateCandidateKey(candidate))) return false;
         if (state.excludedPlaces.some(term => matchesTerm(candidate, term))) return false;
         if (isOffDateVenue(candidate, { allowHarsh, allowKaraoke: state.activities.includes("indoor") })) return false;
-        if (state.activities.length && matchesActivity(candidate, "meal") && !state.activities.includes("meal")) return false;
-        if (state.activities.length && matchesActivity(candidate, "indoor") && !state.activities.includes("indoor")) return false;
-        if (matchesActivity(candidate, "exhibit")) {
-          const day = Math.min(size.days - 1, Math.floor(next.length / Math.max(2, Math.ceil(size.min / size.days))));
+        if (isExclusiveCrawl(state) && wanted.length && !wanted.some(activity => matchesActivity(candidate, activity))) return false;
+        const day = Math.min(size.days - 1, Math.floor(next.length / Math.max(2, Math.ceil(size.min / size.days))));
+        if (candidate.category === "festival") {
           const count = next.filter(row => {
             const current = candidateOf(row);
-            return current && Number(row.day_index ?? 0) === day && matchesActivity(current, "exhibit");
+            return current && Number(row.day_index ?? 0) === day && current.category === "festival";
           }).length;
-          if (count >= maxExhibits) return false;
+          if (count >= festivalCapPerDay()) return false;
+        }
+        const slot = candidateActivitySlot(candidate);
+        if (slot !== "other") {
+          const count = next.filter(row => {
+            const current = candidateOf(row);
+            return current && Number(row.day_index ?? 0) === day && candidateActivitySlot(current) === slot;
+          }).length;
+          if (count >= slotCapPerDay(state, slot)) return false;
         }
         return true;
       });
@@ -633,8 +889,9 @@ export function validateModelRows(
       reasons: ["하루 길이에 맞춰 걸어갈 곳을 하나 더 이었어요."],
     });
   }
-  const shaped = spreadConsecutiveStops(capLongHops(next, candidates, state.requiredPlaces), candidates, state.requiredPlaces);
-  return honorPinOrder(shaped, candidates, state);
+  const filled = ensureDateSpine(next, candidates, state, candidateOf, allowHarsh);
+  const shaped = spreadConsecutiveStops(capLongHops(filled, candidates, state.requiredPlaces, isTravelPlan(state) ? 8000 : 1400), candidates, state.requiredPlaces);
+  return assignStartTimes(honorPinOrder(shaped, candidates, state).slice(0, size.max), candidates, state);
 }
 
 export function honorPinOrder(
@@ -680,6 +937,12 @@ export function honorPinOrder(
     const row = take(replacement);
     if (row) next.push(row);
   }
+  for (const row of rows) {
+    const id = String(row.id ?? "");
+    if (!id || used.has(id)) continue;
+    const extra = take(byId.get(id));
+    if (extra) next.push({ ...extra, ...row, id: extra.id });
+  }
   return next.length >= 2 ? next : rows;
 }
 
@@ -687,6 +950,7 @@ export function capLongHops(
   rows: DateCourseRow[],
   candidates: DiscoverCandidate[],
   requiredPlaces: string[] = [],
+  maxHop = 1400,
 ) {
   const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
   const used = new Set(rows.map(row => String(row.id ?? "")).filter(Boolean));
@@ -697,18 +961,20 @@ export function capLongHops(
     if (!previous || !current) continue;
     if (requiredPlaces.some(place => matchesTerm(current, place))) continue;
     const hop = distanceMeters(previous.coordinates, current.coordinates);
-    if (hop <= 1400) continue;
+    if (hop <= maxHop) continue;
+    const currentSlot = candidateActivitySlot(current);
     const replacement = candidates.find(candidate => {
       const key = dateCandidateKey(candidate);
       if (used.has(key)) return false;
-      if (candidate.category !== current.category) return false;
+      if (candidateActivitySlot(candidate) !== currentSlot) return false;
       const meters = distanceMeters(previous.coordinates, candidate.coordinates);
-      return meters >= 180 && meters <= 1400;
+      return meters >= 180 && meters <= maxHop;
     }) ?? candidates.find(candidate => {
       const key = dateCandidateKey(candidate);
       if (used.has(key)) return false;
+      if (candidateActivitySlot(candidate) === "cafe" && currentSlot !== "cafe") return false;
       const meters = distanceMeters(previous.coordinates, candidate.coordinates);
-      return meters >= 180 && meters <= 1400;
+      return meters >= 180 && meters <= maxHop;
     });
     if (!replacement) continue;
     used.delete(dateCandidateKey(current));

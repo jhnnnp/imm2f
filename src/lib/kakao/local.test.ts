@@ -4,7 +4,7 @@ import { isKakaoUtilityGroupCode, mapKakaoCategory } from "./local";
 describe("mapKakaoCategory", () => {
   it("maps chip categories from Kakao group codes", () => {
     expect(mapKakaoCategory("CE7", "음식점 > 카페")).toEqual({ id: "cafe", label: "카페" });
-    expect(mapKakaoCategory("FD6", "음식점 > 한식")).toEqual({ id: "restaurant", label: "맛집" });
+    expect(mapKakaoCategory("FD6", "음식점 > 한식")).toEqual({ id: "restaurant", label: "음식점" });
     expect(mapKakaoCategory("AD5", "여행 > 숙박 > 호텔")).toEqual({ id: "stay", label: "숙박" });
     expect(mapKakaoCategory("CT1", "문화,예술 > 미술관")).toEqual({ id: "photo", label: "사진" });
     expect(mapKakaoCategory("", "문화,예술 > 서점")).toEqual({ id: "book", label: "책방" });

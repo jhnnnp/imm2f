@@ -60,7 +60,7 @@ export function mapKakaoCategory(groupCode: string, categoryName: string): { id:
   if (FESTIVAL_CATEGORY.test(name)) return { id: "festival", label: "축제" };
   if (name.includes("사진") || name.includes("포토")) return { id: "photo", label: "사진" };
   if (groupCode === "CE7") return { id: "cafe", label: "카페" };
-  if (groupCode === "FD6") return { id: "restaurant", label: "맛집" };
+  if (groupCode === "FD6") return { id: "restaurant", label: "음식점" };
   if (groupCode === "AD5" || STAY_CATEGORY.test(name)) return { id: "stay", label: "숙박" };
   if (groupCode === "AT4") {
     if (NATURE_CATEGORY.test(last) || NATURE_CATEGORY.test(name)) return { id: "nature", label: "자연" };
@@ -163,6 +163,7 @@ async function requestKakao(key: string, url: URL) {
       KA: `sdk/1.0 os/javascript origin/${kakaoOrigin()}`,
     },
     cache: "no-store",
+    signal: AbortSignal.timeout(6000),
   });
 }
 

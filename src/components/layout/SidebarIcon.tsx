@@ -9,6 +9,7 @@ type SidebarIconName =
   | "vault"
   | "gifts"
   | "bucket"
+  | "partner"
   | "insights";
 
 const paths: Record<SidebarIconName, React.ReactNode> = {
@@ -22,6 +23,7 @@ const paths: Record<SidebarIconName, React.ReactNode> = {
   vault: <><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="12" cy="12" r="4"/><path d="M12 8v2.2M15.8 12H14M12 15.8V14M8.2 12H10M17.5 6.5h.01M17.5 17.5h.01"/></>,
   gifts: <><path d="M3.5 9h17v11h-17zM2.5 6h19v3h-19zM12 6v14"/><path d="M12 6H8.8A2.3 2.3 0 1 1 11 3.1L12 6Zm0 0h3.2A2.3 2.3 0 1 0 13 3.1L12 6Z"/></>,
   bucket: <><rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="m7.5 9 1.4 1.4 2.5-2.8M7.5 15l1.4 1.4 2.5-2.8M13.5 9h3M13.5 15h3"/></>,
+  partner: <><circle cx="9" cy="9" r="3"/><circle cx="16.2" cy="10.2" r="2.6"/><path d="M3.6 20.2c.5-4 2.6-6.2 5.4-6.2s4.9 2.2 5.4 6.2M13.8 15.2c2.8-.4 5.4 1.4 5.8 4.4"/></>,
   insights: <><path d="M12 3.5a7.5 7.5 0 0 0-4.4 13.6c.8.6 1.2 1.2 1.3 2h6.2c.1-.8.5-1.4 1.3-2A7.5 7.5 0 0 0 12 3.5Z"/><path d="M9 22h6M9.5 13.5l2-2 1.7 1.7 2.3-3"/></>,
 };
 

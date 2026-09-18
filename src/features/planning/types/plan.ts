@@ -73,6 +73,10 @@ export type AIPlaceRecommendation = {
   reasons: string[];
   isSaved: boolean;
   distanceFromPreviousMeters: number | null;
+  rating?: number;
+  ratingCount?: number;
+  dishes?: string;
+  factSourceUrl?: string;
 };
 
 export type AIChatStop = {
@@ -91,6 +95,10 @@ export type AIChatStop = {
   image?: string;
   openingHours?: string;
   source?: "kakao" | "tourapi";
+  rating?: number;
+  ratingCount?: number;
+  dishes?: string;
+  factSourceUrl?: string;
 };
 
 export type DateChatTurn = {
@@ -164,6 +172,7 @@ export type AIPlannerState = {
   dateLabel: string | null;
   pinOrder: string[];
   preserveExistingPlaces: boolean;
+  addStop: boolean;
   intent: "create" | "modify" | "remove" | "reset" | "clarify";
   pendingSlot: DateIntakeSlot | null;
   conversationNotes: string[];

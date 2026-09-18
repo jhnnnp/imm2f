@@ -12,6 +12,7 @@ import { PlaceCategoryIcon } from "@/features/places/components/PlaceCategoryIco
 import { addDays, formatKoDate, formatKoShort, toIsoDate } from "@/lib/dates";
 import { RecentActivityPreview } from "@/features/collaboration/components/RecentActivityPreview";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
+import { withSubjectParticle } from "@/features/auth/koreanName";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 const CATEGORY_IDS = new Set(PLACE_CATEGORIES.map(item => item.id));
@@ -56,14 +57,6 @@ function journeyHeadline(title: string, items: PlanItem[], places: Place[], dayC
   const district = first?.district?.replace(/시$|군$|구$/u, "") || first?.name;
   if (!district) return trimmed || "우리가 고른 여행";
   return dayCount <= 1 ? `${district}에서의 하루` : `${district}에서 머문 ${stayWord(dayCount)}`;
-}
-
-function withSubjectParticle(name: string) {
-  const last = name.trim().at(-1);
-  if (!last) return "파트너가";
-  const code = last.charCodeAt(0);
-  if (code < 0xac00 || code > 0xd7a3) return `${name}이`;
-  return `${name}${(code - 0xac00) % 28 === 0 ? "가" : "이"}`;
 }
 
 function memoryCover(memory: Memory) {
@@ -497,7 +490,7 @@ export function HomeDashboard({
     ["want", "must_visit", "revisit"].includes(place.partnerStatus)
     && !["want", "must_visit", "revisit"].includes(place.userStatus),
   ).slice(0, 3);
-  const partnerName = session.mode === "authenticated" ? session.partner?.displayName?.trim() || "파트너" : "파트너";
+  const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? "파트너" : "파트너";
   const shownPlaces = shared.length ? shared : mine;
   const memory = memories[0] ?? null;
   const cover = memory ? memoryCover(memory) : null;

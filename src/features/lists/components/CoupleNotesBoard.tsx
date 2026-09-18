@@ -298,7 +298,7 @@ export function CoupleNotesBoard({
             <div className="bucket-collaborators" aria-label="함께 작성하는 사람">
               <span>{collaborators?.viewerName.slice(0, 1) || "나"}</span>
               <span>{collaborators?.partnerName.slice(0, 1) || "?"}</span>
-              <small><b>함께 쓰는 목록</b>{collaborators ? `${collaborators.viewerName} · ${collaborators.partnerName}` : "우리 우리의공간"}</small>
+              <small><b>함께 쓰는 목록</b>{collaborators ? `${collaborators.viewerName} · ${collaborators.partnerName}` : "우리의 공간"}</small>
             </div>
             <div className="bucket-paper-progress" aria-label={`버킷리스트 달성률 ${progress}%`}>
               <span><b>{highlightCount}</b> / {notes.length || 0} 완료</span>

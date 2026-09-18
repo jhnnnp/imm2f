@@ -14,6 +14,7 @@ export const NAVIGATION = [
   { label: "Gifts", href: "/gifts", icon: "▤", iconName: "gifts" },
   { label: "Bucket", href: "/bucket", icon: "▢", iconName: "bucket" },
   { section: "TOGETHER" },
+  { label: "Partner", href: "/invite", icon: "◎", iconName: "partner" },
   { label: "Insights", href: "/insights", icon: "∿", iconName: "insights" },
 ] as const;
 
@@ -27,6 +28,6 @@ export const SEARCH_COMMANDS = [
   { href: "/gifts", label: "선물 메모", icon: "▤" },
   { href: "/bucket", label: "버킷리스트", icon: "▢" },
   { href: "/our-map", label: "우리 지도 열기", icon: "⌁" },
-  { href: "/insights", label: "취향 다시 보기", icon: "∿" },
-  { href: "/invite", label: "파트너 초대", icon: "◎" },
+  { href: "/insights", label: "우리 데이트 기준", icon: "∿" },
+  { href: "/invite", label: "파트너 관리", icon: "◎" },
 ] as const;

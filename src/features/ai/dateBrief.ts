@@ -26,7 +26,7 @@ export const DATE_SCOPE_OPTIONS: ReadonlyArray<{ id: DateAreaScope; label: strin
   { id: "nearby", label: "한 정거장 정도는 괜찮아" },
 ];
 
-export const DATE_AREA_OPTIONS = ["을지로", "성수", "홍대", "한남", "익선동", "제주", "부산", "군산"] as const;
+export const DATE_AREA_OPTIONS = ["을지로", "성수", "홍대", "한남", "익선동", "제주", "부산", "군산", "포천"] as const;
 
 export const DATE_SPAN_OPTIONS: ReadonlyArray<{ id: DateStayKind; nights: number; label: string }> = [
   { id: "date", nights: 0, label: "데이트" },
@@ -61,6 +61,7 @@ export const KNOWN_AREAS = [
   "해방촌", "성신여대", "성북", "대학로", "송파", "석촌", "영등포", "분당", "정자",
   "군산", "전주", "여수", "제주", "부산", "경주", "강릉", "속초", "가평", "춘천", "양양",
   "익산", "해운대", "광안리", "서귀포", "애월", "포항", "수원", "인천", "송도", "순천",
+  "포천", "양평", "파주", "단양", "거제", "남양주",
 ] as const;
 
 const AREA_STOPWORDS = new Set([
@@ -123,7 +124,7 @@ const AREA_CLUSTER: Record<string, string> = {
   이태원: "hannam",
   잠실: "jamsil",
   을지로: "euljiro",
-  익선동: "euljiro",
+  익선동: "jongno",
   청계천: "euljiro",
   충무로: "euljiro",
   문래: "mullae",
@@ -153,10 +154,10 @@ const CLUSTER_AREAS: Record<string, string[]> = {
   hongdae: ["홍대", "연남", "합정", "망원", "상수"],
   hannam: ["한남", "이태원", "해방촌"],
   jamsil: ["잠실", "송파", "석촌"],
-  euljiro: ["을지로", "익선동", "청계천", "충무로"],
+  euljiro: ["을지로", "청계천", "충무로", "명동"],
   gangnam: ["강남", "삼성", "선릉"],
   apgujeong: ["압구정", "청담", "신사"],
-  jongno: ["광화문", "종로", "안국", "북촌", "삼청"],
+  jongno: ["광화문", "종로", "북촌", "서촌", "익선동", "혜화"],
   mapo: ["공덕", "마포"],
   mullae: ["문래", "영등포"],
 };
@@ -164,6 +165,9 @@ const CLUSTER_AREAS: Record<string, string[]> = {
 const AREA_NEARBY: Record<string, string[]> = {
   군산: ["전주", "익산"],
   전주: ["군산", "익산"],
+  포천: ["가평", "남양주"],
+  가평: ["춘천", "포천"],
+  양평: ["가평"],
   제주: ["서귀포", "애월"],
   부산: ["해운대", "광안리"],
   여수: ["순천"],
@@ -191,7 +195,7 @@ const CUISINE_REGEX: Record<DateCuisine, RegExp> = {
   한식: /한식|국밥|고기|갈비|삼겹|한우|분식|백반|찌개|구이/,
   일식: /일식|스시|초밥|라멘|우동|돈카츠|오마카세|이자카야/,
   중식: /중식|중국|마라|딤섬|짜장|짬뽕/,
-  양식: /양식|파스타|피자|브런치|이탈리|프렌치|스테이크/,
+  양식: /양식|파스타|피자|브런치|이탈리|프렌치|스테이크|와인/,
 };
 
 export const emptyDateBrief = (): AIPlannerState => ({
@@ -213,6 +217,7 @@ export const emptyDateBrief = (): AIPlannerState => ({
   dateLabel: null,
   pinOrder: [],
   preserveExistingPlaces: true,
+  addStop: false,
   intent: "create",
   pendingSlot: null,
   conversationNotes: [],
@@ -278,8 +283,36 @@ export function needsAreaScope(state: AIPlannerState) {
   return clusterCount(areas) <= 1;
 }
 
+const VACATION_AREAS = new Set([
+  "제주", "부산", "군산", "전주", "여수", "경주", "강릉", "속초", "가평", "춘천", "양양",
+  "포천", "양평", "단양", "거제", "해운대", "광안리", "서귀포", "애월", "순천",
+]);
+
+export function isRainyRequest(text: string) {
+  return /비\s*오|우천|비오는|장마|눈\s*오/.test(text);
+}
+
+export function isTravelArea(name: string) {
+  return VACATION_AREAS.has(canonicalizeArea(name));
+}
+
+export function isTravelPlan(state: Pick<AIPlannerState, "stayKind" | "nights" | "areas" | "regions">) {
+  if (state.stayKind === "overnight" || state.stayKind === "daytrip" || (state.nights || 0) > 0) return true;
+  return selectedAreas(state as AIPlannerState).some(isTravelArea);
+}
+
+export function isSimpleLocalRequest(message: string) {
+  const areas = extractAreasFromText(message);
+  if (!areas.length) return false;
+  const rest = areas
+    .sort((a, b) => b.length - a.length)
+    .reduce((text, area) => text.replace(new RegExp(area.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), ""), message.replace(/\s/g, ""));
+  return /^(?:에서|으로|로|에)?(?:데이트|여행|당일치기|1박2일|2박3일|코스|일정|추천|하고싶어|가려고|갈래|짜줘|놀고싶어|가고싶어|가고싶은데)*[!?~]*$/.test(rest);
+}
+
 export function areaScopeMeters(state: AIPlannerState) {
   const areas = state.areas.length ? state.areas : state.regions;
+  if (isTravelPlan(state)) return state.areaScope === "core" ? 6000 : 15000;
   if (clusterCount(areas) > 1) return 6000;
   return SCOPE_METERS[state.areaScope ?? "walkable"];
 }
@@ -304,7 +337,12 @@ export function areaMentionedInText(area: string, message: string) {
 export const DATE_LANDMARKS = ["청계천", "한강", "남산", "광화문", "덕수궁", "경복궁", "북촌"] as const;
 
 export function isAdditiveRequest(message: string) {
-  return /추가|넣어|들러|경유|포함|갈\s*수|있나|도\s*가/.test(message);
+  return /추가|넣어|들러|경유|포함|갈\s*수|있나|도\s*가|더함|한 곳 더/.test(message);
+}
+
+export function isExclusiveCrawl(state: Pick<AIPlannerState, "conversationNotes"> | string) {
+  const blob = typeof state === "string" ? state : state.conversationNotes.join(" ");
+  return /(?:카페|커피|디저트|맛집|식당|전시|갤러리)\s*(?:투어|위주)|커피만\s|밥만\s|(?:카페|전시)만\s*(?:가자|갈게|돌|보)/.test(blob);
 }
 
 export function groundedAreas(message: string, previous: AIPlannerState | undefined, proposed: string[]) {
@@ -323,6 +361,156 @@ export function groundedAreas(message: string, previous: AIPlannerState | undefi
   return previousAreas;
 }
 
+export function openSearchPool(hint: {
+  message?: string;
+  areas?: string[];
+  stayKind?: DateStayKind | null;
+  timeWindow?: DateTimeWindow | null;
+  notes?: string[];
+}): DateActivityId[] {
+  const blob = `${hint.message ?? ""} ${(hint.notes ?? []).join(" ")}`;
+  if (isRainyRequest(blob)) return ["indoor", "exhibit", "cafe", "meal"];
+  const areas = (hint.areas ?? []).map(canonicalizeArea);
+  if (hint.timeWindow === "night") return ["meal", "nightview", "cafe"];
+  if (hint.timeWindow === "evening") return ["meal", "cafe", "walk"];
+  if (hint.stayKind === "overnight" || hint.stayKind === "daytrip" || areas.some(isTravelArea)) {
+    return ["walk", "meal"];
+  }
+  if (!areas.length && hint.stayKind !== "date") return ["cafe", "meal", "walk", "exhibit"];
+  return ["cafe", "meal", "walk", "exhibit"];
+}
+
+export function dateSpine(state: AIPlannerState): DateActivityId[] {
+  const named = uniqueActivities(state.activities);
+  const areas = selectedAreas(state);
+  const blob = state.conversationNotes.join(" ");
+  if (isExclusiveCrawl(state) && named.length) return named.slice(0, 3);
+  if (isRainyRequest(blob)) return uniqueActivities(["indoor", "cafe", "meal", ...named]).slice(0, 3);
+  if (isTravelPlan(state)) {
+    return uniqueActivities(["walk", "meal", ...named]).slice(0, 4);
+  }
+  if (state.timeWindow === "night") {
+    const extra = named.find(item => item !== "meal") ?? "nightview";
+    return uniqueActivities(["meal", extra === "cafe" || extra === "nightview" ? extra : "cafe"]);
+  }
+  if (state.timeWindow === "evening") {
+    const extra = named.find(item => item === "cafe" || item === "walk" || item === "exhibit" || item === "indoor" || item === "nightview")
+      ?? (areas.some(area => /한강|여의도|서울숲/.test(area)) ? "walk" : "cafe");
+    return uniqueActivities(["meal", extra]);
+  }
+  const extra = named.find(item => item !== "meal" && item !== "cafe")
+    ?? areaDateVibe(areas).find(item => item !== "meal" && item !== "cafe");
+  return extra
+    ? uniqueActivities(["meal", "cafe", extra]).slice(0, 3)
+    : uniqueActivities(["meal", "cafe"]);
+}
+
+export function inferSituationActivities(hint: {
+  message?: string;
+  areas?: string[];
+  stayKind?: DateStayKind | null;
+  timeWindow?: DateTimeWindow | null;
+  notes?: string[];
+}): DateActivityId[] {
+  const message = hint.message ?? "";
+  const named = extractActivitiesFromText(message);
+  if (named.length) return named;
+  const blob = `${message} ${(hint.notes ?? []).join(" ")}`;
+  if (/카페\s*(?:투어|만|위주)|커피만/.test(blob)) return ["cafe"];
+  if (/맛집\s*(?:투어|만)|밥만/.test(blob)) return ["meal"];
+  if (isRainyRequest(blob)) return ["indoor", "exhibit", "cafe", "meal"];
+  const areas = (hint.areas ?? []).map(canonicalizeArea);
+  if (!areas.length && hint.stayKind !== "overnight" && hint.stayKind !== "daytrip") {
+    if (hint.timeWindow === "night") return ["meal", "nightview"];
+    return [];
+  }
+  if (hint.timeWindow === "night") return ["meal", "nightview"];
+  if (hint.timeWindow === "evening") {
+    if (areas.some(area => /한강|여의도|서울숲/.test(area))) return ["meal", "walk"];
+    return ["meal", "cafe"];
+  }
+  if (hint.stayKind === "overnight" || hint.stayKind === "daytrip" || areas.some(isTravelArea)) {
+    return ["walk", "meal"];
+  }
+  const vibe = areaDateVibe(areas);
+  if (vibe.length) return vibe;
+  if (!areas.length && !hint.stayKind && !hint.timeWindow) return [];
+  return ["meal", "cafe"];
+}
+
+function areaDateVibe(areas: string[]): DateActivityId[] {
+  for (const area of areas) {
+    const key = canonicalizeArea(area);
+    const cluster = areaCluster(key);
+    if (cluster === "seongsu" || /성수|서울숲|뚝섬/.test(key)) return ["cafe", "walk", "exhibit"];
+    if (cluster === "euljiro" || cluster === "jongno") return ["meal", "exhibit", "cafe"];
+    if (cluster === "hongdae") return ["cafe", "meal"];
+    if (cluster === "hannam" || cluster === "apgujeong" || cluster === "gangnam") return ["meal", "cafe"];
+    if (cluster === "jamsil") return ["walk", "meal", "cafe"];
+    if (/한강|여의도/.test(key)) return ["walk", "cafe"];
+  }
+  return [];
+}
+
+export function isThinCafeGuess(activities: DateActivityId[], message: string) {
+  return activities.length === 1 && activities[0] === "cafe" && !/카페|커피|디저트/.test(message);
+}
+
+export function isUnnamedGlobalMix(activities: DateActivityId[], message: string) {
+  if (extractActivitiesFromText(message).length) return false;
+  const set = new Set(activities);
+  return set.has("meal") && set.has("walk") && set.has("exhibit");
+}
+
+export function fitsWantedActivities(candidate: DiscoverCandidate, wanted: DateActivityId[]) {
+  if (!wanted.length) return true;
+  return wanted.some(activity => matchesActivity(candidate, activity));
+}
+
+export function missingWantedSlots(have: Iterable<string>, wanted: DateActivityId[]) {
+  const slots = new Set(have);
+  return wanted.filter(activity => {
+    if (activity === "nightview") return !slots.has("nightview") && !slots.has("walk");
+    return !slots.has(activity);
+  });
+}
+
+export function rescueSearchQueries(region: string, wanted: DateActivityId[]) {
+  const slots = wanted.length ? wanted : (["cafe", "meal", "walk"] as DateActivityId[]);
+  const queries: string[] = [];
+  if (slots.includes("cafe")) queries.push(`${region} 카페`);
+  if (slots.includes("meal")) queries.push(`${region} 식당`);
+  if (slots.includes("walk")) queries.push(`${region} 공원`);
+  if (slots.includes("exhibit")) queries.push(`${region} 전시`);
+  if (slots.includes("indoor")) queries.push(`${region} 방탈출`);
+  if (slots.includes("nightview")) queries.push(`${region} 야경`);
+  return queries;
+}
+
+export function groundedActivities(
+  message: string,
+  previous: AIPlannerState | undefined,
+  proposed: DateActivityId[] = [],
+  _context?: Pick<AIPlannerState, "areas" | "stayKind" | "timeWindow" | "conversationNotes">,
+): DateActivityId[] {
+  const extracted = extractActivitiesFromText(message);
+  const previousActivities = previous?.activities ?? [];
+  const switching = /처음부터|새로|전부\s*바꿔|리셋/.test(message);
+  const editingCourse = /바꿔|교체|변경|빼줘|제외|한 곳/.test(message);
+  if (editingCourse && !switching) return previousActivities;
+  if (extracted.length) {
+    const named = uniqueActivities(proposed.filter(id => extracted.includes(id)));
+    const next = named.length ? named : extracted;
+    if (!switching && previousActivities.length && isAdditiveRequest(message)) {
+      return uniqueActivities([...previousActivities, ...next]);
+    }
+    return next;
+  }
+  if (switching) return [];
+  if (previousActivities.length) return previousActivities;
+  return [];
+}
+
 export function expandedSearchRegions(state: AIPlannerState) {
   const selected = selectedAreas(state);
   if (!state.areaScope || state.areaScope === "core") return selected;
@@ -332,18 +520,20 @@ export function expandedSearchRegions(state: AIPlannerState) {
 export function missingSlot(state: AIPlannerState | undefined): DateIntakeSlot | null {
   if (!state?.areas.length && !state?.regions.length) return "area";
   if (!state.stayKind) return "span";
-  if (state.stayKind === "date" && !state.timeWindow) return "time";
   return null;
 }
 
 export function discoveryActivities(state: AIPlannerState): DateActivityId[] {
-  if (state.activities.length) return state.activities;
-  if (state.timeWindow === "night") return ["meal", "nightview", "cafe"];
-  if (state.timeWindow === "evening") return ["meal", "cafe"];
-  if (state.indoorPlay) return ["indoor", "cafe"];
-  if (state.pace === "relaxed") return ["cafe", "walk", "exhibit"];
-  if (state.pace === "active") return ["walk", "exhibit", "cafe", "meal"];
-  return ["cafe", "meal", "walk", "exhibit"];
+  const pool = openSearchPool({
+    message: state.conversationNotes.at(-1) ?? "",
+    areas: selectedAreas(state),
+    stayKind: state.stayKind,
+    timeWindow: state.timeWindow,
+    notes: state.conversationNotes,
+  });
+  if (isExclusiveCrawl(state) && state.activities.length) return state.activities;
+  if (state.activities.length) return uniqueActivities([...state.activities, ...pool]);
+  return pool;
 }
 
 export function applyDateDefaults(state: AIPlannerState): AIPlannerState {
@@ -417,12 +607,13 @@ export function withCuisine(state: AIPlannerState, label: string): AIPlannerStat
 export function extractActivitiesFromText(message: string): DateActivityId[] {
   const found: DateActivityId[] = [];
   for (const option of DATE_ACTIVITY_OPTIONS) {
+    if (option.id === "indoor" && /실내\s*데이트/.test(message) && !/방탈출|보드게임|볼링|오락실|만화카페|VR|노래방|놀거리/.test(message)) continue;
     if (message.includes(option.label)) found.push(option.id);
   }
-  if (/카페|커피|디저트/.test(message)) found.push("cafe");
-  if (/저녁|점심|아침|식사|밥|맛집|음식/.test(message)) found.push("meal");
-  if (/산책|공원|한강|숲길|청계천|남산/.test(message)) found.push("walk");
-  if (/전시|미술관|갤러리|박물관/.test(message)) found.push("exhibit");
+  if (/카페|커피|디저트|베이커리/.test(message)) found.push("cafe");
+  if (/(?:저녁|점심|아침)\s*(?:먹|식사)|식사|밥|맛집|음식|파스타|라멘|브런치/.test(message)) found.push("meal");
+  if (/산책|공원|숲길|청계천|남산|걷/.test(message)) found.push("walk");
+  if (/전시|미술관|갤러리|박물관|미디어아트/.test(message)) found.push("exhibit");
   if (/놀거리|방탈출|보드게임|볼링|오락실|만화카페|VR|노래방/.test(message)) found.push("indoor");
   if (/야경|전망대|루프탑|야경맛집/.test(message)) found.push("nightview");
   return uniqueActivities(found);
@@ -432,7 +623,7 @@ export function extractAreasFromText(message: string) {
   const known = [...KNOWN_AREAS]
     .sort((a, b) => b.length - a.length)
     .filter(area => message.includes(area));
-  const travel = [...message.matchAll(/([가-힣]{2,8})(?:여행|에서|으로|쪽)/g)]
+  const travel = [...message.matchAll(/([가-힣]{2,8})\s*(?:여행|에서|으로|쪽)/g)]
     .map(match => match[1])
     .filter(name => !AREA_STOPWORDS.has(name));
   const suffixed = [...message.matchAll(/([가-힣]{2,12}?(?:역|동|구|시))(?=\s|에서|근처|주변|으로|가서|$)/g)]
@@ -451,7 +642,7 @@ export function extractAreaScope(message: string): DateAreaScope | null {
 
 export function extractPlacesFromText(message: string) {
   const landmarks = DATE_LANDMARKS.filter(name => message.includes(name));
-  const named = [...message.matchAll(/([가-힣A-Za-z0-9]{2,18}?(?:공원|미술관|박물관|전시관|시장|식당|카페|청계천))(?=\s|에서|으로|가고|들(?:러|렀)|빼|제외|도|$)/g)]
+  const named = [...message.matchAll(/([가-힣A-Za-z0-9]{2,18}?(?:공원|미술관|박물관|전시관|시장|식당|카페|호수|수목원|계곡|해변|청계천))(?=\s|에서|으로|가고|들(?:러|렀)|빼|제외|도|$)/g)]
     .map(match => match[1]);
   return uniqueStrings([...landmarks, ...named], 4);
 }
@@ -470,6 +661,15 @@ export function extractStay(message: string): { stayKind: DateStayKind; nights: 
   if (/1박\s*2일|하룻밤|하루\s*자|1박/.test(message)) return { stayKind: "overnight", nights: 1 };
   if (/당일치기|당일\s*코스|하루\s*만|당일로/.test(message)) return { stayKind: "daytrip", nights: 0 };
   if (/데이트/.test(message) && !/여행/.test(message)) return { stayKind: "date", nights: 0 };
+  const areas = extractAreasFromText(message);
+  if (
+    areas.length
+    && !areas.some(isTravelArea)
+    && /(?:에서|갈래|고\s*싶|놀자|코스|일정)/.test(message)
+    && !/여행|1박|2박|당일치기/.test(message)
+  ) {
+    return { stayKind: "date", nights: 0 };
+  }
   return null;
 }
 
@@ -509,17 +709,24 @@ export type DateSearchIntent = {
 export function activitySearchIntents(state: AIPlannerState): Array<{ category?: PlaceCategoryId; query?: string }> {
   const intents: Array<{ category?: PlaceCategoryId; query?: string }> = [];
   const mealQuery = state.cuisine && state.cuisine !== "any" ? state.cuisine : undefined;
+  const trip = isTravelPlan(state);
   for (const activity of discoveryActivities(state)) {
     if (activity === "cafe") intents.push({ category: "cafe" });
     else if (activity === "meal") {
       if (mealQuery) intents.push({ category: "restaurant", query: mealQuery });
-      else {
-        intents.push({ category: "restaurant", query: "파스타" });
-        intents.push({ category: "restaurant", query: "브런치" });
+      intents.push({ category: "restaurant" });
+    }
+    else if (activity === "walk") {
+      intents.push({ category: "nature" });
+      if (trip) {
+        intents.push({ category: "tourist" });
+        intents.push({ query: "관광지" });
       }
     }
-    else if (activity === "walk") intents.push({ category: "nature", query: "공원" });
-    else if (activity === "exhibit") intents.push({ category: "photo", query: "전시" });
+    else if (activity === "exhibit") {
+      intents.push({ category: "photo" });
+      if (!trip) intents.push({ category: "photo", query: "전시" });
+    }
     else if (activity === "indoor") {
       for (const query of indoorSearchQueries(state.indoorPlay)) intents.push({ query });
     } else if (activity === "nightview") {
@@ -563,7 +770,7 @@ export function matchesActivity(candidate: DiscoverCandidate, activity: DateActi
   const details = candidateDetails(candidate);
   if (activity === "cafe") return candidate.category === "cafe" || candidate.kakaoCategoryGroupCode === "CE7";
   if (activity === "meal") return candidate.category === "restaurant" || candidate.kakaoCategoryGroupCode === "FD6";
-  if (activity === "walk") return candidate.category === "nature" || /공원|한강|숲|수목원|산책|청계천|남산/.test(details);
+  if (activity === "walk") return candidate.category === "nature" || candidate.category === "tourist" || /공원|한강|숲|수목원|산책|청계천|남산|계곡|호수|해변|관광/.test(details);
   if (activity === "exhibit") return candidate.category === "festival" || candidate.kakaoCategoryGroupCode === "CT1" || /전시|미술관|박물관|갤러리|축제/.test(details);
   if (activity === "indoor") return /볼링장|방탈출|보드게임|보드카페|오락실|만화카페|노래방|VR카페|VR/.test(details);
   return /야경|전망대|루프탑/.test(details) || (/한강공원/.test(details) && candidate.category === "nature");
@@ -633,10 +840,20 @@ export function slotQuestion(slot: DateIntakeSlot, state?: AIPlannerState) {
 export function courseSize(state: AIPlannerState) {
   const nights = Math.max(0, Math.min(2, state.nights || 0));
   const days = state.stayKind === "overnight" || nights > 0 ? Math.max(2, nights + 1) : 1;
-  if (days > 1) return { min: 3 * days, max: 4 * days, days };
-  if (state.stayKind === "daytrip") return { min: 3, max: 4, days: 1 };
-  if (state.timeWindow === "evening" || state.timeWindow === "night") return { min: 2, max: 3, days: 1 };
-  return { min: 3, max: 4, days: 1 };
+  const size = days > 1
+    ? { min: 2 * days, max: 4 * days, days }
+    : state.stayKind === "daytrip"
+      ? { min: 3, max: 5, days: 1 }
+      : (state.timeWindow === "evening" || state.timeWindow === "night")
+        ? { min: 2, max: 3, days: 1 }
+        : { min: 2, max: 4, days: 1 };
+  if (!state.addStop || !state.preserveExistingPlaces || state.pinOrder.length < 2) return size;
+  const need = Math.min(8, state.pinOrder.length + 1);
+  return {
+    min: Math.max(size.min, need),
+    max: Math.max(size.max, need),
+    days: size.days,
+  };
 }
 
 export function assumedTimeWindow(state: AIPlannerState) {

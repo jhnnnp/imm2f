@@ -15,6 +15,7 @@ import {
   extractStay,
   extractTimeWindow,
   groundedAreas,
+  groundedActivities,
   isDateActivityId,
   missingSlot,
   uniqueActivities,
@@ -44,7 +45,8 @@ export type IntentPayload = {
   startTime?: string | null;
   endTime?: string | null;
   preserveExistingPlaces?: boolean;
-  conversationNote?: string;
+    conversationNote?: string;
+  addStop?: boolean;
   askSlot?: DateIntakeSlot | null;
   reply?: string;
 };
@@ -63,26 +65,29 @@ function asTime(value: unknown) {
 
 export function fallbackPatch(message: string): IntentPayload {
   const removing = /빼|제외|삭제|가지\s*마/.test(message);
-  const activities = extractActivitiesFromText(message);
+  const named = extractActivitiesFromText(message);
+  const areas = extractAreasFromText(message);
   const places = extractPlacesFromText(message);
   const adding = /들러|경유|가고\s*싶|포함|추가|넣어|갈\s*수|있나/.test(message);
   const stay = extractStay(message);
+  const timeWindow = extractTimeWindow(message);
   return {
-    intent: removing ? "remove" : /처음부터|새로|전부\s*바꿔|리셋/.test(message) ? "reset" : undefined,
-    addActivities: removing ? [] : activities,
-    removeActivities: removing ? activities : [],
-    addAreas: extractAreasFromText(message),
+    intent: removing ? "remove" : adding ? "modify" : /처음부터|새로|전부\s*바꿔|리셋/.test(message) ? "reset" : undefined,
+    addActivities: removing ? [] : named,
+    removeActivities: removing ? named : [],
+    addAreas: areas,
     addPlaces: removing ? [] : places,
     removePlaces: removing ? places : [],
     cuisine: extractCuisine(message),
     indoorPlay: extractIndoorPlay(message),
     areaScope: extractAreaScope(message),
-    timeWindow: extractTimeWindow(message),
+    timeWindow,
     stayKind: stay?.stayKind ?? null,
     nights: stay?.nights ?? null,
     pace: /여유|천천히|오래/.test(message) ? "relaxed" : /많이|알차게|활동/.test(message) ? "active" : null,
-    preserveExistingPlaces: !/처음부터|새로|전부\s*바꿔|리셋/.test(message),
-    conversationNote: adding ? `기존 코스에 ${places.join(", ") || "장소"}를 더함` : message,
+    preserveExistingPlaces: !/처음부터|새로|전부\s*바꿔|리셋|조금\s*다르게|다른\s*(?:코스|일정)|다시\s*추천/.test(message),
+    addStop: adding && !removing,
+    conversationNote: message,
   };
 }
 
@@ -135,6 +140,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     dateLabel: dateLabel || base.dateLabel,
     pinOrder: reset ? [] : uniqueStrings(base.pinOrder, 8),
     preserveExistingPlaces: patch.preserveExistingPlaces !== false,
+    addStop: patch.addStop === true,
     intent,
     pendingSlot: missingSlot({
       ...base,
@@ -167,13 +173,18 @@ export function applyInterpretPatch(input: {
 }) {
   const merged = mergeDateState(input.previousState, input.patch, input.dateLabel);
   const areas = groundedAreas(input.message, input.previousState, merged.areas);
-  const state = withAreas({ ...merged, pendingSlot: null }, areas);
+  const activities = groundedActivities(input.message, input.previousState, merged.activities, merged);
+  const state = withAreas({ ...merged, activities, pendingSlot: null }, areas);
   const next = { ...state, pendingSlot: missingSlot(state) };
   return { state: next, slot: missingSlot(next), reply: usableReply(input.patch.reply) };
 }
 
 export function shouldSkipDateNlu(message: string) {
   return Boolean(chatSituationFromMessage(message));
+}
+
+export function shouldUseLocalInterpret(message: string, _previous?: AIPlannerState) {
+  return shouldSkipDateNlu(message);
 }
 
 export async function interpretDateRequest(input: {
@@ -190,7 +201,7 @@ export async function interpretDateRequest(input: {
     dateLabel: input.dateLabel,
     patch: localPatch,
   });
-  if (!isOpenAiConfigured() || shouldSkipDateNlu(input.message)) return fallback();
+  if (!isOpenAiConfigured() || shouldUseLocalInterpret(input.message, input.previousState)) return fallback();
   try {
     const patch = await completeJson<IntentPayload>({
       temperature: 0,
@@ -200,22 +211,32 @@ export async function interpretDateRequest(input: {
         {
           role: "system",
           content: [
-            "Extract a structured date brief from Korean chat. Be a concise concierge, not a chatty companion.",
+            "You read an ongoing Korean couple-date chat. Extract constraints from THIS turn. You do not design the course.",
             "Return JSON only:",
-            '{"intent":"create|modify|remove|reset|clarify","addActivities":["cafe"|"meal"|"walk"|"exhibit"|"indoor"|"nightview"],"removeActivities":[],"addAreas":[],"removeAreas":[],"addPlaces":[],"removePlaces":[],"cuisine":"한식"|"일식"|"중식"|"양식"|"any"|null,"indoorPlay":"방탈출"|"보드게임"|"볼링"|"오락실"|"만화카페"|"VR 체험"|"상관없음"|null,"areaScope":"core"|"walkable"|"nearby"|null,"timeWindow":"afternoon"|"evening"|"night"|"any"|null,"stayKind":"date"|"daytrip"|"overnight"|null,"nights":0|1|2|null,"pace":"relaxed"|"balanced"|"active"|null,"startTime":"HH:MM"|null,"endTime":"HH:MM"|null,"preserveExistingPlaces":true,"conversationNote":"short Korean restatement of the latest change only","askSlot":null,"reply":""}',
+            '{"intent":"create|modify|remove|reset|clarify","addActivities":[],"removeActivities":[],"addAreas":[],"removeAreas":[],"addPlaces":[],"removePlaces":[],"addStop":false,"cuisine":null,"indoorPlay":null,"areaScope":null,"timeWindow":null,"stayKind":null,"nights":null,"pace":null,"startTime":null,"endTime":null,"preserveExistingPlaces":true,"conversationNote":"short Korean restatement of the latest user meaning","askSlot":null,"reply":""}',
+            "latestMessage is the user's actual turn. recentTurns is the chat. currentPlaces is the course already on screen. Interpret meaning, not keywords. Chip labels like 일정추가, 카페변경, 식당변경, 일정제외 are user turns too.",
             "Never invent a city or neighborhood the user did not write. addAreas may only contain names that appear in latestMessage.",
             "From 여행가고싶어, 데이트하고싶어, 놀러가고싶어 with no place: addAreas:[], askSlot:\"area\", intent:\"clarify\", reply asking where to go. Do not copy example cities into addAreas.",
             "From 군산 여행 가려고 하는데 일정 짜줘: addAreas:[\"군산\"], stayKind null unless nights were said, reply empty. From 군산 1박2일: addAreas:[\"군산\"], stayKind:\"overnight\", nights:1.",
-            "From 성수에서 데이트하고 싶어: addAreas:[\"성수\"], stayKind:\"date\", nights:0. Infer 2-3 activities from the vibe only if the user named them. Do not always choose cafe+meal+walk.",
+            "When the user names a place but not activities, addActivities must be []. Do not guess cafe+walk+exhibit. Do not guess meal+walk+tourism. The course judge chooses the mix from real shops.",
+            "If they named activities, use only those. 성수에서 전시 보고 싶어 → addActivities:[\"exhibit\"]. 성수 카페 투어 → [\"cafe\"]. 파스타 먹고 성수 걷고 싶어 → [\"meal\",\"walk\"].",
+            "From 성수에서 데이트하고 싶어 / 성수 갈래: addAreas:[\"성수\"], stayKind:\"date\", nights:0, addActivities:[].",
+            "From 포천 여행 짜줘: addAreas:[\"포천\"], stayKind null unless nights were said, addActivities:[]. Not a cafe crawl.",
             "stayKind: 데이트→date, 당일치기/하루만→daytrip, 1박2일/2박3일/여행+박→overnight. Bare 여행 with no nights leaves stayKind null so the app can ask.",
             "If the user names a destination, never askSlot area. Time only if they mentioned when, not because they said 저녁 먹고 싶어.",
             "askSlot may be area only when no city or neighborhood can be inferred. Never ask activity, cuisine, scope, or indoor.",
             "reply is empty whenever a course can be generated. When asking where to go, one polite 해요체 sentence. No emoji, no 반말, no vibe adjectives.",
             "If the user only greets, thanks you, or asks what you can do, intent:\"clarify\" and put the answer in reply. Do not set intent clarify when addAreas is non-empty.",
-            "Activity map: 카페/커피/디저트→cafe; 식사/저녁/점심/밥/맛집/파스타/라멘→meal; 산책/공원/한강→walk; 전시/미술관/갤러리→exhibit; 방탈출/보드게임/볼링/오락실/실내 놀거리→indoor; 야경/전망대/루프탑→nightview.",
+            "If the user named activities, use only those. If they did not, addActivities:[]. Never default a mix.",
             "Cuisine: 파스타/피자/브런치/스테이크→양식; 라멘/스시/초밥/오마카세→일식; 국밥/고기/갈비→한식.",
-            "If currentPlaces is non-empty and the user asks to add a stop (추가, 넣어, 갈 수 있나, 들러), set addPlaces to that landmark, keep addAreas empty, preserveExistingPlaces true, intent modify.",
-            "If the user asks to swap one stop (카페 변경 해줘), keep preserveExistingPlaces true, put the current matching venue into removePlaces, intent modify.",
+            "When currentPlaces is non-empty, this is a follow-up. Keep addAreas empty unless they named a new neighborhood.",
+            "If they want the day longer, another venue, also eat/drink/walk/see something, 일정추가, 추가해줘, or any paraphrase of adding: intent modify, preserveExistingPlaces true, addStop true. addPlaces only if they named a venue; otherwise addPlaces [].",
+            "If they want one stop swapped (카페변경, 식당 바꿔, 이 카페 말고): intent modify, preserveExistingPlaces true, addStop false, removePlaces the matching currentPlaces name.",
+            "If they want a stop dropped (일정제외, 빼줘): intent remove, preserveExistingPlaces true, addStop false, removePlaces that stop or the last currentPlaces item.",
+            "If they want a slower/fuller pace without a new venue: preserveExistingPlaces true, addStop false, set pace.",
+            "If they want a different course without keeping the shops (조금 다르게, 다른 코스, 다시 추천): preserveExistingPlaces false, addStop false, intent create.",
+            "If they want the course rebuilt from scratch: preserveExistingPlaces false, addStop false, intent reset or create.",
+            "conversationNote restates their meaning in short Korean. Do not rewrite it into a canned command.",
             "areaScope only if the user mentioned range. Time only if they mentioned when, not because they said 저녁 먹고 싶어. Cuisine only if they mentioned food type.",
             "Never return clarifyingQuestion. Never return the boolean or string false.",
           ].join(" "),

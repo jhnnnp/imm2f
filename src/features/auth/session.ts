@@ -5,6 +5,9 @@ import { revalidatePath } from "next/cache";
 import { cache } from "react";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
+import { inviteTokenFromPath } from "./invitePath";
+import { displayNameOf } from "./koreanName";
+import { clearLegacyDemoPlaces } from "./legacyDemoPlaces";
 import type { AppSession } from "./types";
 
 function safeNextPath(value: FormDataEntryValue | string | null) {
@@ -21,7 +24,17 @@ function authErrorMessage(message: string) {
   if (normalized.includes("invite expired")) return "초대 링크가 만료됐어요.";
   if (normalized.includes("already in a couple")) return "이미 다른 파트너와 연결되어 있어요.";
   if (normalized.includes("couple already has two members")) return "이미 연결이 완료된 초대예요.";
+  if (normalized.includes("own invite")) return "이건 내가 만든 초대예요. 파트너에게 링크를 전해 주세요.";
   return "요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.";
+}
+
+function isMissingLeaveFunction(message: string, code?: string) {
+  const normalized = message.toLowerCase();
+  return (
+    code === "PGRST202"
+    || normalized.includes("leave_couple")
+    || (normalized.includes("could not find") && normalized.includes("function"))
+  );
 }
 
 function refreshSessionUI() {
@@ -53,9 +66,10 @@ const loadAppSession = cache(async (): Promise<AppSession> => {
       return {
         mode: "setup_error",
         userId,
-        displayName: profile?.display_name || "나",
+        displayName: displayNameOf(profile?.display_name, "나"),
       };
     }
+    await clearLegacyDemoPlaces(String(coupleId));
   }
 
   const { data: members } = await supabase.from("couple_members").select("user_id, role").eq("couple_id", coupleId);
@@ -70,9 +84,9 @@ const loadAppSession = cache(async (): Promise<AppSession> => {
   return {
     mode: "authenticated",
     userId,
-    displayName: profile?.display_name || "나",
+    displayName: displayNameOf(profile?.display_name, "나"),
     coupleId,
-    partner: partnerRow ? { userId: partnerRow.id, displayName: partnerRow.display_name || "파트너" } : null,
+    partner: partnerRow ? { userId: partnerRow.id, displayName: displayNameOf(partnerRow.display_name) } : null,
   };
 });
 
@@ -93,13 +107,32 @@ export async function signIn(_previousState: AuthActionState, formData: FormData
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { error: authErrorMessage(error.message) };
 
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const userId = claimsData?.claims?.sub;
+  if (!userId || typeof userId !== "string") {
+    await supabase.auth.signOut();
+    return { error: "로그인 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요." };
+  }
+
+  const nextPath = safeNextPath(formData.get("next"));
+  const inviteToken = inviteTokenFromPath(nextPath);
+  if (inviteToken && !(await isOwnCoupleInvite(inviteToken, userId))) {
+    const { data: coupleId, error: inviteError } = await supabase.rpc("accept_couple_invite", { invite_token: inviteToken });
+    if (!inviteError && coupleId) {
+      await recordPartnerJoined(supabase, String(coupleId), userId);
+      refreshSessionUI();
+      redirect("/");
+    }
+  }
+
   const { error: coupleError } = await supabase.rpc("ensure_own_couple");
   if (coupleError) {
     await supabase.auth.signOut();
     return { error: "계정 공간을 불러오지 못했어요. 잠시 후 다시 시도해 주세요." };
   }
+  await clearLegacyDemoPlaces();
   refreshSessionUI();
-  redirect(safeNextPath(formData.get("next")));
+  redirect(nextPath);
 }
 
 export async function signUp(_previousState: AuthActionState, formData: FormData): Promise<AuthActionState> {
@@ -141,12 +174,13 @@ export async function signUp(_previousState: AuthActionState, formData: FormData
   }
 
   if (inviteToken) {
-    const { error: inviteError } = await supabase.rpc("accept_couple_invite", { invite_token: inviteToken });
+    const { data: coupleId, error: inviteError } = await supabase.rpc("accept_couple_invite", { invite_token: inviteToken });
     if (inviteError) {
       await supabase.auth.signOut();
       await rollbackCreatedUser();
       return { error: authErrorMessage(inviteError.message) };
     }
+    if (coupleId) await recordPartnerJoined(supabase, String(coupleId), createdUserId);
   } else {
     const { error: coupleError } = await supabase.rpc("ensure_own_couple");
     if (coupleError) {
@@ -154,6 +188,7 @@ export async function signUp(_previousState: AuthActionState, formData: FormData
       await rollbackCreatedUser();
       return { error: "계정 공간을 준비하지 못했어요. 잠시 후 다시 시도해 주세요." };
     }
+    await clearLegacyDemoPlaces();
   }
 
   refreshSessionUI();
@@ -187,6 +222,44 @@ export async function getInvitePreview(token: string) {
   return { valid: true as const, inviterName: payload.inviter_name ?? "파트너", expiresAt: payload.expires_at ?? null };
 }
 
+export async function isOwnCoupleInvite(token: string, userId: string) {
+  const supabase = await createClient();
+  if (!supabase) return false;
+  const { data } = await supabase.from("couple_invites").select("inviter_id").eq("token", token).maybeSingle();
+  return data?.inviter_id === userId;
+}
+
+async function recordPartnerJoined(
+  supabase: NonNullable<Awaited<ReturnType<typeof createClient>>>,
+  coupleId: string,
+  userId: string,
+) {
+  const members = await supabase.from("couple_members").select("user_id").eq("couple_id", coupleId);
+  const partnerId = (members.data ?? []).map(row => row.user_id).find(id => id !== userId) ?? null;
+  if (!partnerId) return false;
+
+  const { data: profile } = await supabase.from("profiles").select("display_name").eq("id", userId).maybeSingle();
+  const displayName = displayNameOf(profile?.display_name);
+  const { recordCoupleActivity, queuePartnerEmail } = await import("@/features/collaboration/actions");
+  await recordCoupleActivity({
+    coupleId,
+    actorUserId: userId,
+    entityType: "couple",
+    entityId: coupleId,
+    action: "PARTNER_JOINED",
+    title: "파트너가 연결됐어요",
+    detail: `${displayName}님이 초대를 수락했어요`,
+  });
+  await queuePartnerEmail({
+    coupleId,
+    actorUserId: userId,
+    partnerUserId: partnerId,
+    subject: "[ONLY US] 파트너가 연결됐어요",
+    body: `${displayName}님이 초대 링크를 수락했어요.`,
+  });
+  return true;
+}
+
 export async function acceptCoupleInvite(token: string) {
   const supabase = await createClient();
   if (!supabase) return { error: "Supabase 환경 변수가 아직 없어요." };
@@ -195,38 +268,115 @@ export async function acceptCoupleInvite(token: string) {
   const userId = claimsData?.claims?.sub;
   if (!userId || typeof userId !== "string") return { error: "로그인이 필요해요." };
 
+  if (await isOwnCoupleInvite(token, userId)) {
+    return { error: "이건 내가 만든 초대예요. 파트너에게 링크를 전해 주세요." };
+  }
+
   const { data: coupleId, error } = await supabase.rpc("accept_couple_invite", { invite_token: token });
   if (error) {
     const message = error.message.toLowerCase();
     if (message.includes("already in a couple")) return { error: "이미 다른 파트너와 연결되어 있어요." };
     if (message.includes("expired")) return { error: "초대 링크가 만료됐어요." };
     if (message.includes("not found")) return { error: "초대 링크를 찾지 못했어요." };
+    if (message.includes("own invite")) return { error: "이건 내가 만든 초대예요. 파트너에게 링크를 전해 주세요." };
     return { error: error.message };
   }
 
-  const { data: profile } = await supabase.from("profiles").select("display_name").eq("id", userId).maybeSingle();
-  const displayName = profile?.display_name || "파트너";
-  if (coupleId) {
-    const { recordCoupleActivity, queuePartnerEmail } = await import("@/features/collaboration/actions");
-    await recordCoupleActivity({
-      coupleId: String(coupleId),
-      actorUserId: userId,
-      entityType: "couple",
-      entityId: String(coupleId),
-      action: "PARTNER_JOINED",
-      title: "파트너가 연결됐어요",
-      detail: `${displayName}님이 초대에 응했어요`,
-    });
-    const members = await supabase.from("couple_members").select("user_id").eq("couple_id", String(coupleId));
-    const partnerId = (members.data ?? []).map(row => row.user_id).find(id => id !== userId) ?? null;
-    await queuePartnerEmail({
-      coupleId: String(coupleId),
-      actorUserId: userId,
-      partnerUserId: partnerId,
-      subject: "[ONLY US] 파트너가 연결됐어요",
-      body: `${displayName}님이 초대 링크를 수락했어요.`,
-    });
+  const joined = coupleId ? await recordPartnerJoined(supabase, String(coupleId), userId) : false;
+  if (!joined) {
+    return { error: "파트너와 연결되지 않았어요. 초대한 사람에게 새 링크를 요청해 주세요." };
   }
   refreshSessionUI();
   redirect("/");
+}
+
+export async function getCoupleConnection() {
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return { session, connectedAt: null as string | null };
+  const supabase = await createClient();
+  if (!supabase) return { session, connectedAt: null as string | null };
+  const { data: members } = await supabase
+    .from("couple_members")
+    .select("user_id, joined_at")
+    .eq("couple_id", session.coupleId);
+  const dates = (members ?? []).map(row => row.joined_at).filter(Boolean).sort();
+  const latest = session.partner ? dates.at(-1) ?? null : null;
+  return { session, connectedAt: latest };
+}
+
+async function leaveCoupleWithService(session: Extract<AppSession, { mode: "authenticated" }>) {
+  const service = createServiceClient();
+  const supabase = await createClient();
+  if (!service || !supabase) return { error: "연결 해제를 아직 준비하지 못했어요. 잠시 후 다시 시도해 주세요." };
+
+  const { data: members } = await service
+    .from("couple_members")
+    .select("user_id")
+    .eq("couple_id", session.coupleId);
+  const partnerId = (members ?? []).map(row => row.user_id).find(id => id !== session.userId);
+  if (!partnerId) return { error: "연결된 파트너가 없어요." };
+
+  const { error: activityError } = await service.from("activities").insert({
+    couple_id: session.coupleId,
+    actor_user_id: session.userId,
+    entity_type: "couple",
+    entity_id: session.coupleId,
+    action: "PARTNER_LEFT",
+    title: "파트너 연결이 해제됐어요",
+    detail: `${session.displayName}님이 공간에서 나갔어요`,
+  });
+  if (activityError) console.error("Failed to record partner leave", activityError);
+
+  const { error: emailError } = await service.from("email_outbox").insert({
+    couple_id: session.coupleId,
+    recipient_user_id: partnerId,
+    subject: "[ONLY US] 파트너 연결이 해제됐어요",
+    body: `${session.displayName}님이 연결을 해제하고 공간에서 나갔어요.`,
+    status: "queued",
+  });
+  if (emailError) console.error("Failed to queue partner leave email", emailError);
+
+  const { error: deleteError } = await service
+    .from("couple_members")
+    .delete()
+    .eq("user_id", session.userId)
+    .eq("couple_id", session.coupleId);
+  if (deleteError) return { error: authErrorMessage(deleteError.message) };
+
+  await service
+    .from("couple_invites")
+    .update({ status: "revoked" })
+    .eq("couple_id", session.coupleId)
+    .eq("status", "pending");
+
+  const { error: ensureError } = await supabase.rpc("ensure_own_couple");
+  if (ensureError) return { error: "빈 공간을 만들지 못했어요. 다시 로그인해 주세요." };
+
+  const { data: newCoupleId } = await supabase.rpc("my_couple_id");
+  if (newCoupleId) await clearLegacyDemoPlaces(String(newCoupleId));
+  return null;
+}
+
+export async function leaveCouple() {
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return { error: "로그인이 필요해요." };
+  if (!session.partner) return { error: "연결된 파트너가 없어요." };
+
+  const supabase = await createClient();
+  if (!supabase) return { error: "Supabase 환경 변수가 아직 없어요." };
+
+  const { error } = await supabase.rpc("leave_couple");
+  if (error && !isMissingLeaveFunction(error.message, error.code)) {
+    return { error: authErrorMessage(error.message) };
+  }
+  if (error) {
+    const fallback = await leaveCoupleWithService(session);
+    if (fallback?.error) return fallback;
+  } else {
+    const { data: newCoupleId } = await supabase.rpc("my_couple_id");
+    if (newCoupleId) await clearLegacyDemoPlaces(String(newCoupleId));
+  }
+
+  refreshSessionUI();
+  redirect("/invite");
 }

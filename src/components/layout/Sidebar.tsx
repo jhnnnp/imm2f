@@ -7,6 +7,7 @@ import { NAVIGATION } from "./navigation";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { signOut } from "@/features/auth/session";
 import { initialFromName } from "@/features/auth/types";
+import { pairLabel } from "@/features/auth/koreanName";
 import { BrandMark, SidebarIcon } from "./SidebarIcon";
 
 export function Sidebar() {
@@ -41,17 +42,19 @@ export function Sidebar() {
         <div className="couple-card-main">
           <div className="paired-avatars" aria-hidden="true"><span className="avatar you">{youInitial}</span><span className="avatar partner">{partnerInitial}</span></div>
           <div className="couple-card-copy">
-            <strong>{session.mode === "setup_error" ? `${youName} · 복구 필요` : <>{youName} <span>&amp;</span> {partnerName ?? "파트너"}</>}</strong>
+            <strong>{session.mode === "setup_error" ? `${youName} · 복구 필요` : pairLabel(youName, partnerName)}</strong>
             <small>
               {session.mode === "authenticated"
-                ? session.partner ? "우리의공간이 연결되어 있어요" : "함께할 파트너를 초대해 보세요"
+                ? session.partner ? "우리의 공간이 연결되어 있어요" : "함께할 파트너를 초대해 보세요"
                 : session.mode === "setup_error" ? "로그인은 됐지만 공간을 준비하지 못했어요"
                   : "로그인하고 우리의 공간을 시작해요"}
             </small>
           </div>
         </div>
         {session.mode === "authenticated" && session.partner
-          ? <span className="couple-card-status"><i />연결됨</span>
+          ? <Link className="couple-card-action" href="/invite">
+            <span>파트너 관리</span><b aria-hidden="true">→</b>
+          </Link>
           : session.mode === "setup_error"
             ? <button className="couple-card-action" type="button" onClick={() => void signOut()}>
               <span>다시 로그인</span><b aria-hidden="true">→</b>

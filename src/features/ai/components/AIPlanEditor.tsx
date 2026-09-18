@@ -24,15 +24,25 @@ import {
   withStayKind,
   withTimeWindow,
 } from "../dateBrief";
-import { courseQuickReplyMessage, isCourseQuickAction } from "../dateCourse";
+import { isCourseQuickAction } from "../dateCourse";
 import type { AIChatCard, AIChatStop, AIPlannerReply, AIPlannerState, DateIntakeSlot, PlanChange, PlanItem, PlanKind } from "@/features/planning/types/plan";
 import type { Place } from "@/features/places/types/place";
+import { plannerStateFromSeed } from "@/features/taste/compare";
+import type { TasteDateSeed } from "@/features/taste/types";
 import { CalendarMonth } from "@/components/shared/CalendarMonth";
 import { PlaceLocationMap } from "@/features/places/components/PlaceLocationMap";
 import { PlanMap } from "@/features/trip/components/PlanMap";
 import { kakaoPlaceUrl, naverPlaceSearchUrl } from "@/features/places/format";
 import { openPlaceMiniWindow } from "@/features/places/openPlaceMini";
 import { formatKoPicker, toIsoDate } from "@/lib/dates";
+
+function sourceHost(url: string) {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
 
 const EDIT_PROMPT = "일정이 조금 빡센 것 같아. 한곳 빼고 남는 곳은 더 여유롭게 해줘.";
 const GENERATE_PLACEHOLDER = "어디로 가고 싶은지 말해 주세요";
@@ -121,15 +131,18 @@ function CoursePlacePeek({ stop, onClose }: { stop: AIChatStop; onClose: () => v
           </button>
         ) : (
           <button type="button" className="ai-mini-web-empty" onClick={() => openPlaceMiniWindow(kakaoUrl, "kakao")}>
-            <b>가게 사진·후기</b>
-            <small>카카오맵에서 사진과 후기를 봅니다.</small>
+            <b>사진과 후기</b>
+            <small>지도에서 확인할 수 있습니다.</small>
           </button>
         )}
       </div>
       {stop.reason ? <p className="ai-place-peek-reason">{stop.reason}</p> : null}
       {stop.coordinates ? <PlaceLocationMap name={stop.name} coordinates={stop.coordinates} /> : null}
-      {(stop.address || phone || stop.openingHours) ? (
+      {(stop.address || phone || stop.openingHours || stop.rating != null || stop.dishes) ? (
         <dl className="ai-place-peek-facts">
+          {stop.rating != null ? <div><dt>평점</dt><dd>{stop.rating}점{stop.ratingCount ? ` · 후기 ${stop.ratingCount}` : ""}</dd></div> : null}
+          {stop.dishes ? <div><dt>음식</dt><dd>{stop.dishes}</dd></div> : null}
+          {stop.factSourceUrl ? <div><dt>출처</dt><dd><a href={stop.factSourceUrl} target="_blank" rel="noreferrer">{sourceHost(stop.factSourceUrl) || "검색 결과"}</a></dd></div> : null}
           {stop.address ? <div><dt>주소</dt><dd>{stop.address}</dd></div> : null}
           {stop.openingHours ? <div><dt>{stop.source === "tourapi" ? "기간" : "이용시간"}</dt><dd>{stop.openingHours}</dd></div> : null}
           {phone ? <div><dt>전화</dt><dd><a href={`tel:${phone}`}>{stop.phone}</a></dd></div> : null}
@@ -212,6 +225,8 @@ function AssistantCard({
                       </strong>
                       <small>
                         {stop.startTime ? `${stop.startTime} · ${stop.durationMinutes ?? 0}분 · ${stop.meta}` : stop.meta}
+                        {stop.rating != null ? ` · ${stop.rating}점${stop.ratingCount ? ` · 후기 ${stop.ratingCount}` : ""}` : ""}
+                        {stop.dishes ? ` · ${stop.dishes}` : ""}
                         {stop.openingHours && !stop.meta.includes(stop.openingHours) ? ` · ${stop.openingHours}` : ""}
                       </small>
                       {stop.reason && stop.reason !== stop.meta ? <small className="ai-stop-reason">{stop.reason}</small> : null}
@@ -264,6 +279,7 @@ export function AIPlanEditor({
   onReplace,
   onKeep,
   startDate,
+  tasteSeed = null,
 }: {
   kind: PlanKind;
   items: PlanItem[];
@@ -272,17 +288,26 @@ export function AIPlanEditor({
   onKeep?: (input: CourseKeepInput) => Promise<CourseKeepResult> | CourseKeepResult;
   places?: Place[];
   startDate?: string;
+  tasteSeed?: TasteDateSeed | null;
 }) {
   const [mode, setMode] = useState<Mode>(kind === "date" ? "generate" : items.length ? "edit" : "generate");
   const [editPrompt, setEditPrompt] = useState(() => items.length <= 1 ? "이 장소에서 여유롭게 머물 수 있도록 체류 시간을 조정해줘." : EDIT_PROMPT);
-  const [generatePrompt, setGeneratePrompt] = useState("");
+  const [generatePrompt, setGeneratePrompt] = useState(() => tasteSeed?.prompt ?? "");
   const [phase, setPhase] = useState<"idle" | "loading" | "preview">("idle");
   const [changes, setChanges] = useState<PlanChange[]>([]);
   const [summary, setSummary] = useState("");
   const [selected, setSelected] = useState<boolean[]>([]);
   const [recommendation, setRecommendation] = useState<AIPlannerReply | null>(null);
-  const [plannerState, setPlannerState] = useState<AIPlannerState>(() => emptyDateBrief());
-  const [conversation, setConversation] = useState<ChatTurn[]>([]);
+  const [plannerState, setPlannerState] = useState<AIPlannerState>(() => tasteSeed ? plannerStateFromSeed(tasteSeed) : emptyDateBrief());
+  const [conversation, setConversation] = useState<ChatTurn[]>(() => tasteSeed ? [{
+    role: "assistant",
+    text: tasteSeed.prompt,
+    card: {
+      headline: tasteSeed.headline,
+      lines: tasteSeed.lines,
+      suggestions: ["이 조건으로 코스 만들기"],
+    },
+  }] : []);
   const [choicePrompt, setChoicePrompt] = useState<ChoicePrompt | null>(null);
   const [selectedChoices, setSelectedChoices] = useState<string[]>([]);
   const [peek, setPeek] = useState<{ key: string; stop: AIChatStop } | null>(null);
@@ -575,8 +600,7 @@ export function AIPlanEditor({
       void runGenerate(next, "", slotUserText(choicePrompt.kind, [label]));
       return;
     }
-    const quickMessage = courseQuickReplyMessage(label);
-    void runGenerate(plannerState, quickMessage ?? label, label);
+    void runGenerate(plannerState, label, label);
   }
 
   function submitChoices() {

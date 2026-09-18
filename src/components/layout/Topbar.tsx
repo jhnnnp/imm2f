@@ -118,7 +118,7 @@ export function Topbar() {
             {session.mode === "authenticated" ? (
               <>
                 <p>{session.displayName}</p>
-                <Link href="/invite" role="menuitem" onClick={() => setMenuOpen(false)}>{session.partner ? "연결 상태" : "파트너 초대"}</Link>
+                <Link href="/invite" role="menuitem" onClick={() => setMenuOpen(false)}>파트너</Link>
                 <button type="button" role="menuitem" onClick={() => void signOut()}>로그아웃</button>
               </>
             ) : session.mode === "setup_error" ? (

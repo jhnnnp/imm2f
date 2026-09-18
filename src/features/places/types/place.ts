@@ -63,6 +63,11 @@ export type DiscoverCandidate = {
   searchRegion?: string;
   distanceMeters?: number;
   openingHours?: string;
+  rating?: number;
+  ratingCount?: number;
+  dishes?: string;
+  factSourceUrl?: string;
+  factNote?: string;
 };
 
 export type KakaoPlaceCandidate = DiscoverCandidate;

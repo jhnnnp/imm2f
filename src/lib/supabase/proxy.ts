@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { signedInAuthRedirect } from "@/features/auth/invitePath";
 import { getSupabaseKey, getSupabaseUrl, isSupabaseConfigured } from "./env";
 const PUBLIC_PREFIXES = ["/login", "/signup", "/invite", "/auth", "/api/kakao-map-key", "/api/map-tiles"];
 
@@ -46,7 +47,7 @@ export async function updateSession(request: NextRequest, initialResponse?: Next
 
   if (user && (pathname === "/login" || pathname === "/signup")) {
     const url = request.nextUrl.clone();
-    url.pathname = "/";
+    url.pathname = signedInAuthRedirect(pathname, request.nextUrl.searchParams);
     url.search = "";
     return NextResponse.redirect(url);
   }
