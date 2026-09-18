@@ -20,7 +20,7 @@
   --serif: var(--default);
   --sans: var(--default);
   --view-height: 100vh;
-  --shell-cols: minmax(0, 2.2fr) minmax(0, 14fr) minmax(0, 3fr)
+  --shell-cols: minmax(12.75rem, 2.2fr) minmax(0, 14fr) minmax(0, 3fr)
 }
 
 @supports (height: 100dvh) {
@@ -172,6 +172,8 @@ kbd {
 }
 
 .brand-copy {
+  flex: 1;
+  min-width: 0;
   height: 46px;
   display: flex;
   flex-direction: column;
@@ -194,7 +196,7 @@ kbd {
   line-height: 1;
   color: #89918c;
   margin-top: 9px;
-  letter-spacing: .105em;
+  letter-spacing: .088em;
   font-weight: 700;
   white-space: nowrap
 }
@@ -3403,7 +3405,7 @@ dialog::backdrop {
 
 @media(max-width:1370px) {
   :root {
-    --shell-cols: minmax(0, 1.9fr) minmax(0, 14fr) minmax(0, 2.7fr)
+    --shell-cols: minmax(12.75rem, 1.9fr) minmax(0, 14fr) minmax(0, 2.7fr)
   }
 
   .sidebar {
@@ -6972,7 +6974,7 @@ a.add-schedule {
 
 /* AI planner — conversational route studio */
 .app-shell:has(.ai-editor) {
-  --shell-cols: minmax(0, 2.2fr) minmax(0, 14fr) minmax(0, 3.9fr)
+  --shell-cols: minmax(12.75rem, 2.2fr) minmax(0, 14fr) minmax(0, 3.9fr)
 }
 
 .context-panel:has(.ai-editor) {
@@ -8627,7 +8629,7 @@ a.add-schedule {
 
 @media(max-width:1180px) and (min-width:901px) {
   .app-shell:has(.ai-editor) {
-    --shell-cols: minmax(0, 1.9fr) minmax(0, 14fr) minmax(0, 3.6fr)
+    --shell-cols: minmax(12.75rem, 1.9fr) minmax(0, 14fr) minmax(0, 3.6fr)
   }
 
   .ai-editor {
