@@ -591,15 +591,31 @@ export function courseOrderMessage(stops: Array<{ name: string }>, region: strin
   return `${region}에서 ${names[0]} 다음에 ${names[1]}, 이어서 ${names[2]} 순으로 이어가요.`;
 }
 
+const COURSE_MESSAGE_MAX_CHARS = 320;
+const COURSE_MESSAGE_MIN_CHARS = 12;
+
+function stopNamed(message: string, name: string) {
+  const compactMessage = message.replace(/\s/g, "");
+  const compact = name.replace(/\s/g, "");
+  if (!compact) return false;
+  if (compactMessage.includes(compact)) return true;
+  // Long Kakao names carry a branch suffix (메가MGC커피 서울숲공원점); the
+  // model may reasonably refer to the shop by its head word.
+  return compact.length >= 6 && compactMessage.includes(compact.slice(0, 4));
+}
+
+/**
+ * Prefer the model's own sentence when it actually talks about the stops
+ * that were kept after validation. Otherwise fall back to the deterministic
+ * order sentence so the text never describes a shop that was filtered out.
+ */
 export function pickCourseMessage(modelMessage: string, stops: Array<{ name: string }>, region: string) {
   const talk = courseOrderMessage(stops, region);
-  const model = modelMessage.trim();
-  const first = stops[0]?.name;
-  const last = stops.at(-1)?.name;
-  if (model.length >= 12 && first && last && model.includes(first) && model.includes(last)) {
-    return model.slice(0, 140);
-  }
-  return talk;
+  const model = modelMessage.replace(/\s+/g, " ").trim();
+  const names = stops.map(stop => stop.name.trim()).filter(Boolean);
+  if (model.length < COURSE_MESSAGE_MIN_CHARS || !names.length) return talk;
+  if (!names.every(name => stopNamed(model, name))) return talk;
+  return model.slice(0, COURSE_MESSAGE_MAX_CHARS);
 }
 
 export function curatorSlotCatalog(

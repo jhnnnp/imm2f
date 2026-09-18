@@ -112,9 +112,11 @@ describe("dateBrief", () => {
     expect(extractTimeWindow("저녁부터 시작하고 싶어")).toBe("evening");
   });
 
-  it("asks stay length before planning, not the clock", () => {
+  it("asks stay length only for travel destinations, never the clock", () => {
     const withArea = withAreas(emptyDateBrief(), ["을지로"]);
-    expect(missingSlot(withArea)).toBe("span");
+    expect(missingSlot(withArea)).toBeNull();
+    expect(missingSlot(withAreas(emptyDateBrief(), ["제주"]))).toBe("span");
+    expect(missingSlot({ ...withAreas(emptyDateBrief(), ["제주"]), stayKind: "daytrip" })).toBeNull();
     expect(extractStay("성수에서 데이트하고 싶어")).toEqual({ stayKind: "date", nights: 0 });
     expect(extractStay("성수 갈래")).toEqual({ stayKind: "date", nights: 0 });
     expect(extractStay("제주 갈래")).toBeNull();

@@ -250,7 +250,7 @@ const DATE_CURATOR_PROMPT = [
   "",
   "HOW TO CHOOSE (in this order)",
   "1. The user's latest turn. Follow its meaning, including paraphrases and chips like 일정추가/카페변경. Do not wait for a keyword list.",
-  "2. Hard constraints: requiredPlaces, excludedPlaces, cuisine if set, brief.spine as the day's skeleton, brief.anchorActivities as must-include, brief.exclusiveCrawl, brief.addStop.",
+  "2. Hard constraints: requiredPlaces, excludedPlaces, cuisine if set, brief.spine as the day's skeleton, brief.anchorActivities as must-include, brief.exclusiveCrawl, brief.addStop. brief.shortlist are shops the user just saw and liked in this chat: include at least one of them when it fits the slot.",
   "3. Couple data: bothWant > saved > not recentlyVisited.",
   "4. Public facts: when two shops share a slot, prefer a sourced rating and more reviews.",
   "5. Walk: consecutive hops.walk (250-900m) on a neighborhood date. Do not stack sameBlock. No 남산/롯데타워 on an 을지로 date.",
@@ -272,7 +272,8 @@ const DATE_CURATOR_PROMPT = [
   "",
   "SIZE: targetStops.min..max is a range. Evening/night is 2-3. Afternoon neighborhood is 2-4. First dates stay closer to 3.",
   "Set start_time and duration_minutes. Reset start_time on each new day_index.",
-  "MESSAGE: one or two Korean sentences under 140 characters. Name the chosen stops in walking order and say how they follow. No vibe adjectives.",
+  "MESSAGE: 2-3 warm Korean 해요체 sentences, under 280 characters, like a friend who knows the neighborhood. Name EVERY chosen stop in walking order and give each one concrete hook from its row (leaf category, copied food or rating, saved/bothWant, the walk between). If brief.shortlist is non-empty and you used one, say so. No emoji. Never add facts that are not in the row.",
+  "reasons[0] per stop: one short Korean phrase from the row (e.g. 파스타 · 4.4점, 둘이 저장한 곳, 앞에서 300m). Not 맛집, not vibe.",
   "Return JSON: {message,facts:[{id,rating,ratingCount,food,sourceUrl,note}],selected:[{id,start_time:'HH:MM',duration_minutes:30-180,day_index:0,expected_cost:0,reasons:[1 concise Korean string]}]}",
 ].join(" ");
 
@@ -343,10 +344,16 @@ export async function recommendDatePlanWithOpenAi(input: {
     };
   });
   const allowedIds = new Set(candidateCatalog.map(candidate => candidate.id));
+  // Restaurants and cafes are where the couple compares options, so those
+  // rows get the public-fact lookup first; saved shops always qualify.
   const lookup = candidateCatalog
     .filter(row => row.saved || row.bothWant || row.rating == null)
-    .sort((a, b) => Number(b.saved) - Number(a.saved) || b.coupleScore - a.coupleScore)
-    .slice(0, 10);
+    .sort((a, b) => (
+      Number(b.saved) - Number(a.saved)
+      || Number(b.slot === "meal" || b.slot === "cafe") - Number(a.slot === "meal" || a.slot === "cafe")
+      || b.coupleScore - a.coupleScore
+    ))
+    .slice(0, 12);
   let facts = sanitizePlaceWebFacts([], allowedIds);
   try {
     const searched = lookup.length
@@ -401,6 +408,7 @@ export async function recommendDatePlanWithOpenAi(input: {
       areas: input.state.areas,
       areaScope: input.state.areaScope,
       requiredPlaces: input.state.requiredPlaces,
+      shortlist: (input.state.shownPlaces ?? []).slice(0, 6),
       keepPlaces: input.state.preserveExistingPlaces
         ? (input.state.pinOrder.length ? input.state.pinOrder : input.state.requiredPlaces)
         : [],
@@ -434,9 +442,10 @@ export async function recommendDatePlanWithOpenAi(input: {
 
   try {
     const parsed = await completeJson<{ message?: string; selected?: DateCourseRow[]; facts?: unknown }>({
-      temperature: 0.2,
+      temperature: 0.3,
       maxTokens: 2500,
       reasoningEffort: "low",
+      timeoutMs: 45000,
       messages: [
         { role: "system", content: DATE_CURATOR_PROMPT },
         { role: "user", content: JSON.stringify(curatorPayload) },

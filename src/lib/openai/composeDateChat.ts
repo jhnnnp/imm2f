@@ -1,5 +1,7 @@
-import type { AIChatCard, AIPlannerState, DateIntakeSlot } from "@/features/planning/types/plan";
+import type { AIChatCard, AIPlannerState, DateChatTurn, DateIntakeSlot } from "@/features/planning/types/plan";
 import { DATE_AREA_OPTIONS, selectedAreas } from "@/features/ai/dateBrief";
+import { completeJson } from "./client";
+import { isOpenAiConfigured } from "./env";
 
 export type DateChatSituation =
   | "need_area"
@@ -51,8 +53,8 @@ export function dateChatCard(input: {
   if (input.situation === "greeting") {
     return {
       headline: "안녕하세요",
-      lines: ["가고 싶은 동네를 말해 주세요. 예: 을지로에서 오후부터 데이트하고 싶어."],
-      suggestions: ["성수에서 데이트하고 싶어", "제주에서 하루 보내고 싶어", "비 오는 날 실내 데이트"],
+      lines: ["동네를 말해 주면 코스를 짜고, 식당이나 카페만 골라 달라고 해도 돼요. 예: 성수 파스타 맛집 추천해줘."],
+      suggestions: ["성수 파스타 맛집 추천해줘", "을지로 저녁 데이트 코스 짜줘", "비 오는 날 홍대 실내 데이트"],
     };
   }
   if (input.situation === "thanks") {
@@ -67,8 +69,8 @@ export function dateChatCard(input: {
   if (input.situation === "capability") {
     return {
       headline: "데이트 코스를 짭니다",
-      lines: ["동네를 말하면 하루를 이어 드립니다. 만든 뒤에는 카페 변경 해줘처럼 말로 고칠 수 있습니다."],
-      suggestions: ["성수에서 데이트하고 싶어", "파스타 먹고 성수 걷고 싶어"],
+      lines: ["동네를 말하면 하루를 이어 드리고, 식당이나 카페만 추천해 달라고 해도 됩니다. 만든 뒤에는 카페 변경 해줘처럼 말로 고칠 수 있고, 주차나 예약 같은 질문도 답합니다."],
+      suggestions: ["성수 파스타 맛집 추천해줘", "파스타 먹고 성수 걷고 싶어"],
     };
   }
   return {
@@ -101,12 +103,61 @@ export function fallbackDateChat(input: {
   return cardToText(dateChatCard(input));
 }
 
+const CHAT_PROMPT = [
+  "You are the couple's date planner inside the ONLY US app. Reply in polite Korean 해요체 only (~해요, ~드릴게요, ~볼까요). Never 반말 such as 안녕!, ~할게, ~어때. 1-3 sentences, no emoji, no bullet lists, no markdown.",
+  "You can: build a date or trip course for a neighborhood, recommend restaurants/cafes/bars/exhibits in an area, answer questions about the places you suggested, and edit a course by chat (카페 변경 해줘, 한 곳 더 추가해줘, 한 곳 빼줘).",
+  "If the user greets or asks what you do, answer briefly and invite them with one example request they could type (e.g. 성수 파스타 맛집 추천해줘) that fits their context (areas, currentCourse). If they thank you, acknowledge and offer the natural next step.",
+  "You have not searched anything yet: never name a specific shop, cafe, restaurant, or exhibition unless it appears in currentCourse or shownPlaces.",
+  "Then give up to 3 chips, each under 16 Korean characters, written as the user would type them (e.g. 성수 카페 추천해줘).",
+  "Return JSON only: {\"reply\":string,\"suggestions\":[string]}",
+].join(" ");
+
+const LLM_CHAT_SITUATIONS = new Set<DateChatSituation>(["greeting", "thanks", "capability", "small_talk"]);
+
+/** Small models drift into 반말; a reply that does not end politely falls back to the card. */
+export function looksPolite(text: string) {
+  const sentences = text.split(/(?<=[.!?~])\s+|\n+/).map(part => part.trim()).filter(Boolean);
+  if (!sentences.length) return false;
+  return sentences.every(sentence => /(?:요|니다|세요|까요|게요|죠|시죠|십니까|나요|어요|에요)[.!?~]*$/.test(sentence));
+}
+
 export async function composeDateChat(input: {
   situation: DateChatSituation;
   userMessage: string;
   state: AIPlannerState;
-  extras?: { region?: string; suggestions?: string[] };
+  extras?: { region?: string; suggestions?: string[]; currentCourse?: string[]; conversation?: DateChatTurn[] };
   slot?: DateIntakeSlot | null;
-}) {
-  return dateChatCard(input);
+}): Promise<AIChatCard> {
+  const card = dateChatCard(input);
+  if (!LLM_CHAT_SITUATIONS.has(input.situation) || !isOpenAiConfigured()) return card;
+  try {
+    const parsed = await completeJson<{ reply?: unknown; suggestions?: unknown }>({
+      temperature: 0.6,
+      maxTokens: 400,
+      reasoningEffort: "low",
+      timeoutMs: 15000,
+      messages: [
+        { role: "system", content: CHAT_PROMPT },
+        {
+          role: "user",
+          content: JSON.stringify({
+            latestMessage: input.userMessage.slice(0, 300),
+            situation: input.situation,
+            recentTurns: (input.extras?.conversation ?? []).slice(-6),
+            areas: selectedAreas(input.state),
+            currentCourse: (input.extras?.currentCourse ?? []).slice(0, 6),
+            shownPlaces: (input.state.shownPlaces ?? []).slice(0, 6),
+          }),
+        },
+      ],
+    });
+    const reply = String(parsed?.reply ?? "").replace(/[*_`#]/g, "").trim().slice(0, 400);
+    if (!reply || !looksPolite(reply)) return card;
+    const suggestions = Array.isArray(parsed?.suggestions)
+      ? [...new Set(parsed.suggestions.map(item => String(item ?? "").replace(/[.!?]\s*$/, "").trim()).filter(item => item && item.length <= 18))].slice(0, 3)
+      : [];
+    return { headline: "", lines: [reply], suggestions: suggestions.length ? suggestions : card.suggestions };
+  } catch {
+    return card;
+  }
 }

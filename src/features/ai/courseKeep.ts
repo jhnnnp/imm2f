@@ -50,7 +50,7 @@ export function keepIntent(message: string): CourseKeepIntent | null {
   if (text === DATE_KEEP_LABEL) return "date";
   if (text === TRIP_KEEP_LABEL) return "trip";
   const keep = /담아|이걸로\s*(하자|할게|좋아)|이 코스|저장해|확정|마음에\s*들/.test(text)
-    && !/바꿔|변경|빼|말고|대신|추가|넣어/.test(text);
+    && !/바꿔|변경|빼|말고|대신|추가|넣어|어때|왜|\?\s*$/.test(text);
   if (!keep) return null;
   const wantsTrip = /여행/.test(text);
   const wantsDate = /데이트/.test(text);

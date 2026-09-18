@@ -28,8 +28,11 @@ import {
   applyDateDefaults,
   expandedSearchRegions,
   matchesActivity,
+  matchesTerm,
   missingSlot,
   nearbyAreaSuggestions,
+  emptyDateBrief,
+  withAreas,
   planDayYmd,
   activitySearchIntents,
   searchIntents,
@@ -45,10 +48,22 @@ import {
   isExclusiveCrawl,
 } from "@/features/ai/dateBrief";
 import { allowsHarshDateMeal, applyCourseDelta, bothWantNames, candidateActivitySlot, diversifyDateCatalog, isOffDateVenue, preferredSavedNames, recentPlaceNames, toDateRanking } from "@/features/ai/dateCourse";
-import { chatSituationFromMessage, dateChatCard, cardToText } from "@/lib/openai/composeDateChat";
+import { chatSituationFromMessage, composeDateChat, dateChatCard, cardToText } from "@/lib/openai/composeDateChat";
 import { hydrateDateCandidates } from "@/lib/places/detailCache";
-import type { AIChatCard, AIPlannerClarification, AIPlannerResult, AIPlannerState, DateChatTurn, DateIntakeSlot, DatePreviousStop, PlanChange, PlanItem, PlanKind, PlanOption } from "@/features/planning/types/plan";
-import type { Place } from "@/features/places/types/place";
+import { routeDateChat } from "@/lib/openai/routeDateChat";
+import { recommendPlacesWithOpenAi } from "@/lib/openai/recommendPlaces";
+import { answerDateQuestion, type QuestionContextStop } from "@/lib/openai/answerDateQuestion";
+import { PLACE_KIND_LABEL, isMoreRequest } from "@/features/ai/chatRoute";
+import {
+  PLACE_PICK_MIN,
+  filterPlaceCandidates,
+  matchesPlaceKind,
+  placeAskHarshAllow,
+  placeSearchPlans,
+  rankPlaceCandidates,
+} from "@/features/ai/placeRecommend";
+import type { AIChatCard, AIChatStop, AIPlannerClarification, AIPlannerResult, AIPlannerState, DateChatTurn, DateIntakeSlot, DatePreviousStop, PlaceAsk, PlanChange, PlanItem, PlanKind, PlanOption } from "@/features/planning/types/plan";
+import type { DiscoverCandidate, Place } from "@/features/places/types/place";
 
 const INSIGHT_VERSION = "couple-taste-v2";
 
@@ -256,11 +271,201 @@ function clarificationReply(slot: DateIntakeSlot, state: AIPlannerState, card: A
   };
 }
 
+type CoupleTasteBrief = { summary: string; commonTastes: string[]; avoidFoods: string[] };
+
+const MAX_CONVERSATION_NOTES = 12;
+const MAX_SHOWN_PLACES = 12;
+const PLACE_SEARCH_RADIUS_METERS = 1500;
+const PLACE_RESULTS_PER_SEARCH = 15;
+
+function noteTurn(state: AIPlannerState, message: string): AIPlannerState {
+  if (!message) return state;
+  return { ...state, conversationNotes: [...state.conversationNotes, message].slice(-MAX_CONVERSATION_NOTES) };
+}
+
+function chatResult(card: AIChatCard, state: AIPlannerState): AIPlannerResult {
+  // No `slot` here on purpose: these suggestions are full user messages, not
+  // slot values, so the client must send them back as chat turns.
+  return {
+    status: "chat",
+    message: cardToText(card),
+    card,
+    state,
+    options: card.suggestions,
+    multiple: false,
+  };
+}
+
+function toQuestionStops(stops: AIChatStop[] | undefined, fallback: DatePreviousStop[]): QuestionContextStop[] {
+  if (stops?.length) return stops.map(stop => ({
+    name: stop.name,
+    meta: stop.meta,
+    address: stop.address,
+    phone: stop.phone,
+    mapUrl: stop.mapUrl,
+    startTime: stop.startTime,
+    durationMinutes: stop.durationMinutes,
+    distanceFromPreviousMeters: stop.distanceFromPreviousMeters,
+    rating: stop.rating,
+    ratingCount: stop.ratingCount,
+    dishes: stop.dishes,
+    openingHours: stop.openingHours,
+    factSourceUrl: stop.factSourceUrl,
+    reason: stop.reason,
+  }));
+  return fallback.map(stop => ({ name: stop.name, meta: stop.category }));
+}
+
+function coupleTasteBrief(
+  tasteBoard: Awaited<ReturnType<typeof loadTasteBoard>>,
+  insight: PreferenceInsight | null,
+  avoidFoods: string[],
+): CoupleTasteBrief {
+  return {
+    summary: tasteBoard.compare?.summary ?? insight?.summary ?? "",
+    commonTastes: uniqueStrings([
+      ...(tasteBoard.compare?.overlaps ?? []),
+      ...(insight?.commonTastes ?? []).map(item => item.label),
+    ], 8),
+    avoidFoods,
+  };
+}
+
+/**
+ * Standalone place recommendation ("성수 파스타 맛집 추천해줘"). Searches Kakao
+ * around the area, filters to date-worthy venues of the asked kind, lets the
+ * model pick and describe a handful with looked-up facts, and returns them
+ * as a chat card the user can tap, extend, or turn into a course.
+ */
+async function recommendPlacesForChat(input: {
+  message: string;
+  ask: PlaceAsk;
+  state: AIPlannerState;
+  conversation?: DateChatTurn[];
+  avoidFoods: string[];
+  tasteBoard: Awaited<ReturnType<typeof loadTasteBoard>>;
+}): Promise<AIPlannerResult> {
+  const area = input.ask.area || selectedAreas(input.state)[0] || "";
+  const label = PLACE_KIND_LABEL[input.ask.kind];
+  if (!area) {
+    const question = slotQuestion("area", input.state);
+    const card: AIChatCard = {
+      headline: `어느 동네 ${label}을 찾아볼까요?`,
+      lines: ["동네나 도시만 말해 주면 그 근처에서 골라 드릴게요."],
+      suggestions: question.options.slice(0, 4),
+    };
+    return clarificationReply("area", { ...input.state, placeAsk: { ...input.ask, area: "" } }, card);
+  }
+  const ask: PlaceAsk = { ...input.ask, area };
+  const continuing = Boolean(input.state.placeAsk && input.state.placeAsk.kind === ask.kind && input.state.placeAsk.area === area && isMoreRequest(input.message));
+  const alreadyShown = continuing ? (input.state.shownPlaces ?? []) : [];
+  const baseState = withAreas(noteTurn(input.state, input.message), uniqueStrings([area, ...selectedAreas(input.state)], 3));
+
+  const [{ places: saved }, insight, anchorSearch, ...planSearches] = await Promise.all([
+    listPlaces(),
+    loadLatestCoupleInsight(),
+    searchKakaoPlacesRemote({ query: area, page: 1 }),
+    ...placeSearchPlans(ask).map(plan => searchKakaoPlacesRemote({
+      region: plan.region,
+      query: plan.query,
+      category: plan.category,
+      page: plan.page,
+    })),
+  ]);
+  const anchor = anchorSearch.ok
+    ? (anchorSearch.places.find(candidate => candidate.name.replace(/\s/g, "").includes(area.replace(/\s/g, ""))) ?? anchorSearch.places[0])
+    : undefined;
+  const geoSearches = anchor && (ask.kind === "restaurant" || ask.kind === "cafe")
+    ? await Promise.all([1, 2].map(page => searchKakaoPlacesRemote({
+      category: ask.kind === "restaurant" ? "restaurant" : "cafe",
+      query: ask.kind === "restaurant" && ask.query !== "맛집" ? ask.query : undefined,
+      x: anchor.coordinates[0],
+      y: anchor.coordinates[1],
+      radius: PLACE_SEARCH_RADIUS_METERS,
+      page,
+    })))
+    : [];
+
+  const pool: DiscoverCandidate[] = [];
+  for (const result of [...planSearches, ...geoSearches]) {
+    if (!result.ok) continue;
+    for (const candidate of result.places.slice(0, PLACE_RESULTS_PER_SEARCH)) {
+      if (!isDateCourseCandidate(candidate, [])) continue;
+      pool.push({
+        ...candidate,
+        searchRegion: area,
+        distanceMeters: anchor ? Math.round(distanceMeters(anchor.coordinates, candidate.coordinates)) : candidate.distanceMeters,
+      });
+    }
+  }
+  for (const place of saved) {
+    if (["dislike", "not_interested"].includes(place.userStatus) || ["dislike", "not_interested"].includes(place.partnerStatus)) continue;
+    const candidate = placeToCandidate(place);
+    if (!candidate || !matchesPlaceKind(candidate, ask.kind)) continue;
+    const meters = anchor ? distanceMeters(anchor.coordinates, candidate.coordinates) : null;
+    if (meters != null && meters > PLACE_SEARCH_RADIUS_METERS * 2) continue;
+    pool.push({ ...candidate, searchRegion: area, distanceMeters: meters == null ? undefined : Math.round(meters) });
+  }
+
+  const allowHarsh = placeAskHarshAllow(input.message, ask, applyTasteHarshAllow(allowsHarshDateMeal(input.message), input.message, input.avoidFoods));
+  const filtered = filterPlaceCandidates(pool, ask, {
+    allowHarsh,
+    exclude: uniqueStrings([...input.state.excludedPlaces, ...alreadyShown], 20),
+    violatesAvoid: blob => violatesTasteAvoid(blob, input.avoidFoods),
+  });
+  const rankContext = {
+    savedPositive: preferredSavedNames(saved),
+    savedBoth: bothWantNames(saved),
+    recentlyVisited: new Set<string>(),
+    commonTastes: coupleTasteBrief(input.tasteBoard, insight, input.avoidFoods).commonTastes,
+    activities: [],
+    allowHarsh,
+  };
+  const ranked = rankPlaceCandidates(filtered, ask, rankContext);
+  if (ranked.length < 1) {
+    const suggestions = nearbyAreaSuggestions(baseState);
+    const card: AIChatCard = {
+      headline: `${area}에서 ${label}을 더 찾지 못했어요`,
+      lines: [
+        alreadyShown.length
+          ? "이 조건으로는 보여드린 곳이 거의 전부예요. 조건을 조금 바꾸거나 옆 동네로 넓혀 볼까요?"
+          : "조건을 조금 바꾸거나 옆 동네로 넓혀 보면 더 나올 거예요.",
+      ],
+      suggestions: uniqueStrings([`${area} ${label} 추천해줘`, ...suggestions.slice(0, 3)], 4),
+    };
+    return chatResult(card, { ...baseState, placeAsk: ask });
+  }
+  const hydrated = await hydrateDateCandidates(ranked, saved);
+  const picked = await recommendPlacesWithOpenAi({
+    message: input.message,
+    ask,
+    candidates: hydrated,
+    savedNames: preferredSavedNames(saved),
+    bothWant: bothWantNames(saved),
+    coupleTaste: coupleTasteBrief(input.tasteBoard, insight, input.avoidFoods),
+    conversation: input.conversation,
+    alreadyShown,
+  });
+  if (picked.card.stops && picked.card.stops.length < Math.min(PLACE_PICK_MIN, hydrated.length) && !alreadyShown.length) {
+    picked.card.lines = [`${picked.card.lines[0] ?? ""} 조건에 딱 맞는 곳이 많지는 않아서 ${picked.card.stops.length}곳만 골랐어요.`.trim()];
+  }
+  const nextState: AIPlannerState = {
+    ...baseState,
+    placeAsk: ask,
+    shownPlaces: uniqueStrings([...alreadyShown, ...picked.shownPlaces], MAX_SHOWN_PLACES),
+  };
+  return chatResult(picked.card, nextState);
+}
+
 export async function recommendDatePlan(input: {
   message?: string;
   prompt?: string;
   previousPlaceNames?: string[];
   previousStops?: DatePreviousStop[];
+  /** Full stop cards of the course on screen, so questions can be answered from known facts. */
+  courseStops?: AIChatStop[];
+  /** Stop cards from the last place-recommendation reply. */
+  shownStops?: AIChatStop[];
   previousState?: AIPlannerState;
   dateLabel?: string;
   conversation?: DateChatTurn[];
@@ -274,6 +479,65 @@ export async function recommendDatePlan(input: {
   const tasteSeed = tasteBoard.compare?.seed ?? (tasteBoard.you ? seedFromProfile(tasteBoard.you) : null);
   const avoidFoods = tasteSeed?.avoidFoods ?? [];
   const filledPrevious = previousState && tasteSeed ? applyTasteFallback(previousState, tasteSeed) : previousState;
+
+  // A place request that was waiting for an area resumes once the area chip is picked.
+  if (!message && filledPrevious?.placeAsk && !filledPrevious.placeAsk.area && selectedAreas(filledPrevious).length) {
+    return recommendPlacesForChat({
+      message: `${selectedAreas(filledPrevious)[0]} ${filledPrevious.placeAsk.query} ${PLACE_KIND_LABEL[filledPrevious.placeAsk.kind]} 추천해줘`,
+      ask: { ...filledPrevious.placeAsk, area: selectedAreas(filledPrevious)[0] },
+      state: filledPrevious,
+      conversation: input.conversation,
+      avoidFoods,
+      tasteBoard,
+    });
+  }
+
+  let pickedPlaces: string[] = [];
+  if (message) {
+    const currentCourse = previousStops.map(stop => stop.name);
+    const route = await routeDateChat({
+      message,
+      state: filledPrevious,
+      hasCourse: currentCourse.length > 0,
+      currentCourse,
+      conversation: input.conversation,
+    });
+    const state = filledPrevious ?? emptyDateBrief();
+    if (route.mode === "chat") {
+      const situation = chatSituationFromMessage(message) ?? "small_talk";
+      const card = await composeDateChat({
+        situation,
+        userMessage: message,
+        state,
+        extras: { currentCourse, conversation: input.conversation },
+      });
+      return chatResult(card, noteTurn(state, message));
+    }
+    if (route.mode === "question") {
+      const insight = await loadLatestCoupleInsight();
+      const card = await answerDateQuestion({
+        message,
+        state,
+        stops: toQuestionStops(input.courseStops, previousStops),
+        shownStops: toQuestionStops(input.shownStops, []),
+        coupleTaste: coupleTasteBrief(tasteBoard, insight, avoidFoods),
+        conversation: input.conversation,
+      });
+      return chatResult(card, noteTurn(state, message));
+    }
+    if (route.mode === "places" && route.placeAsk) {
+      return recommendPlacesForChat({
+        message,
+        ask: route.placeAsk,
+        state,
+        conversation: input.conversation,
+        avoidFoods,
+        tasteBoard,
+      });
+    }
+    pickedPlaces = route.pickedPlaces ?? [];
+  }
+
   if (!message && missingSlot(filledPrevious)) {
     const slot = missingSlot(filledPrevious)!;
     const question = slotQuestion(slot, filledPrevious);
@@ -302,8 +566,15 @@ export async function recommendDatePlan(input: {
     previousStops,
     state: {
       ...interpretation.state,
+      // The interpreter rebuilds the brief from scratch; the place-list
+      // memory lives outside the brief and must survive the turn.
+      shownPlaces: filledPrevious?.shownPlaces,
+      placeAsk: filledPrevious?.placeAsk,
       dateLabel: interpretation.state.dateLabel || input.dateLabel || null,
-      requiredPlaces: interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|만화카페|VR(?:카페|\s*체험)?|실내(?:\s*놀거리)?)$/.test(place)),
+      requiredPlaces: uniqueStrings([
+        ...pickedPlaces,
+        ...interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|만화카페|VR(?:카페|\s*체험)?|실내(?:\s*놀거리)?)$/.test(place)),
+      ], 6),
     },
   });
   const interpreted = tasteSeed ? applyTasteFallback(interpretedRaw, tasteSeed) : interpretedRaw;
@@ -357,11 +628,15 @@ export async function recommendDatePlan(input: {
     query: intent.query,
     page,
   })));
-  const [explicitSearches, areaSearches, intentSearches, intentSearches2] = await Promise.all([
+  const shortlist = (state.shownPlaces ?? [])
+    .filter(name => !directQueries.includes(name) && !state.excludedPlaces.includes(name))
+    .slice(0, 6);
+  const [explicitSearches, areaSearches, intentSearches, intentSearches2, shortlistSearches] = await Promise.all([
     Promise.all(directQueries.map(query => searchKakaoPlacesRemote({ query, region: searchRegions.at(-1), page: 1 }))),
     Promise.all(selectedRegions.map(region => searchKakaoPlacesRemote({ query: region, page: 1 }))),
     searchKeyword(1),
     searchKeyword(2),
+    Promise.all(shortlist.map(query => searchKakaoPlacesRemote({ query, region: searchRegions.at(-1), page: 1 }))),
   ]);
 
   const unique = new Map<string, Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number]>();
@@ -386,6 +661,15 @@ export async function recommendDatePlan(input: {
   for (const result of explicitSearches) {
     if (!result.ok) continue;
     for (const candidate of result.places) remember(candidate, undefined, true);
+  }
+  // Shops the user just saw in a recommendation list stay eligible for the
+  // course even when a slot cap is already full; only the exact shop counts.
+  for (const [index, result] of shortlistSearches.entries()) {
+    if (!result.ok) continue;
+    const wanted = shortlist[index] ?? "";
+    for (const candidate of result.places) {
+      if (matchesTerm(candidate, wanted)) remember(candidate, searchRegions[0], true);
+    }
   }
   ingestKeyword(intentSearches);
   ingestKeyword(intentSearches2);

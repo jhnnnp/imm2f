@@ -25,6 +25,7 @@ import {
   withTimeWindow,
 } from "../dateBrief";
 import { isCourseQuickAction } from "../dateCourse";
+import { pendingLabelFor } from "../chatRoute";
 import type { AIChatCard, AIChatStop, AIPlannerReply, AIPlannerState, DateIntakeSlot, PlanChange, PlanItem, PlanKind } from "@/features/planning/types/plan";
 import type { Place } from "@/features/places/types/place";
 import { plannerStateFromSeed } from "@/features/taste/compare";
@@ -45,10 +46,12 @@ function sourceHost(url: string) {
 }
 
 const EDIT_PROMPT = "일정이 조금 빡센 것 같아. 한곳 빼고 남는 곳은 더 여유롭게 해줘.";
-const GENERATE_PLACEHOLDER = "어디로 가고 싶은지 말해 주세요";
+const GENERATE_PLACEHOLDER = "예: 성수 파스타 맛집 추천해줘";
+const COURSE_PLACEHOLDER = "예: 식당 변경 해줘 · 1번 주차 돼?";
 const WELCOME_CARD: AIChatCard = {
   headline: "어디로 갈까요?",
-  lines: ["가고 싶은 동네를 말해 주세요."],
+  lines: ["동네를 말하면 하루 코스를 짜고, 식당이나 카페만 골라 달라고 해도 돼요. 만든 뒤에는 주차나 예약 같은 질문도 이어서 할 수 있어요."],
+  suggestions: ["성수 파스타 맛집 추천해줘", "을지로 저녁 데이트 코스 짜줘", "비 오는 날 홍대 실내 데이트"],
 };
 
 type KeepStep = "idle" | "destination" | "trip-dates";
@@ -311,6 +314,8 @@ export function AIPlanEditor({
   const [choicePrompt, setChoicePrompt] = useState<ChoicePrompt | null>(null);
   const [selectedChoices, setSelectedChoices] = useState<string[]>([]);
   const [peek, setPeek] = useState<{ key: string; stop: AIChatStop } | null>(null);
+  const [shownStops, setShownStops] = useState<AIChatStop[]>([]);
+  const [pendingLabel, setPendingLabel] = useState("");
   const [error, setError] = useState("");
   const [keepStep, setKeepStep] = useState<KeepStep>("idle");
   const [tripStartDate, setTripStartDate] = useState("");
@@ -481,6 +486,7 @@ export function AIPlanEditor({
     setChoicePrompt(null);
     setSelectedChoices([]);
     setPeek(null);
+    setShownStops([]);
     resetKeep();
     requestIdRef.current += 1;
   }
@@ -533,6 +539,7 @@ export function AIPlanEditor({
     const ticket = ++requestIdRef.current;
     setError("");
     setPhase("loading");
+    setPendingLabel(pendingLabelFor(request, Boolean(recommendation), nextState));
     setChoicePrompt(null);
     setSelectedChoices([]);
     setPeek(null);
@@ -549,6 +556,8 @@ export function AIPlanEditor({
       message: request,
       previousPlaceNames: recommendation?.recommendations.map(place => place.name),
       previousStops: recommendation?.recommendations.map(place => ({ name: place.name, category: place.category })),
+      courseStops: recommendation?.card.stops,
+      shownStops,
       previousState: nextState,
       dateLabel: startDate || undefined,
       conversation: nextTurns.map(turn => ({ role: turn.role, text: turn.text })),
@@ -572,6 +581,7 @@ export function AIPlanEditor({
     }
     if (result.status === "chat") {
       setConversation(current => [...current, { role: "assistant", text: result.message, card: result.card }]);
+      if (result.card.stops?.length) setShownStops(result.card.stops);
       if (result.slot && result.options?.length) {
         setChoicePrompt({ options: result.options, multiple: Boolean(result.multiple), kind: result.slot });
       }
@@ -702,7 +712,7 @@ export function AIPlanEditor({
             {phase === "loading" && (
               <article className="ai-bubble is-assistant is-typing" aria-label="답변하는 중">
                 <span><i /><i /><i /></span>
-                <p>근처 장소를 찾고 동선을 맞추는 중입니다.</p>
+                <p>{pendingLabel || "근처 장소를 찾고 동선을 맞추는 중입니다."}</p>
               </article>
             )}
           </div>
@@ -791,7 +801,7 @@ export function AIPlanEditor({
               }}
               rows={1}
               aria-label="AI 플래너에게 메시지"
-              placeholder={keepStep === "destination" ? "데이트 코스 또는 여행" : keepStep === "trip-dates" ? "날짜는 캘린더에서 고르세요" : recommendation ? "예: 식당 변경 해줘" : GENERATE_PLACEHOLDER}
+              placeholder={keepStep === "destination" ? "데이트 코스 또는 여행" : keepStep === "trip-dates" ? "날짜는 캘린더에서 고르세요" : recommendation ? COURSE_PLACEHOLDER : GENERATE_PLACEHOLDER}
               disabled={phase === "loading" || keeping}
             />
             <button type="button" onClick={() => void runGenerate(plannerState, generatePrompt)} disabled={phase === "loading" || keeping || !generatePrompt.trim()} aria-label="메시지 보내기">

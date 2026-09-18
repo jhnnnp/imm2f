@@ -176,4 +176,17 @@ export type AIPlannerState = {
   intent: "create" | "modify" | "remove" | "reset" | "clarify";
   pendingSlot: DateIntakeSlot | null;
   conversationNotes: string[];
+  /** Names the assistant listed in the last place-recommendation turn. */
+  shownPlaces?: string[];
+  /** The last standalone place request, so "다른 곳 더" can continue it. */
+  placeAsk?: PlaceAsk | null;
+};
+
+export type PlaceAskKind = "restaurant" | "cafe" | "bar" | "dessert" | "exhibit" | "activity" | "spot";
+
+export type PlaceAsk = {
+  kind: PlaceAskKind;
+  /** Dish, cuisine, or vibe words lifted from the user's message. */
+  query: string;
+  area: string;
 };

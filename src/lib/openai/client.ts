@@ -6,13 +6,22 @@ function usesReasoning(model: string) {
   return /^gpt-5/i.test(model);
 }
 
+/**
+ * Reasoning models regularly take longer than a dozen seconds to answer a
+ * large JSON request. A short abort silently degrades every reply to the
+ * heuristic fallback, which reads as "the bot is not really an LLM".
+ */
+const DEFAULT_JSON_TIMEOUT_MS = 25000;
+
 export async function completeJson<T>(input: {
   messages: ChatMessage[];
   temperature?: number;
   maxTokens?: number;
   reasoningEffort?: "none" | "low" | "medium" | "high";
+  timeoutMs?: number;
 }): Promise<T | null> {
   const model = getOpenAiModel();
+  const timeoutMs = input.timeoutMs ?? DEFAULT_JSON_TIMEOUT_MS;
   const reasoning = usesReasoning(model);
   const bodyBase = {
     model,
@@ -31,7 +40,12 @@ export async function completeJson<T>(input: {
   };
 
   const parse = async (response: Response) => {
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // A wrong model name or an expired key would otherwise degrade every
+      // reply into the heuristic fallback without a trace.
+      console.error("OpenAI chat completion failed", response.status, (await response.text()).slice(0, 300));
+      return null;
+    }
     const body = await response.json() as { choices?: Array<{ message?: { content?: string | null } }> };
     const content = body.choices?.[0]?.message?.content;
     if (!content) return null;
@@ -47,7 +61,7 @@ export async function completeJson<T>(input: {
       method: "POST",
       headers: { Authorization: `Bearer ${getOpenAiApiKey()}`, "Content-Type": "application/json" },
       body: JSON.stringify(reasoning ? reasoningBody : classicBody),
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const parsed = await parse(first);
     if (parsed) return parsed;
@@ -57,7 +71,7 @@ export async function completeJson<T>(input: {
       method: "POST",
       headers: { Authorization: `Bearer ${getOpenAiApiKey()}`, "Content-Type": "application/json" },
       body: JSON.stringify({ ...bodyBase, max_completion_tokens: input.maxTokens ?? 4000 }),
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return parse(retry);
   } catch {
@@ -96,6 +110,7 @@ export async function completeJsonWithWebSearch<T>(input: {
   maxTokens?: number;
   timeoutMs?: number;
   requireSearch?: boolean;
+  searchContextSize?: "low" | "medium" | "high";
 }): Promise<T | null> {
   const model = getOpenAiModel();
   const body = {
@@ -103,7 +118,7 @@ export async function completeJsonWithWebSearch<T>(input: {
     tools: [{
       type: "web_search",
       user_location: { type: "approximate", country: "KR" },
-      search_context_size: "medium",
+      search_context_size: input.searchContextSize ?? "medium",
     }],
     ...(input.requireSearch ? { tool_choice: "required" as const } : {}),
     include: ["web_search_call.action.sources"],
@@ -120,7 +135,10 @@ export async function completeJsonWithWebSearch<T>(input: {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(input.timeoutMs ?? 55000),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.error("OpenAI web search response failed", response.status, (await response.text()).slice(0, 300));
+      return null;
+    }
     const payload = await response.json() as {
       output_text?: string;
       output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;

@@ -517,9 +517,15 @@ export function expandedSearchRegions(state: AIPlannerState) {
   return uniqueStrings([...selected, ...selected.flatMap(area => CLUSTER_AREAS[areaCluster(area)] ?? [])], 6);
 }
 
+/**
+ * Only the destination is truly required. Stay length is asked for travel
+ * destinations (제주, 부산, 군산...), where a day trip and an overnight are
+ * different plans; a Seoul neighborhood defaults to a one-day date so the
+ * chat does not turn into a form.
+ */
 export function missingSlot(state: AIPlannerState | undefined): DateIntakeSlot | null {
   if (!state?.areas.length && !state?.regions.length) return "area";
-  if (!state.stayKind) return "span";
+  if (!state.stayKind && selectedAreas(state).some(isTravelArea)) return "span";
   return null;
 }
 
@@ -539,6 +545,7 @@ export function discoveryActivities(state: AIPlannerState): DateActivityId[] {
 export function applyDateDefaults(state: AIPlannerState): AIPlannerState {
   return {
     ...state,
+    stayKind: state.stayKind ?? "date",
     areaScope: state.areaScope ?? "nearby",
     timeWindow: state.timeWindow ?? "any",
     cuisine: state.cuisine ?? (state.activities.includes("meal") ? "any" : null),
