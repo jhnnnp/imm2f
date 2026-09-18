@@ -6,9 +6,9 @@ import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
 import { summarizePlanChange } from "@/features/collaboration/summarize";
 import { applyDateSwitch, emptyDateDay, hasDateContent, type DateDaySnapshot } from "@/features/date/dateDays";
+import { parseDiscoverPlaceId } from "@/features/places/discover";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
 import { searchTourPlacesRemote } from "@/lib/tourapi/client";
-import { parseDiscoverPlaceId } from "@/features/places/discover";
 import { isLegacyDemoTripTitle, stripLegacyDemoArchive, stripLegacyDemoPlan } from "./legacyDemo";
 import {
   asPlanCoordinates,
@@ -142,17 +142,12 @@ async function hydratePlanItemCoordinates(
   hydrated = hydrated.map(item => byId.get(item.id) ?? item);
 
   const missingIds = new Set(missing.map(item => item.id));
-  for (const item of hydrated) {
-    if (!missingIds.has(item.id)) continue;
+  await Promise.all(hydrated.flatMap(item => {
+    if (!missingIds.has(item.id)) return [];
     const coords = asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]);
-    if (!coords) continue;
-    const { error } = await supabase
-      .from("plan_items")
-      .update({ lng: coords[0], lat: coords[1] })
-      .eq("plan_id", planId)
-      .eq("client_id", item.id);
-    if (error) break;
-  }
+    if (!coords) return [];
+    return [supabase.from("plan_items").update({ lng: coords[0], lat: coords[1] }).eq("plan_id", planId).eq("client_id", item.id)];
+  }));
   return hydrated;
 }
 
@@ -468,6 +463,11 @@ export async function saveCouplePlan(
   }
   const result = saved as { plan_id?: string; version?: number; revision?: number } | null;
   if (!result?.plan_id || !result.version || !result.revision) return { error: "일정을 저장하지 못했어요." };
+  await Promise.all(normalized.flatMap(item => {
+    const coords = planItemLngLat(item);
+    if (coords.lng == null || coords.lat == null) return [];
+    return [supabase.from("plan_items").update({ lng: coords.lng, lat: coords.lat }).eq("plan_id", result.plan_id!).eq("client_id", item.id)];
+  }));
 
   if (!meta?.silent) {
     await queuePartnerEmail({

@@ -7,37 +7,28 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { CouplePlan, PlanItem } from "@/features/planning/types/plan";
 import type { ArchivedTripPlan } from "@/features/planning/actions";
 import type { Memory } from "@/features/memories/types";
-import type { Place, PlacePreferenceStatus } from "@/features/places/types/place";
+import type { Place } from "@/features/places/types/place";
 import { htmlMarkerPlacement, screenOffsetForStackedPins } from "@/features/map/htmlMarker";
 import { computeMemorySheetAnchor, pinScreenPoints, type MemorySheetAnchor } from "@/features/map/memorySheetAnchor";
+import { emptyGeoJsonSource, memoryCityStyle } from "@/features/map/memoryCityStyle";
+import { couplePlacePinFromPartner, couplePlacePinLabel } from "@/features/map/placePins";
 import { distanceMeters } from "@/features/places/geo";
 import { asPlanCoordinates } from "@/features/planning/planCoordinates";
 import { curveRoute } from "@/features/trip/planRoute";
 import { useRoadRoute } from "@/features/map/routing/useRoadRoute";
 import { MapRouteOverlay } from "./MapRouteOverlay";
 
-const MAP_STYLE: StyleSpecification = {
-  version: 8,
+const MAP_STYLE: StyleSpecification = memoryCityStyle({
   sources: {
-    basemap: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, maxzoom: 19, attribution: "&copy; OpenStreetMap contributors" },
-    memorymap: { type: "vector", tiles: ["/api/map-tiles/{z}/{x}/{y}"], minzoom: 0, maxzoom: 14, attribution: "&copy; OpenStreetMap contributors" },
-    "trip-route": { type: "geojson", data: { type: "FeatureCollection", features: [] }, lineMetrics: true },
+    "trip-route": emptyGeoJsonSource(true),
   },
   layers: [
-    { id: "paper", type: "background", paint: { "background-color": "#e8e6dc" } },
-    { id: "basemap", type: "raster", source: "basemap", paint: { "raster-opacity": 0.48, "raster-saturation": -0.68, "raster-contrast": -0.16, "raster-brightness-min": 0.22, "raster-brightness-max": 0.98 } },
-    { id: "parks", type: "fill", source: "memorymap", "source-layer": "land", filter: ["in", ["get", "kind"], ["literal", ["park", "forest", "grass", "garden", "recreation_ground"]]], paint: { "fill-color": "#aec2aa", "fill-opacity": 0.62 } },
-    { id: "water", type: "fill", source: "memorymap", "source-layer": "water_polygons", paint: { "fill-color": "#aebfc0", "fill-opacity": 0.9 } },
-    { id: "roads-casing", type: "line", source: "memorymap", "source-layer": "streets", filter: ["!=", ["get", "tunnel"], true], layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#cfcbc0", "line-width": ["interpolate", ["exponential", 1.35], ["zoom"], 11, 1.2, 15, 6, 18, 17], "line-opacity": 0.86 } },
-    { id: "roads", type: "line", source: "memorymap", "source-layer": "streets", filter: ["!=", ["get", "tunnel"], true], layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": ["match", ["get", "kind"], ["motorway", "trunk", "primary"], "#d8c3a2", "#f5f1e8"], "line-width": ["interpolate", ["exponential", 1.35], ["zoom"], 11, 0.7, 15, 3.8, 18, 12], "line-opacity": 0.96 } },
-    { id: "building-footprints", type: "fill", source: "memorymap", "source-layer": "buildings", minzoom: 12, paint: { "fill-color": "#d5d2c8", "fill-outline-color": "#c5c2b9", "fill-opacity": ["interpolate", ["linear"], ["zoom"], 12, 0.2, 15, 0.76] } },
-    { id: "buildings-3d", type: "fill-extrusion", source: "memorymap", "source-layer": "buildings", minzoom: 13.2, paint: { "fill-extrusion-color": ["interpolate", ["linear"], ["coalesce", ["get", "height"], 12], 0, "#d9d8d0", 30, "#c7cec7", 100, "#aebdb4"], "fill-extrusion-height": ["coalesce", ["get", "height"], ["*", ["get", "levels"], 3.2], 12], "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0], "fill-extrusion-opacity": 0.84, "fill-extrusion-vertical-gradient": true } },
     { id: "trip-route-shadow", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#faf7e8", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 10, 12, 13, 16, 16], "line-opacity": 0.94 } },
     { id: "trip-route-line", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#e3de96", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 7, 16, 9], "line-opacity": 0.9 } },
     { id: "trip-route-inner", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#f3f0cc", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.2, 12, 3, 16, 3.6], "line-opacity": 0.82 } },
     { id: "trip-route-flow", type: "line", source: "trip-route", layout: { visibility: "none", "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#fffef5", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1, 12, 1.5, 16, 2], "line-opacity": 0.65, "line-dasharray": [1.1, 2.8] } },
   ],
-};
+});
 
 const TRIP_ROUTE_LAYERS = ["trip-route-shadow", "trip-route-line", "trip-route-inner", "trip-route-flow"] as const;
 
@@ -87,13 +78,6 @@ const FILTERS: ReadonlyArray<{ id: PinLabel; label: string }> = [
   { id: "revisit", label: "다시 가고 싶은 곳" },
   { id: "memory", label: "추억" },
 ];
-
-function normalizedPlaceLabel(status: PlacePreferenceStatus): Exclude<PinLabel, "memory"> | null {
-  if (status === "want" || status === "must_visit") return "want";
-  if (status === "visited") return "visited";
-  if (status === "revisit") return "revisit";
-  return null;
-}
 
 function pinName(pin: MapPin) { return pin.kind === "place" ? pin.place.name : pin.kind === "memory" ? pin.memory.title : pin.item.placeName; }
 function sheetEyebrow(pin: MapPin) {
@@ -270,7 +254,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     const next: MapPin[] = [];
     displayPlaces.forEach(place => {
       if (!place.coordinates) return;
-      const label = normalizedPlaceLabel(place.userStatus);
+      const label = couplePlacePinLabel(place);
       if (label) next.push({ kind: "place", id: `place:${place.id}`, label, place, coordinates: place.coordinates });
     });
     memories.forEach(memory => {
@@ -522,7 +506,11 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
         element.type = "button";
         element.className = `memory-city-marker is-${pin.label} ${viewMode === "3d" ? "is-3d" : ""}`;
         element.style.setProperty("--marker-color", markerColor(pin.label));
-        const statusLabel = pin.kind === "trip" ? `${(pin.item.dayIndex ?? 0) + 1}일차 ${pin.dayOrder}번째 일정` : FILTERS.find(filter => filter.id === pin.label)?.label ?? "장소";
+        const statusLabel = pin.kind === "trip"
+          ? `${(pin.item.dayIndex ?? 0) + 1}일차 ${pin.dayOrder}번째 일정`
+          : pin.kind === "place" && couplePlacePinFromPartner(pin.place)
+            ? `${FILTERS.find(filter => filter.id === pin.label)?.label ?? "장소"} · 파트너가 남긴 곳`
+            : FILTERS.find(filter => filter.id === pin.label)?.label ?? "장소";
         element.setAttribute("aria-label", `${pinName(pin)} · ${statusLabel}`);
         const image = pin.kind === "memory" ? pin.memory.coverUrl : pin.kind === "place" ? pin.place.image : null;
         const head = image
