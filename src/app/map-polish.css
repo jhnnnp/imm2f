@@ -388,7 +388,8 @@
   .memory-map-toolbar .memory-map-heading{display:none}
   .memory-map-toolbar .memory-map-modes{position:static;display:flex}
   .memory-map-toolbar .memory-map-modes button{flex:1}
-  .memory-map-toolbar .memory-view-switch{grid-column:2}
+  .memory-map-toolbar .memory-map-right-tools{grid-column:2;flex-wrap:wrap;justify-content:flex-end}
+  .memory-map-toolbar .memory-view-switch{position:static}
   .memory-map-toolbar .memory-map-filters{grid-column:1/-1;width:100%}
   .memory-map-toolbar .memory-map-filters button{flex:1;justify-content:center}
   .memory-map-toolbar .memory-map-filters button span{display:none}
