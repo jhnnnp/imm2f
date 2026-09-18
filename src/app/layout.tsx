@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { Nanum_Pen_Script } from "next/font/google";
 import { SessionProvider } from "@/features/auth/components/SessionProvider";
@@ -33,6 +33,12 @@ export const metadata: Metadata = {
   title: { default: "ONLY US — 우리의 공간", template: "%s — ONLY US" },
   description: "우리의계획부터 추억까지 이어지는 프라이빗 커플 공간",
   icons: { icon: "/favicon.svg" },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

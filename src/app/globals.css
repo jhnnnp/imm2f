@@ -18,7 +18,15 @@
   --accent-script: var(--font-accent-script), "Nanum Pen Script", cursive;
   --default: var(--hand);
   --serif: var(--default);
-  --sans: var(--default)
+  --sans: var(--default);
+  --view-height: 100vh;
+  --shell-cols: minmax(0, 2.2fr) minmax(0, 14fr) minmax(0, 3fr)
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --view-height: 100dvh
+  }
 }
 
 * {
@@ -26,7 +34,7 @@
 }
 
 html {
-  height: 100%;
+  height: var(--view-height);
   font-family: var(--default);
   font-size: 16px;
   color: var(--ink);
@@ -38,7 +46,7 @@ html {
 body {
   margin: 0;
   width: 100%;
-  height: 100%;
+  height: var(--view-height);
   min-width: 320px;
   overflow: hidden;
   overscroll-behavior: none;
@@ -83,12 +91,12 @@ kbd {
 .app-shell {
   max-width: 1920px;
   width: 100%;
-  height: 100%;
+  height: var(--view-height);
   min-height: 0;
   margin: auto;
   overflow: hidden;
   display: grid;
-  grid-template-columns: 220px minmax(720px, 1fr) 300px;
+  grid-template-columns: var(--shell-cols);
   background: rgba(248, 245, 238, .78);
   box-shadow: 0 0 70px rgba(60, 53, 43, .12)
 }
@@ -509,7 +517,7 @@ kbd {
 
 .home-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.72fr) minmax(260px, .82fr);
+  grid-template-columns: minmax(0, 1.72fr) minmax(0, .82fr);
   gap: 16px
 }
 
@@ -1649,9 +1657,9 @@ a.outline-button {
 
 .planner-shell {
   display: grid;
-  grid-template-columns: 145px minmax(340px, .85fr) minmax(320px, 1.15fr);
-  height: calc(100vh - 180px);
-  min-height: 620px;
+  grid-template-columns: minmax(112px, 145px) minmax(0, .85fr) minmax(0, 1.15fr);
+  height: clamp(480px, calc(var(--view-height) - 180px), 920px);
+  min-height: min(620px, calc(var(--view-height) - 140px));
   border: 1px solid var(--line);
   border-radius: 13px;
   overflow: hidden;
@@ -2762,9 +2770,9 @@ a.outline-button {
 
 .map-page {
   display: grid;
-  grid-template-columns: 270px 1fr;
-  height: calc(100vh - 125px);
-  min-height: 650px
+  grid-template-columns: minmax(0, 270px) minmax(0, 1fr);
+  height: clamp(520px, calc(var(--view-height) - 125px), 960px);
+  min-height: min(650px, calc(var(--view-height) - 100px))
 }
 
 .map-page-head {
@@ -3169,8 +3177,8 @@ dialog::backdrop {
 }
 
 @media(max-width:1370px) {
-  .app-shell {
-    grid-template-columns: 190px minmax(680px, 1fr) 270px
+  :root {
+    --shell-cols: minmax(0, 1.9fr) minmax(0, 14fr) minmax(0, 2.7fr)
   }
 
   .sidebar {
@@ -3186,7 +3194,7 @@ dialog::backdrop {
   }
 
   .planner-shell {
-    grid-template-columns: 125px minmax(330px, .9fr) minmax(290px, 1.1fr)
+    grid-template-columns: minmax(100px, 125px) minmax(0, .9fr) minmax(0, 1.1fr)
   }
 
   .mini-place {
@@ -3195,8 +3203,8 @@ dialog::backdrop {
 }
 
 @media(max-width:1100px) {
-  .app-shell {
-    grid-template-columns: 78px minmax(650px, 1fr) 260px
+  :root {
+    --shell-cols: 78px minmax(0, 14fr) minmax(0, 2.6fr)
   }
 
   .brand-copy,
@@ -3236,7 +3244,7 @@ dialog::backdrop {
   }
 
   .planner-shell {
-    grid-template-columns: 110px minmax(320px, .9fr) minmax(260px, 1.1fr)
+    grid-template-columns: minmax(88px, 110px) minmax(0, .9fr) minmax(0, 1.1fr)
   }
 
   .day-rail>button small {
@@ -3813,8 +3821,8 @@ a.primary-button {
 
 .couple-map-wrap {
   position: relative;
-  height: calc(100vh - 125px);
-  min-height: 650px;
+  height: clamp(520px, calc(var(--view-height) - 125px), 960px);
+  min-height: min(650px, calc(var(--view-height) - 100px));
   border: 1px solid rgba(63, 81, 72, .12);
   border-radius: 18px;
   overflow: hidden;
@@ -6737,7 +6745,7 @@ a.add-schedule {
 
 /* AI planner — conversational route studio */
 .app-shell:has(.ai-editor) {
-  grid-template-columns: 220px minmax(680px, 1fr) 390px
+  --shell-cols: minmax(0, 2.2fr) minmax(0, 14fr) minmax(0, 3.9fr)
 }
 
 .context-panel:has(.ai-editor) {
@@ -6889,9 +6897,11 @@ a.add-schedule {
 .ai-bubble {
   position: relative;
   max-width: 92%;
+  min-width: 0;
   justify-self: start;
   margin-left: 32px;
   padding: 12px 14px 13px;
+  overflow-wrap: anywhere;
   border: 1px solid rgba(43, 49, 46, .1);
   border-radius: 17px;
   border-bottom-left-radius: 5px;
@@ -7345,13 +7355,18 @@ a.add-schedule {
 
 .ai-quick-replies button {
   min-height: 28px;
-  padding: 0 10px;
+  max-width: 100%;
+  padding: 4px 10px;
   border: 1px solid rgba(83, 111, 99, .16);
   border-radius: 9px;
   background: rgba(255, 255, 255, .86);
   color: #587164;
   font-size: .55rem;
-  font-weight: 700
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: left;
+  white-space: normal;
+  word-break: keep-all
 }
 
 .ai-quick-replies button:hover,
@@ -8385,7 +8400,7 @@ a.add-schedule {
 
 @media(max-width:1180px) and (min-width:901px) {
   .app-shell:has(.ai-editor) {
-    grid-template-columns: 190px minmax(570px, 1fr) 360px
+    --shell-cols: minmax(0, 1.9fr) minmax(0, 14fr) minmax(0, 3.6fr)
   }
 
   .ai-editor {
@@ -21050,8 +21065,8 @@ a.activity-line:hover {
 
 .home-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.72fr) minmax(260px, .82fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1.72fr) minmax(0, .82fr);
+  gap: 14px;
   padding-top: 12px;
   align-items: stretch;
   animation: home-rise .7s cubic-bezier(.19, 1, .22, 1) .12s both
@@ -21969,8 +21984,10 @@ a.home-polaroid:hover img {
   isolation: isolate;
   overflow: hidden;
   width: 100%;
-  min-height: 420px;
-  height: 100%;
+  min-height: clamp(320px, calc(var(--view-height) * 0.36), 420px);
+  max-height: calc(var(--view-height) - 240px);
+  aspect-ratio: 2.05 / 1;
+  height: auto;
   border-radius: var(--radius-outer);
   background: #fbf8f2;
   box-shadow:
