@@ -60,7 +60,13 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       <div className="command-section">
         <span>빠른 실행</span>
         {commands.map(item => (
-          <a href={item.href} onClick={event => { event.preventDefault(); go(item.href); }} key={item.href}>
+          <a
+            href={item.href}
+            onMouseEnter={() => router.prefetch(item.href)}
+            onFocus={() => router.prefetch(item.href)}
+            onClick={event => { event.preventDefault(); go(item.href); }}
+            key={item.href}
+          >
             <i>{item.icon}</i><b>{item.label}</b>
           </a>
         ))}
@@ -70,7 +76,13 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         <div className="command-section">
           <span>검색 결과</span>
           {hits.map(hit => (
-            <a href={hit.href} onClick={event => { event.preventDefault(); go(hit.href); }} key={`${hit.group}-${hit.href}-${hit.label}`}>
+            <a
+              href={hit.href}
+              onMouseEnter={() => router.prefetch(hit.href)}
+              onFocus={() => router.prefetch(hit.href)}
+              onClick={event => { event.preventDefault(); go(hit.href); }}
+              key={`${hit.group}-${hit.href}-${hit.label}`}
+            >
               <i>{hit.group}</i>
               <span>
                 <b>{hit.label}</b>

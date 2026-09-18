@@ -4,6 +4,7 @@ import { AppLink as Link } from "@/components/layout/AppLink";
 import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import type { Place } from "@/features/places/types/place";
 import type { Memory } from "@/features/memories/types";
+import { useResolvedMemories } from "@/features/memories/resolvePhotoUrls";
 import type { PlanItem } from "@/features/planning/types/plan";
 import { type CoupleActivity } from "@/features/collaboration/types";
 import type { PlaceCategoryId } from "@/features/places/types/place";
@@ -480,6 +481,7 @@ export function HomeDashboard({
   dateStartDate: string | null;
 }) {
   const session = useAppSession();
+  const resolvedMemories = useResolvedMemories(memories);
   const livePlaces = places;
   const liveTrip = { items: tripItems, title: tripTitle, startDate: tripStartDate, dayCount: tripDayCount };
   const liveDate = { items: dateItems, title: dateTitle, startDate: dateStartDate };
@@ -493,7 +495,7 @@ export function HomeDashboard({
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? "파트너" : "파트너";
   const shownPlaces = shared.length ? shared : mine;
   const shownPlacesLabel = shared.length ? "둘 다 가고 싶은 곳" : "내가 담아 둔 곳";
-  const memory = memories[0] ?? null;
+  const memory = resolvedMemories[0] ?? null;
   const cover = memory ? memoryCover(memory) : null;
   const heading = journeyHeadline(liveTrip.title, liveTrip.items, livePlaces, liveTrip.dayCount);
   const dateStops = liveDate.items.map(item => item.placeName).slice(0, 3).join(" - ");

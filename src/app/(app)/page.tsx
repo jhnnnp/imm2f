@@ -1,3 +1,4 @@
+import { RouteSuspense } from "@/components/layout/RouteSuspense";
 import { HomeDashboard } from "@/features/home/components/HomeDashboard";
 import { listMemories } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
@@ -13,7 +14,15 @@ function seoulTodayIso() {
   }).format(new Date());
 }
 
-export default async function HomePage() {
+export default function HomePage() {
+  return (
+    <RouteSuspense>
+      <HomePageContent />
+    </RouteSuspense>
+  );
+}
+
+async function HomePageContent() {
   const [placesResult, memoriesResult, trip, date, drafts] = await Promise.all([
     listPlaces(),
     listMemories({ photos: "cover" }),
