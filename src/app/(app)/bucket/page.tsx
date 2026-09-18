@@ -1,12 +1,20 @@
+import { RouteSuspense } from "@/components/layout/RouteSuspense";
 import { CoupleNotesBoard } from "@/features/lists/components/CoupleNotesBoard";
 import { NotesContextPanel } from "@/features/lists/components/NotesContextPanel";
 import { ContextPanel } from "@/components/layout/ContextPanel";
 import { listNotes } from "@/features/lists/actions";
 import { getAppSession } from "@/features/auth/session";
 
-export default async function BucketPage() {
-  const { notes, persist } = await listNotes("bucket");
-  const session = await getAppSession();
+export default function BucketPage() {
+  return (
+    <RouteSuspense>
+      <BucketPageContent />
+    </RouteSuspense>
+  );
+}
+
+async function BucketPageContent() {
+  const [{ notes, persist }, session] = await Promise.all([listNotes("bucket"), getAppSession()]);
   const collaborators = session.mode === "authenticated" ? {
     viewerId: session.userId,
     viewerName: session.displayName,

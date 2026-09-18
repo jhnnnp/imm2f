@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import { formatKoDate } from "@/lib/dates";
-import { createNote, deleteNote, updateNoteStatus } from "../actions";
+import { createNote, deleteNote, reorderNotes, updateNoteStatus } from "../actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { VaultScreenshotImport } from "./VaultScreenshotImport";
+import { BucketWishBoard } from "./BucketWishBoard";
 import { NOTE_COPY, NOTE_STATUS, type CoupleNote, type NoteKind } from "../types";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 
@@ -149,8 +150,14 @@ export function CoupleNotesBoard({
   const [query, setQuery] = useState("");
   const [openStatusId, setOpenStatusId] = useState<string | null>(null);
   const [selectedNote, setSelectedNote] = useState<CoupleNote | null>(null);
-  const [quickTitle, setQuickTitle] = useState("");
   const [vaultScanPreview, setVaultScanPreview] = useState(false);
+  const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
+  const [dropTargetNoteId, setDropTargetNoteId] = useState<string | null>(null);
+  const draggedNoteRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setNotes(initialNotes);
+  }, [initialNotes]);
 
   const onVaultPreviewChange = useCallback((preview: boolean) => {
     setVaultScanPreview(preview);
@@ -176,6 +183,53 @@ export function CoupleNotesBoard({
   const highlightCount = notes.filter(note => note.status === highlightStatus).length;
   const progress = notes.length ? Math.round((highlightCount / notes.length) * 100) : 0;
   const highlightUnit = kind === "vault" ? "개의 보관" : kind === "gift" ? "개의 전달" : "개의 달성";
+  const canReorderNotes = persist && kind === "vault" && filter === "all" && !query.trim() && notes.length > 1;
+
+  function dropNote(targetId: string) {
+    const draggedId = draggedNoteRef.current;
+    draggedNoteRef.current = null;
+    setDraggingNoteId(null);
+    setDropTargetNoteId(null);
+    if (!draggedId || draggedId === targetId) return;
+    const from = notes.findIndex(note => note.id === draggedId);
+    const to = notes.findIndex(note => note.id === targetId);
+    if (from < 0 || to < 0) return;
+    const snapshot = notes;
+    const reordered = [...notes];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    setNotes(reordered);
+    void reorderNotes(kind, reordered.map(note => note.id)).then(result => {
+      if ("error" in result) {
+        setNotes(snapshot);
+        setError(result.error);
+      } else {
+        router.refresh();
+      }
+    });
+  }
+
+  function isNoteDragBlocked(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) return true;
+    return Boolean(target.closest("button, a, input, select, textarea, label, [role=menu], .note-status-menu"));
+  }
+
+  function handleNoteDragStart(event: DragEvent, noteId: string) {
+    if (!canReorderNotes || isNoteDragBlocked(event.target)) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", noteId);
+    draggedNoteRef.current = noteId;
+    setDraggingNoteId(noteId);
+  }
+
+  function handleNoteDragEnd() {
+    draggedNoteRef.current = null;
+    setDraggingNoteId(null);
+    setDropTargetNoteId(null);
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -201,28 +255,6 @@ export function CoupleNotesBoard({
     router.refresh();
   }
 
-  async function submitQuickBucket(event: React.FormEvent) {
-    event.preventDefault();
-    const nextTitle = quickTitle.trim();
-    if (!nextTitle) return;
-    if (!persist) {
-      setError("로그인 후 함께 적을 수 있어요.");
-      return;
-    }
-    setPending(true);
-    setError("");
-    const result = await createNote("bucket", { title: nextTitle, detail: "", extra: "", status: statuses[0].id });
-    setPending(false);
-    if ("error" in result) {
-      setError(result.error);
-      return;
-    }
-    setNotes(current => [...current, result.note]);
-    emitCoupleActivitiesChanged();
-    setQuickTitle("");
-    router.refresh();
-  }
-
   function changeStatus(note: CoupleNote, next: string) {
     if (next === note.status) {
       setOpenStatusId(null);
@@ -242,8 +274,22 @@ export function CoupleNotesBoard({
   }
 
   function renderNoteCard(note: CoupleNote, index: number) {
+    const dragging = draggingNoteId === note.id;
+    const dropTarget = dropTargetNoteId === note.id && draggingNoteId !== note.id;
     return (
-      <li key={note.id} className={note.status === completedStatus ? "is-complete" : ""}>
+      <li
+        key={note.id}
+        className={`${note.status === completedStatus ? "is-complete" : ""}${canReorderNotes ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${dropTarget ? " is-drop-target" : ""}`}
+        draggable={canReorderNotes}
+        aria-grabbed={canReorderNotes && dragging ? true : undefined}
+        onDragStart={event => handleNoteDragStart(event, note.id)}
+        onDragEnd={handleNoteDragEnd}
+        onDragEnter={() => {
+          if (draggingNoteId && draggingNoteId !== note.id) setDropTargetNoteId(note.id);
+        }}
+        onDragOver={event => event.preventDefault()}
+        onDrop={() => dropNote(note.id)}
+      >
         <div className="note-card-top">
           <span className="note-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
           <span className="note-state-dot">{statuses.find(item => item.id === note.status)?.label ?? note.status}</span>
@@ -299,65 +345,6 @@ export function CoupleNotesBoard({
     );
   }
 
-  function renderBucketPaper() {
-    const filteredIds = new Set(visibleNotes.map(note => note.id));
-    return (
-      <section className="bucket-paper" aria-label="함께 쓰는 버킷리스트">
-        <header className="bucket-paper-head">
-          <div>
-            <span>OUR WISH LIST</span>
-            <h2>우리의 다음 장면들</h2>
-            <p>한 줄씩 적고, 함께 이룬 날에는 체크해요.</p>
-          </div>
-          <div className="bucket-paper-side">
-            <div className="bucket-collaborators" aria-label="함께 작성하는 사람">
-              <span>{collaborators?.viewerName.slice(0, 1) || "나"}</span>
-              <span>{collaborators?.partnerName.slice(0, 1) || "?"}</span>
-              <small><b>함께 쓰는 목록</b>{collaborators ? `${collaborators.viewerName} · ${collaborators.partnerName}` : "우리의 공간"}</small>
-            </div>
-            <div className="bucket-paper-progress" aria-label={`버킷리스트 달성률 ${progress}%`}>
-              <span><b>{highlightCount}</b> / {notes.length || 0} 완료</span>
-              <i><b style={{ width: `${progress}%` }} /></i>
-              <strong>{progress}%</strong>
-            </div>
-          </div>
-        </header>
-        <form className="bucket-quick-add" onSubmit={event => void submitQuickBucket(event)}>
-          <span aria-hidden="true">＋</span>
-          <input id="bucket-quick-input" value={quickTitle} onChange={event => setQuickTitle(event.target.value)} placeholder="둘이 함께 해보고 싶은 일을 적어보세요" aria-label="새 버킷리스트 항목" />
-          <button type="submit" disabled={pending || !quickTitle.trim()}>{pending ? "기록 중" : "추가"}</button>
-        </form>
-        <ol className="bucket-lines">
-          {notes.map((note, index) => {
-            const done = note.status === completedStatus;
-            const hidden = !filteredIds.has(note.id);
-            const author = note.createdBy && note.createdBy === collaborators?.viewerId ? collaborators.viewerName : collaborators?.partnerName || "우리";
-            return (
-              <li className={`${done ? "is-done" : ""} ${hidden ? "is-filtered" : ""}`} key={note.id}>
-                <button className="bucket-check" type="button" aria-label={done ? `${note.title} 완료 취소` : `${note.title} 완료로 표시`} aria-pressed={done} onClick={() => changeStatus(note, done ? statuses[0].id : completedStatus || statuses.at(-1)!.id)}><span>✓</span></button>
-                <div className="bucket-line-copy">
-                  <div><b>{note.title}</b>{note.status === "planning" && <em>계획 중</em>}</div>
-                  {note.detail && <p>{note.detail}</p>}
-                  <small>{author} · {formatKoDate(note.createdAt.slice(0, 10))}</small>
-                </div>
-                <span className="bucket-line-number">{String(index + 1).padStart(2, "0")}</span>
-                <button className="bucket-remove" type="button" aria-label={`${note.title} 지우기`} onClick={() => {
-                  setNotes(current => current.filter(item => item.id !== note.id));
-                  void deleteNote(note.id).then(result => {
-                    if ("error" in result) { setNotes(current => [...current, note]); setError(result.error); }
-                    else router.refresh();
-                  });
-                }}>×</button>
-              </li>
-            );
-          })}
-          {!notes.length && <li className="bucket-first-line"><span>첫 번째 버킷리스트를 기다리고 있어요</span></li>}
-        </ol>
-        <footer><span>ONLY US</span><button type="button" onClick={() => setOpen(true)}>메모와 함께 추가하기</button></footer>
-      </section>
-    );
-  }
-
   return (
     <div className={`notes-board notes-board-${kind}`}>
       <section className={`notes-hero ${kind === "bucket" ? "is-no-action" : ""}`}>
@@ -398,7 +385,23 @@ export function CoupleNotesBoard({
           <input value={query} onChange={event => setQuery(event.target.value)} placeholder="목록에서 검색" aria-label="목록 검색" />
         </label>
       </div>
-      {kind === "bucket" ? renderBucketPaper() : !notes.length ? (
+      {canReorderNotes && <p className="notes-reorder-hint" role="status">카드를 끌어 순서를 바꿀 수 있어요.</p>}
+      {kind === "bucket" ? (
+        <BucketWishBoard
+          notes={notes}
+          setNotes={setNotes}
+          visibleNotes={visibleNotes}
+          persist={persist}
+          statuses={statuses}
+          completedStatusId={completedStatus}
+          collaborators={collaborators}
+          progress={progress}
+          doneCount={highlightCount}
+          onError={setError}
+          onRefresh={() => router.refresh()}
+          onOpenDialog={() => setOpen(true)}
+        />
+      ) : !notes.length ? (
         <div className="notes-empty">
           <span><NoteKindIcon kind={kind} /></span>
           <h2>{meta.emptyTitle}</h2>
@@ -422,7 +425,7 @@ export function CoupleNotesBoard({
           })}
         </div>
       ) : (
-        <ul className="note-list">{visibleNotes.map((note, index) => renderNoteCard(note, index))}</ul>
+        <ul className={`note-list${canReorderNotes ? " is-reorderable" : ""}`}>{visibleNotes.map((note, index) => renderNoteCard(note, notes.findIndex(item => item.id === note.id) ?? index))}</ul>
       )}
       {error && !open && <p className="notes-toast" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></p>}
       {open && (

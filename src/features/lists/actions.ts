@@ -1,5 +1,6 @@
 "use server";
 
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import { recordCoupleActivity } from "@/features/collaboration/actions";
@@ -30,7 +31,7 @@ function toNote(row: NoteRow): CoupleNote {
   };
 }
 
-export async function listNotes(kind: NoteKind): Promise<{ persist: boolean; notes: CoupleNote[] }> {
+const loadNotes = cache(async (kind: NoteKind): Promise<{ persist: boolean; notes: CoupleNote[] }> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { persist: false, notes: [] };
   const supabase = await createClient();
@@ -44,6 +45,10 @@ export async function listNotes(kind: NoteKind): Promise<{ persist: boolean; not
     .order("created_at", { ascending: false });
   if (!data) return { persist: true, notes: [] };
   return { persist: true, notes: data.map(row => toNote(row as NoteRow)) };
+});
+
+export async function listNotes(kind: NoteKind) {
+  return loadNotes(kind);
 }
 
 export async function createNotesBatch(
@@ -76,6 +81,15 @@ export async function createNote(kind: NoteKind, input: { title: string; detail:
   const title = input.title.trim();
   if (!title) return { error: "제목을 입력해 주세요." };
   const allowed = NOTE_STATUS[kind].some(item => item.id === input.status) ? input.status : NOTE_STATUS[kind][0].id;
+  const { data: firstRow } = await supabase
+    .from("couple_notes")
+    .select("sort_order")
+    .eq("couple_id", session.coupleId)
+    .eq("kind", kind)
+    .order("sort_order", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const sortOrder = firstRow ? firstRow.sort_order - 1 : 0;
   const { data, error } = await supabase
     .from("couple_notes")
     .insert({
@@ -85,6 +99,7 @@ export async function createNote(kind: NoteKind, input: { title: string; detail:
       detail: input.detail.trim(),
       extra: input.extra.trim(),
       status: allowed,
+      sort_order: sortOrder,
       created_by: session.userId,
     })
     .select("id, kind, title, detail, status, extra, created_at, created_by")
@@ -100,6 +115,60 @@ export async function createNote(kind: NoteKind, input: { title: string; detail:
     title: kind === "vault" ? "보관함에 남겼어요" : kind === "gift" ? "선물 계획을 남겼어요" : "버킷리스트를 남겼어요",
     detail: title,
   });
+  return { note: toNote(data as NoteRow) };
+}
+
+export async function reorderNotes(kind: NoteKind, orderedIds: string[]): Promise<{ ok: true } | { error: string }> {
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return { error: "로그인 후 순서를 바꿀 수 있어요." };
+  const supabase = await createClient();
+  if (!supabase) return { error: "Supabase 환경 변수가 아직 없어요." };
+  const uniqueIds = [...new Set(orderedIds)];
+  if (!uniqueIds.length) return { ok: true };
+  const { data: rows } = await supabase
+    .from("couple_notes")
+    .select("id")
+    .eq("couple_id", session.coupleId)
+    .eq("kind", kind)
+    .in("id", uniqueIds);
+  if (!rows || rows.length !== uniqueIds.length) return { error: "순서를 저장하지 못했어요." };
+  const results = await Promise.all(uniqueIds.map((id, index) =>
+    supabase
+      .from("couple_notes")
+      .update({ sort_order: index })
+      .eq("id", id)
+      .eq("couple_id", session.coupleId),
+  ));
+  const failed = results.find(result => result.error);
+  if (failed?.error) return { error: failed.error.message };
+  return { ok: true };
+}
+
+export async function updateNoteContent(
+  id: string,
+  patch: { title?: string; detail?: string; extra?: string },
+): Promise<{ note: CoupleNote } | { error: string }> {
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return { error: "로그인 후 수정할 수 있어요." };
+  const supabase = await createClient();
+  if (!supabase) return { error: "Supabase 환경 변수가 아직 없어요." };
+  const updates: { title?: string; detail?: string; extra?: string } = {};
+  if (patch.title !== undefined) {
+    const title = patch.title.trim();
+    if (!title) return { error: "제목을 입력해 주세요." };
+    updates.title = title;
+  }
+  if (patch.detail !== undefined) updates.detail = patch.detail.trim();
+  if (patch.extra !== undefined) updates.extra = patch.extra.trim();
+  if (!Object.keys(updates).length) return { error: "바꿀 내용이 없어요." };
+  const { data, error } = await supabase
+    .from("couple_notes")
+    .update(updates)
+    .eq("id", id)
+    .eq("couple_id", session.coupleId)
+    .select("id, kind, title, detail, status, extra, created_at, created_by")
+    .single();
+  if (error || !data) return { error: error?.message ?? "저장하지 못했어요." };
   return { note: toNote(data as NoteRow) };
 }
 
