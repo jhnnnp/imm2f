@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { AppLink } from "./AppLink";
 import { NAVIGATION } from "./navigation";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { signOut } from "@/features/auth/session";
@@ -23,18 +23,18 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar" aria-label="주요 메뉴">
-      <Link className="brand" href="/" aria-label="홈으로 이동">
+      <AppLink className="brand" href="/" aria-label="홈으로 이동">
         <span className="brand-mark"><BrandMark /></span>
         <span className="brand-copy"><strong>ONLY US</strong><small>PRIVATE SPACE FOR TWO</small></span>
-      </Link>
+      </AppLink>
       <nav className="nav-list">
         {NAVIGATION.map((item, index) => {
           if ("section" in item) return <p key={`${item.section}-${index}`}>{item.section}</p>;
           const active = ready && (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href));
           return (
-            <Link className={`nav-item ${active ? "is-active" : ""}`} href={item.href} key={item.href} suppressHydrationWarning>
+            <AppLink className={`nav-item ${active ? "is-active" : ""}`} href={item.href} key={item.href} suppressHydrationWarning>
               <span className="nav-icon-wrap"><SidebarIcon name={item.iconName} /></span>{item.label}
-            </Link>
+            </AppLink>
           );
         })}
       </nav>
@@ -52,16 +52,16 @@ export function Sidebar() {
           </div>
         </div>
         {session.mode === "authenticated" && session.partner
-          ? <Link className="couple-card-action" href="/invite">
+          ? <AppLink className="couple-card-action" href="/invite">
             <span>파트너 관리</span><b aria-hidden="true">→</b>
-          </Link>
+          </AppLink>
           : session.mode === "setup_error"
             ? <button className="couple-card-action" type="button" onClick={() => void signOut()}>
               <span>다시 로그인</span><b aria-hidden="true">→</b>
             </button>
-            : <Link className="couple-card-action" href={session.mode === "authenticated" ? "/invite" : "/login"}>
+            : <AppLink className="couple-card-action" href={session.mode === "authenticated" ? "/invite" : "/login"}>
               <span>{session.mode === "authenticated" ? "파트너 초대" : "로그인"}</span><b aria-hidden="true">→</b>
-            </Link>}
+            </AppLink>}
       </div>
     </aside>
   );

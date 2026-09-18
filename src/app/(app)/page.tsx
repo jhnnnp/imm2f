@@ -16,7 +16,7 @@ function seoulTodayIso() {
 export default async function HomePage() {
   const [placesResult, memoriesResult, trip, date, drafts] = await Promise.all([
     listPlaces(),
-    listMemories(),
+    listMemories({ photos: "cover" }),
     loadCouplePlan("trip"),
     loadCouplePlan("date"),
     listDateDrafts(),

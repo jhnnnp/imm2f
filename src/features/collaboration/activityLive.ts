@@ -143,8 +143,8 @@ function ensureFeed(coupleId: string) {
   };
   document.addEventListener("visibilitychange", onVisible);
   const live = subscribeCoupleActivities(coupleId, scheduleReload);
-  void live.connected.then(() => {
-    if (cancelled) return;
+  void live.connected.then(connected => {
+    if (cancelled || connected) return;
     poll = window.setInterval(scheduleReload, 4000);
   });
 

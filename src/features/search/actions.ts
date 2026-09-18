@@ -15,7 +15,7 @@ export async function searchWorkspace(query: string): Promise<WorkspaceHit[]> {
   const q = query.trim().toLowerCase();
   const [{ places }, { memories }, trip, date] = await Promise.all([
     listPlaces(),
-    listMemories(),
+    listMemories({ photos: "none" }),
     loadCouplePlan("trip"),
     loadCouplePlan("date"),
   ]);

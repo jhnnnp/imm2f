@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
@@ -56,7 +57,7 @@ function optionalCost(value: number | null | undefined) {
   return value == null || Number.isNaN(value) ? null : value;
 }
 
-export async function listPlaces(): Promise<{ persist: boolean; places: Place[] }> {
+export const listPlaces = cache(async (): Promise<{ persist: boolean; places: Place[] }> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { persist: false, places: [] };
 
@@ -75,7 +76,7 @@ export async function listPlaces(): Promise<{ persist: boolean; places: Place[] 
     persist: true,
     places: data.map(row => toPlace(row, prefs, session.userId, session.partner?.userId ?? null)),
   };
-}
+});
 
 export async function loadTourPlaceDetail(contentId: string, category: PlaceCategoryId) {
   return loadTourPlaceDetailRemote(contentId, category);

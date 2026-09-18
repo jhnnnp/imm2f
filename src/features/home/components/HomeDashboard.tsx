@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { AppLink as Link } from "@/components/layout/AppLink";
 import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import type { Place } from "@/features/places/types/place";
 import type { Memory } from "@/features/memories/types";

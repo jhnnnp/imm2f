@@ -7,6 +7,6 @@ import { listArchivedTripPlans, loadCouplePlan } from "@/features/planning/actio
 export const metadata: Metadata = { title: "Our Map" };
 
 export default async function OurMapPage() {
-  const [{ places }, { memories }, trip, archivedTrips] = await Promise.all([listPlaces(), listMemories(), loadCouplePlan("trip"), listArchivedTripPlans()]);
+  const [{ places }, { memories }, trip, archivedTrips] = await Promise.all([listPlaces(), listMemories({ photos: "cover" }), loadCouplePlan("trip"), listArchivedTripPlans()]);
   return <CoupleMap places={places} memories={memories} trip={trip} archivedTrips={archivedTrips} />;
 }

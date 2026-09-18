@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { AppLink as Link } from "@/components/layout/AppLink";
 import { CommandPalette } from "@/components/shared/CommandPalette";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { initialFromName } from "@/features/auth/types";

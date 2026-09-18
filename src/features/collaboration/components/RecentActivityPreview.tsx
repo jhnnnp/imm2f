@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { AppLink as Link } from "@/components/layout/AppLink";
 import { useCoupleActivityFeed } from "../activityLive";
 import { hrefForActivity } from "../types";
 

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
@@ -82,7 +83,15 @@ function toMemory(row: MemoryRow, photos: PhotoRow[], signedUrls = new Map<strin
   };
 }
 
-export async function listMemories(): Promise<{ persist: boolean; memories: Memory[] }> {
+function coverPhotos(photoRows: PhotoRow[]) {
+  const first = new Map<string, PhotoRow>();
+  for (const photo of [...photoRows].sort((a, b) => a.sort_order - b.sort_order)) {
+    if (!first.has(photo.memory_id)) first.set(photo.memory_id, photo);
+  }
+  return [...first.values()];
+}
+
+const loadMemories = cache(async (photoMode: "all" | "cover" | "none"): Promise<{ persist: boolean; memories: Memory[] }> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { persist: false, memories: [] };
   const supabase = await createClient();
@@ -96,21 +105,27 @@ export async function listMemories(): Promise<{ persist: boolean; memories: Memo
   if (error || !data) return { persist: true, memories: [] };
 
   const ids = data.map(row => row.id);
-  const { data: photos } = ids.length
+  const { data: photos } = ids.length && photoMode !== "none"
     ? await supabase.from("memory_photos").select("*").in("memory_id", ids)
     : { data: [] as PhotoRow[] };
 
   const photoRows = (photos ?? []) as PhotoRow[];
-  const signedEntries = await Promise.all(photoRows.filter(photo => photo.storage_path).map(async photo => {
+  const toSign = photoMode === "cover" ? coverPhotos(photoRows) : photoRows;
+  const signedEntries = await Promise.all(toSign.filter(photo => photo.storage_path).map(async photo => {
     const signed = await supabase.storage.from("memory-photos").createSignedUrl(photo.storage_path!, 60 * 60);
     return [photo.id, signed.data?.signedUrl ?? ""] as const;
   }));
   const signedUrls = new Map(signedEntries.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
+  const mappedPhotos = photoMode === "cover" ? coverPhotos(photoRows) : photoRows;
 
   return {
     persist: true,
-    memories: (data as MemoryRow[]).map(row => toMemory(row, photoRows, signedUrls)),
+    memories: (data as MemoryRow[]).map(row => toMemory(row, mappedPhotos, signedUrls)),
   };
+});
+
+export async function listMemories(options?: { photos?: "all" | "cover" | "none" }) {
+  return loadMemories(options?.photos ?? "all");
 }
 
 export async function listMemoryCalendarMarks(): Promise<Array<{ id: string; title: string; happenedOn: string }>> {
