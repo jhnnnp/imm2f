@@ -2,17 +2,20 @@ import type { Place } from "../types/place";
 import { isDiscoverPlace } from "../discover";
 import { PlaceStatusBadge } from "./PlaceStatusBadge";
 import { PlaceGraphicCover } from "./PlaceGraphicCover";
+import { PlaceTripStamp } from "./PlaceTripStampIcon";
 
 export function PlaceCard({
   place,
   selected,
   onSelect,
   onToggleSave,
+  onTripSchedule = false,
 }: {
   place: Place;
   selected: boolean;
   onSelect: () => void;
   onToggleSave: () => void;
+  onTripSchedule?: boolean;
 }) {
   const discover = isDiscoverPlace(place);
   const saved = ["want", "must_visit", "revisit"].includes(place.userStatus);
@@ -20,6 +23,7 @@ export function PlaceCard({
     <button className={`place-image tone-${place.visualTone} ${place.image ? "" : "is-empty"}`} onClick={onSelect} aria-label={`${place.name} ${discover ? "미리보기" : "상세 보기"}`}>
       {place.image ? <img src={place.image} alt="" /> : <PlaceGraphicCover place={place} />}
       {place.userFit + place.partnerFit > 180 && <span className="match">BEST MATCH</span>}
+      {onTripSchedule && !discover ? <PlaceTripStamp /> : null}
       {discover && <span className="match soft">둘러보기</span>}
     </button>
     <button className={`heart ${saved ? "is-on" : ""}`} onClick={onToggleSave} aria-label={saved ? "저장됨" : "이 장소 저장"}>{saved ? "♥" : "♡"}</button>

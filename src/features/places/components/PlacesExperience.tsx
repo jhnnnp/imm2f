@@ -8,7 +8,7 @@ import { ContextPanel } from "@/components/layout/ContextPanel";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { PLACE_ADMINISTRATIVE_AREAS, PLACE_AREA_GROUPS, areaGroupById, browseDiscoverInput } from "../config/regions";
-import { searchDiscoverPlaces, loadTourPlaceDetail, lookupPlaceLocation, updateMyPlaceStatus, updatePlaceLocation } from "../actions";
+import { searchDiscoverPlaces, loadTourPlaceDetail, lookupPlaceLocation, updateMyPlaceStatus, updatePlaceDescription, updatePlaceLocation } from "../actions";
 import { applyPlaceLocation } from "../location";
 import { addItemToCouplePlan } from "@/features/planning/actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
@@ -19,13 +19,27 @@ import { PlaceCreateDialog } from "./PlaceCreateDialog";
 import { PlaceDetailPanel } from "./PlaceDetailPanel";
 import { PlaceDiscoverResults } from "./PlaceDiscoverResults";
 import { PlaceCategoryIcon } from "./PlaceCategoryIcon";
-import { PlacesMapPane } from "./PlacesMapPane";
+import { PlaceTripFilterIcon } from "./PlaceTripFilterIcon";
+import { PlaceTripStamp } from "./PlaceTripStampIcon";
+import { placeIsOnAnyTrip, tripScheduleStopsForPlace } from "../tripPlaceMatch";
+import type { ArchivedTripPlan } from "@/features/planning/actions";
+import type { PlanItem } from "@/features/planning/types/plan";
+import dynamic from "next/dynamic";
+
+const PlacesMapPane = dynamic(
+  () => import("./PlacesMapPane").then(mod => mod.PlacesMapPane),
+  {
+    ssr: false,
+    loading: () => <div className="places-map-wrap page-loading" aria-busy="true"><div className="page-loading-title" /><div className="page-loading-copy" /></div>,
+  },
+);
 import { withObjectParticle } from "@/lib/korean";
 
 type Section = "saved" | "search" | "browse" | "map";
-type Filter = "all" | "want" | "visited" | "revisit" | "not_interested";
+type Filter = "all" | "want" | "visited" | "revisit" | "not_interested" | "trip";
 type Layout = "grid" | "list";
 type DialogMode = "confirm" | "manual";
+type SavedCategoryFilter = "all" | PlaceCategoryId;
 const SAVED: PlacePreferenceStatus[] = ["want", "must_visit", "revisit"];
 
 function isKeptInArchive(place: Place) {
@@ -39,7 +53,21 @@ const SECTIONS: ReadonlyArray<{ id: Section; label: string }> = [
   { id: "map", label: "지도에서 찾기" },
 ];
 
-export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: { initialPlaces: Place[]; persist: boolean; initialSelectedId?: string }) {
+export function PlacesExperience({
+  initialPlaces,
+  persist,
+  initialSelectedId,
+  initialTripItems = [],
+  tripPlanTitle = "",
+  initialArchivedTrips = [],
+}: {
+  initialPlaces: Place[];
+  persist: boolean;
+  initialSelectedId?: string;
+  initialTripItems?: PlanItem[];
+  tripPlanTitle?: string;
+  initialArchivedTrips?: ArchivedTripPlan[];
+}) {
   const searchParams = useSearchParams();
   const source = searchParams.get("from") === "date" ? "date" : searchParams.get("from") === "trip" ? "trip" : null;
   const selectedParam = searchParams.get("selected") ?? initialSelectedId ?? "";
@@ -51,7 +79,9 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
       : initialPlaces.find(isKeptInArchive)?.id ?? "",
   );
   const [filter, setFilter] = useState<Filter>("all");
-  const [savedCategory, setSavedCategory] = useState("all");
+  const [savedCategory, setSavedCategory] = useState<SavedCategoryFilter>("all");
+  const [tripItems, setTripItems] = useState<PlanItem[]>(initialTripItems);
+  const [archivedTrips] = useState<ArchivedTripPlan[]>(initialArchivedTrips);
   const [savedQuery, setSavedQuery] = useState("");
   const [layout, setLayout] = useState<Layout>("grid");
   const [notice, setNotice] = useState("");
@@ -59,6 +89,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("manual");
   const [pendingCandidate, setPendingCandidate] = useState<DiscoverCandidate | null>(null);
+  const [pendingInitialDescription, setPendingInitialDescription] = useState("");
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchCategory, setSearchCategory] = useState<PlaceCategoryId | "all">("all");
@@ -109,17 +140,35 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     notInterested: archivedPlaces.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "not_interested" || value === "dislike")).length,
   }), [archivedPlaces]);
 
+  const tripPlaceCount = useMemo(
+    () => archivedPlaces.filter(place => placeIsOnAnyTrip(tripItems, archivedTrips, place)).length,
+    [archivedPlaces, tripItems, archivedTrips],
+  );
+
+  const tripLinkedPlaceIds = useMemo(
+    () => new Set(archivedPlaces.filter(place => placeIsOnAnyTrip(tripItems, archivedTrips, place)).map(place => place.id)),
+    [archivedPlaces, tripItems, archivedTrips],
+  );
+
   const visibleSaved = useMemo(() => archivedPlaces.filter(place => {
     const statuses: PlacePreferenceStatus[] = [place.userStatus, place.partnerStatus];
-    const matchesStatus = filter === "all"
-      || (filter === "want" && statuses.some(value => value === "want" || value === "must_visit"))
-      || (filter === "not_interested" && statuses.some(value => value === "not_interested" || value === "dislike"))
-      || statuses.includes(filter);
-    return matchesStatus && (savedCategory === "all" || place.category === savedCategory) && place.name.toLowerCase().includes(savedQuery.toLowerCase());
-  }), [archivedPlaces, filter, savedCategory, savedQuery]);
+    const matchesStatus = filter === "trip"
+      ? placeIsOnAnyTrip(tripItems, archivedTrips, place)
+      : filter === "all"
+        || (filter === "want" && statuses.some(value => value === "want" || value === "must_visit"))
+        || (filter === "not_interested" && statuses.some(value => value === "not_interested" || value === "dislike"))
+        || statuses.includes(filter);
+    const matchesCategory = savedCategory === "all" || place.category === savedCategory;
+    return matchesStatus && matchesCategory && place.name.toLowerCase().includes(savedQuery.toLowerCase());
+  }), [archivedPlaces, filter, savedCategory, savedQuery, tripItems, archivedTrips]);
 
   const selected = (section === "saved" ? archivedPlaces : [...discover, ...places]).find(place => place.id === selectedId)
     ?? (section === "saved" ? visibleSaved[0] : discover[0]);
+
+  const selectedTripStops = useMemo(
+    () => (selected ? tripScheduleStopsForPlace(tripItems, tripPlanTitle, archivedTrips, selected) : []),
+    [selected, tripItems, tripPlanTitle, archivedTrips],
+  );
 
   const runDiscover = useCallback(async (input: Parameters<typeof searchDiscoverPlaces>[0], append = false) => {
     const requestId = ++discoverRequestRef.current;
@@ -189,16 +238,43 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     void persistStatus(id, SAVED.includes(place.userStatus) ? "neutral" : "want");
   }
 
+  function closePlaceDialog() {
+    setDialogOpen(false);
+    setPendingCandidate(null);
+    setPendingInitialDescription("");
+  }
+
+  function memoSeedForSaveDialog(place: Place) {
+    if (isDiscoverPlace(place)) return "";
+    const memo = place.description?.trim() ?? "";
+    if (memo && place.recommendReason && memo === place.recommendReason.trim()) return "";
+    return memo;
+  }
+
   function openSave(place: Place) {
-    if (!isDiscoverPlace(place)) {
+    if (SAVED.includes(place.userStatus)) {
       toggleSave(place.id);
       return;
     }
+
     const candidate = placeToCandidate(place);
-    if (!candidate) return;
-    setPendingCandidate(candidate);
-    setDialogMode("confirm");
-    setDialogOpen(true);
+    if (candidate) {
+      const samePending = dialogOpen
+        && dialogMode === "confirm"
+        && pendingCandidate?.externalPlaceId === candidate.externalPlaceId
+        && pendingCandidate?.externalSource === candidate.externalSource;
+      if (samePending) {
+        closePlaceDialog();
+        return;
+      }
+      setPendingCandidate(candidate);
+      setPendingInitialDescription(memoSeedForSaveDialog(place));
+      setDialogMode("confirm");
+      setDialogOpen(true);
+      return;
+    }
+
+    toggleSave(place.id);
   }
 
   function openManual() {
@@ -241,6 +317,15 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     }
     if (!persist) return { error: "로그인 후 위치를 수정할 수 있어요." };
     const result = await updatePlaceLocation(selected.id, input);
+    if ("error" in result) return result;
+    applyPlace(result.place);
+  }
+
+  async function handleDescriptionSave(description: string) {
+    if (!selected) return { error: "장소를 먼저 골라 주세요." };
+    if (isDiscoverPlace(selected)) return { error: "저장한 뒤 메모를 남길 수 있어요." };
+    if (!persist) return { error: "로그인 후 메모를 수정할 수 있어요." };
+    const result = await updatePlaceDescription(selected.id, description);
     if ("error" in result) return result;
     applyPlace(result.place);
   }
@@ -296,6 +381,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
       return;
     }
     setNotice(result.duplicate ? `${selected.name}은 이미 ${label}에 있어요.` : `${withObjectParticle(selected.name)} ${label}에 넣었어요.`);
+    if (kind === "trip") setTripItems(result.items);
     emitCoupleActivitiesChanged();
   }
 
@@ -384,7 +470,18 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     <>
       {selected && (
         <ContextPanel>
-          <PlaceDetailPanel key={selected.id} place={selected} preferredPlan={source} onAdd={() => addSelectedToPlan("trip")} onAddDate={() => addSelectedToPlan("date")} onStatusChange={status => void persistStatus(selected.id, status)} onSave={() => openSave(selected)} onLocationSave={input => handleLocationSave(input)} />
+          <PlaceDetailPanel
+            key={selected.id}
+            place={selected}
+            preferredPlan={source}
+            tripScheduleStops={selectedTripStops}
+            onAdd={() => addSelectedToPlan("trip")}
+            onAddDate={() => addSelectedToPlan("date")}
+            onStatusChange={status => void persistStatus(selected.id, status)}
+            onSave={() => openSave(selected)}
+            onLocationSave={input => handleLocationSave(input)}
+            onDescriptionSave={description => handleDescriptionSave(description)}
+          />
         </ContextPanel>
       )}
       <div className="page-title-row">
@@ -421,13 +518,17 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
         <>
           <div className="segmented status-tabs" role="tablist" aria-label="장소 상태">
             {([
-              ["all", "전체", counts.all],
-              ["want", "가고 싶은 곳", counts.want],
-              ["visited", "다녀온 곳", counts.visited],
-              ["revisit", "또 가고 싶은 곳", counts.revisit],
-              ["not_interested", "관심 없는 곳", counts.notInterested],
-            ] as const).map(([id, label, count]) => (
-              <button className={filter === id ? "is-active" : ""} onClick={() => setFilter(id)} key={id} type="button" role="tab" aria-selected={filter === id}>{label} <b>{count}</b></button>
+              ["all", "전체", counts.all, null],
+              ["want", "가고 싶은 곳", counts.want, null],
+              ["trip", "여행", tripPlaceCount, "trip"] as const,
+              ["visited", "다녀온 곳", counts.visited, null],
+              ["revisit", "또 가고 싶은 곳", counts.revisit, null],
+              ["not_interested", "관심 없는 곳", counts.notInterested, null],
+            ] as const).map(([id, label, count, kind]) => (
+              <button className={filter === id ? "is-active" : ""} onClick={() => setFilter(id)} key={id} type="button" role="tab" aria-selected={filter === id}>
+                {kind === "trip" ? <PlaceTripFilterIcon className="status-tab-trip-icon" /> : null}
+                {label} <b>{count}</b>
+              </button>
             ))}
           </div>
           <div className="category-row">
@@ -604,14 +705,23 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
               {visibleSaved.map(place => (
                 <li key={place.id}>
                   <button type="button" className={`kakao-result ${selectedId === place.id ? "is-selected" : ""}`} onClick={() => setSelectedId(place.id)}>
-                    <b>{place.name}</b>
+                    <b className="place-list-title">{place.name}{tripLinkedPlaceIds.has(place.id) ? <PlaceTripStamp compact /> : null}</b>
                     <small>{place.categoryLabel} · {place.district}</small>
                   </button>
                 </li>
               ))}
             </ul>
           ) : (
-            <div className="place-grid">{visibleSaved.map(place => <PlaceCard key={place.id} place={place} selected={selectedId === place.id} onSelect={() => setSelectedId(place.id)} onToggleSave={() => toggleSave(place.id)} />)}</div>
+            <div className="place-grid">{visibleSaved.map(place => (
+              <PlaceCard
+                key={place.id}
+                place={place}
+                selected={selectedId === place.id}
+                onTripSchedule={tripLinkedPlaceIds.has(place.id)}
+                onSelect={() => setSelectedId(place.id)}
+                onToggleSave={() => toggleSave(place.id)}
+              />
+            ))}</div>
           )
         ) : (
           <div className="empty-soft">
@@ -709,7 +819,8 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
         mode={dialogMode}
         persist={persist}
         candidate={pendingCandidate}
-        onClose={() => setDialogOpen(false)}
+        initialDescription={pendingInitialDescription}
+        onClose={closePlaceDialog}
         onSaved={handleSaved}
       />
     </>

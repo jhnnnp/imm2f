@@ -177,8 +177,17 @@ export async function saveKakaoPlace(input: SaveKakaoPlaceInput): Promise<{ plac
 
   if (existing) {
     await ensureWantPreference(existing.id, session.userId);
-    const prefs = await loadPreferences([existing.id]);
-    return { place: toPlace(existing, prefs, session.userId, session.partner?.userId ?? null), duplicate: true };
+    const nextDescription = input.description.trim();
+    const { data: updated, error: updateError } = await supabase
+      .from("places")
+      .update({ description: nextDescription })
+      .eq("id", existing.id)
+      .select("*")
+      .single();
+    if (updateError) return { error: updateError.message };
+    const row = updated ?? existing;
+    const prefs = await loadPreferences([row.id]);
+    return { place: toPlace(row, prefs, session.userId, session.partner?.userId ?? null), duplicate: true };
   }
 
   const { data, error } = await supabase
@@ -219,8 +228,17 @@ export async function saveKakaoPlace(input: SaveKakaoPlaceInput): Promise<{ plac
         .maybeSingle();
       if (raced) {
         await ensureWantPreference(raced.id, session.userId);
-        const prefs = await loadPreferences([raced.id]);
-        return { place: toPlace(raced, prefs, session.userId, session.partner?.userId ?? null), duplicate: true };
+        const nextDescription = input.description.trim();
+        const { data: updated, error: updateError } = await supabase
+          .from("places")
+          .update({ description: nextDescription })
+          .eq("id", raced.id)
+          .select("*")
+          .single();
+        if (updateError) return { error: updateError.message };
+        const row = updated ?? raced;
+        const prefs = await loadPreferences([row.id]);
+        return { place: toPlace(row, prefs, session.userId, session.partner?.userId ?? null), duplicate: true };
       }
     }
     return { error: error.message };
@@ -336,6 +354,25 @@ export async function lookupPlaceLocation(name: string, input: PlaceLocationInpu
   const address = input.address.trim();
   if (!address) return { error: "주소를 입력해 주세요." };
   return { location: await resolvePlaceLocation(name, { address, district: input.district }) };
+}
+
+export async function updatePlaceDescription(placeId: string, description: string): Promise<{ place: Place } | { error: string }> {
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return { error: "로그인 후 메모를 수정할 수 있어요." };
+  const supabase = await createClient();
+  if (!supabase) return { error: "Supabase 환경 변수가 아직 없어요." };
+
+  const { data, error } = await supabase
+    .from("places")
+    .update({ description: description.trim() })
+    .eq("id", placeId)
+    .eq("couple_id", session.coupleId)
+    .select("*")
+    .single();
+  if (error || !data) return { error: error?.message ?? "메모를 저장하지 못했어요." };
+  revalidatePath("/");
+  const prefs = await loadPreferences([data.id]);
+  return { place: toPlace(data, prefs, session.userId, session.partner?.userId ?? null) };
 }
 
 export async function updatePlaceLocation(placeId: string, input: PlaceLocationInput): Promise<{ place: Place } | { error: string }> {

@@ -12,6 +12,7 @@ export function PlaceCreateDialog({
   mode,
   persist,
   candidate,
+  initialDescription = "",
   onClose,
   onSaved,
 }: {
@@ -19,11 +20,13 @@ export function PlaceCreateDialog({
   mode: "confirm" | "manual";
   persist: boolean;
   candidate: DiscoverCandidate | null;
+  initialDescription?: string;
   onClose: () => void;
   onSaved: (place: Place, notice: string) => void;
 }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [description, setDescription] = useState("");
   const [mounted, setMounted] = useState(false);
 
   useLayoutEffect(() => {
@@ -31,10 +34,16 @@ export function PlaceCreateDialog({
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setDescription("");
+      setError("");
+      setPending(false);
+      return;
+    }
+    setDescription(mode === "confirm" ? initialDescription : "");
     setError("");
     setPending(false);
-  }, [open, mode, candidate?.externalPlaceId]);
+  }, [open, mode, candidate?.externalPlaceId, candidate?.externalSource, initialDescription]);
 
   if (!open || !mounted) return null;
 
@@ -42,7 +51,7 @@ export function PlaceCreateDialog({
     if (!candidate) return;
     setPending(true);
     setError("");
-    const description = String(formData.get("description") ?? "").trim();
+    const nextDescription = String(formData.get("description") ?? description).trim();
 
     if (!persist) {
       setPending(false);
@@ -50,7 +59,7 @@ export function PlaceCreateDialog({
       return;
     }
 
-    const result = await saveKakaoPlace({ candidate, description, durationMinutes: 60, expectedCostTwo: null });
+    const result = await saveKakaoPlace({ candidate, description: nextDescription, durationMinutes: 60, expectedCostTwo: null });
     setPending(false);
     if ("error" in result) {
       setError(result.error);
@@ -68,7 +77,7 @@ export function PlaceCreateDialog({
       name: String(formData.get("name") ?? ""),
       category: String(formData.get("category") ?? "cafe") as PlaceCategoryId,
       district: String(formData.get("district") ?? ""),
-      description: String(formData.get("description") ?? ""),
+      description: String(formData.get("description") ?? description).trim(),
       durationMinutes: 60,
       expectedCostTwo: null,
     };
@@ -97,14 +106,14 @@ export function PlaceCreateDialog({
         <h2 id="place-create-title">{mode === "manual" ? "직접 입력" : "이 장소 저장"}</h2>
 
         {mode === "confirm" && candidate && (
-          <form className="auth-form" action={formData => void confirmKakao(formData)}>
+          <form className="auth-form" key={`confirm-${candidate.externalSource}-${candidate.externalPlaceId}`} action={formData => void confirmKakao(formData)}>
             <div className="kakao-picked">
               <b>{candidate.name}</b>
               <small>{candidate.categoryLabel} · {candidate.roadAddress || candidate.address}</small>
             </div>
             <label className="field">
               <span>우리의  메모</span>
-              <textarea name="description" rows={3} placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것" />
+              <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것" />
             </label>
             <p className="form-hint">저장하기 전까지는 목록에만 보여요.</p>
             {error && <p className="form-error" role="alert">{error}</p>}
@@ -116,7 +125,7 @@ export function PlaceCreateDialog({
         )}
 
         {mode === "manual" && (
-          <form className="auth-form" action={formData => void submitManual(formData)}>
+          <form className="auth-form" key="manual-place" action={formData => void submitManual(formData)}>
             <p className="form-hint">검색에서 못 찾은 장소만 직접 입력해요.</p>
             <label className="field">
               <span>이름</span>
@@ -134,7 +143,7 @@ export function PlaceCreateDialog({
             </label>
             <label className="field">
               <span>우리의  메모</span>
-              <textarea name="description" rows={3} placeholder="둘에게 이 장소가 특별한 이유" />
+              <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="둘에게 이 장소가 특별한 이유" />
             </label>
             {error && <p className="form-error" role="alert">{error}</p>}
             <div className="dialog-actions">

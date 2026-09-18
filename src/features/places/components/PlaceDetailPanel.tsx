@@ -1,10 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
+import type { TripScheduleStop } from "../tripPlaceMatch";
 import type { Place, PlacePreferenceStatus } from "../types/place";
 import { isDiscoverPlace } from "../discover";
 import { STATUS_META } from "../config/statusMeta";
 import { PlaceStatusBadge } from "./PlaceStatusBadge";
+import { PlaceTripStamp } from "./PlaceTripStampIcon";
 import { kakaoPlaceUrl, naverPlaceSearchUrl } from "../format";
 import { openPlaceMiniWindow } from "../openPlaceMini";
 import { PlaceGraphicCover } from "./PlaceGraphicCover";
@@ -25,7 +28,9 @@ export function PlaceDetailPanel({
   onStatusChange,
   onSave,
   onLocationSave,
+  onDescriptionSave,
   preferredPlan,
+  tripScheduleStops = [],
 }: {
   place: Place;
   onAdd: () => void;
@@ -33,7 +38,9 @@ export function PlaceDetailPanel({
   onStatusChange?: (status: PlacePreferenceStatus) => void;
   onSave?: () => void;
   onLocationSave?: (input: { address: string; district: string }) => Promise<{ error?: string } | void>;
+  onDescriptionSave?: (description: string) => Promise<{ error?: string } | void>;
   preferredPlan?: "trip" | "date" | null;
+  tripScheduleStops?: TripScheduleStop[];
 }) {
   const preview = isDiscoverPlace(place);
   const saved = HEART_SAVED.includes(place.userStatus);
@@ -42,14 +49,22 @@ export function PlaceDetailPanel({
     ? place.mapUrl
     : kakaoPlaceUrl(place.name, place.coordinates);
   const [editing, setEditing] = useState(false);
+  const [memoEditing, setMemoEditing] = useState(false);
+  const [memoDraft, setMemoDraft] = useState(place.description);
   const [pending, setPending] = useState(false);
+  const [memoPending, setMemoPending] = useState(false);
   const [error, setError] = useState("");
+  const [memoError, setMemoError] = useState("");
 
   useEffect(() => {
     setEditing(false);
+    setMemoEditing(false);
+    setMemoDraft(place.description);
     setPending(false);
+    setMemoPending(false);
     setError("");
-  }, [place.id]);
+    setMemoError("");
+  }, [place.id, place.description]);
 
   async function saveLocation(formData: FormData) {
     if (!onLocationSave) return;
@@ -67,9 +82,26 @@ export function PlaceDetailPanel({
     setEditing(false);
   }
 
+  async function saveMemo(event: React.FormEvent) {
+    event.preventDefault();
+    if (!onDescriptionSave) return;
+    setMemoPending(true);
+    setMemoError("");
+    const result = await onDescriptionSave(memoDraft);
+    setMemoPending(false);
+    if (result && "error" in result && result.error) {
+      setMemoError(result.error);
+      return;
+    }
+    setMemoEditing(false);
+  }
+
+  const memoText = place.description.trim();
+  const canEditMemo = !preview && Boolean(onDescriptionSave);
+
   return <div className="place-detail-panel">
     <div className={`detail-photo tone-${place.visualTone} ${place.image ? "" : "is-empty"}`}>{place.image ? <img src={place.image} alt={place.name} /> : <PlaceGraphicCover place={place} />}<span>{place.categoryLabel.toUpperCase()} · {preview ? "CANDIDATE" : "PLACE"}</span></div>
-    <div className="place-detail-head"><div><span className="eyebrow">{preview ? "PLACE PREVIEW" : "PLACE NOTE"}</span><h2>{place.name}</h2>
+    <div className="place-detail-head"><div><span className="eyebrow">{preview ? "PLACE PREVIEW" : "PLACE NOTE"}</span><h2 className="place-detail-title">{place.name}{!preview && tripScheduleStops.length > 0 ? <PlaceTripStamp compact /> : null}</h2>
       {!editing && (
         <p>
           {address}
@@ -95,7 +127,62 @@ export function PlaceDetailPanel({
         </div>
       </form>
     )}
-    {place.recommendReason ? <p className="detail-description">{place.recommendReason}</p> : place.description ? <p className="detail-description">{place.description}{place.description.endsWith(".") ? "" : "."}</p> : <p className="detail-description muted">{preview ? "저장하면 우리의  메모를 남길 수 있어요." : "아직 우리의  메모는 없어요."}</p>}
+    {place.recommendReason ? <p className="detail-description is-recommend">{place.recommendReason}</p> : null}
+    <section className="place-memo-block" aria-labelledby="place-memo-label">
+      <div className="place-memo-head">
+        <span id="place-memo-label" className="place-memo-label">우리 메모</span>
+        {canEditMemo && !memoEditing ? (
+          <button className="place-edit-link" type="button" onClick={() => { setMemoDraft(place.description); setMemoEditing(true); setMemoError(""); }}>
+            {memoText ? "수정" : "작성"}
+          </button>
+        ) : null}
+      </div>
+      {memoEditing ? (
+        <form className="place-memo-edit" onSubmit={event => void saveMemo(event)}>
+          <textarea
+            value={memoDraft}
+            onChange={event => setMemoDraft(event.target.value)}
+            rows={4}
+            placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것"
+            aria-label="우리 메모"
+            autoFocus
+          />
+          {memoError ? <p className="form-error" role="alert">{memoError}</p> : null}
+          <div className="dialog-actions">
+            <button className="outline-button" type="button" onClick={() => { setMemoEditing(false); setMemoDraft(place.description); setMemoError(""); }} disabled={memoPending}>취소</button>
+            <button className="primary-button" type="submit" disabled={memoPending}>{memoPending ? "저장 중..." : "메모 저장"}</button>
+          </div>
+        </form>
+      ) : memoText ? (
+        <p className="detail-description">{memoText}{memoText.endsWith(".") ? "" : "."}</p>
+      ) : (
+        <p className="detail-description muted">{preview ? "저장하면 우리의 메모를 남길 수 있어요." : "아직 우리의 메모는 없어요."}</p>
+      )}
+    </section>
+    {!preview && tripScheduleStops.length > 0 && (
+      <section className="place-trip-block" aria-labelledby="place-trip-label">
+        <div className="place-memo-head">
+          <span id="place-trip-label" className="place-memo-label">여행 일정</span>
+          <Link className="place-edit-link" href="/trip">여행 탭</Link>
+        </div>
+        <ul className="place-trip-stops">
+          {tripScheduleStops.map(stop => (
+            <li key={stop.key}>
+              <div className="place-trip-stop-head">
+                <span className="place-trip-day">
+                  {stop.scope === "archive" ? "지난 여행" : "진행 중"} · {stop.item.dayIndex + 1}일차 · {stop.item.startTime}
+                </span>
+                {stop.scope === "archive"
+                  ? <Link className="place-edit-link" href="/memories">기록 보기</Link>
+                  : null}
+              </div>
+              <p className="place-trip-plan-title">{stop.planTitle}{stop.startDate ? ` · ${stop.startDate}` : ""}</p>
+              {stop.item.memo.trim() ? <p>{stop.item.memo.trim()}</p> : <p className="muted">일정 메모 없음</p>}
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
     {place.coordinates && <PlaceLocationMap name={place.name} coordinates={place.coordinates} />}
     {preview && (place.detailedCategory || place.openingHours || place.detailFacts?.length) && <dl className="place-api-facts">
       {place.detailedCategory && <div><dt>분류</dt><dd>{place.detailedCategory.split(">").map(item => item.trim()).filter(Boolean).slice(-2).join(" · ")}</dd></div>}
