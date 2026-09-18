@@ -63,6 +63,7 @@ function syncCoupleTripRoute(map: MapLibreMap, pins: TripPin[], show: boolean) {
 }
 
 const DEFAULT_CENTER: [number, number] = [126.978, 37.5665];
+const EMPTY_JOURNEY_ITEMS: PlanItem[] = [];
 type PinLabel = "want" | "visited" | "revisit" | "memory";
 type PlacePin = { kind: "place"; id: string; label: Exclude<PinLabel, "memory">; place: Place; coordinates: [number, number] };
 type MemoryPin = { kind: "memory"; id: string; label: "memory"; memory: Memory; coordinates: [number, number] };
@@ -246,7 +247,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     return journeys.filter((journey, index) => journeys.findIndex(candidate => candidate.startDate === journey.startDate && candidate.title === journey.title && candidate.dayCount === journey.dayCount) === index);
   }, [tripTitle, tripDayCount, tripItems, archivedTrips, initialTrip.startDate]);
   const selectedJourney = tripJourneys.find(journey => journey.id === selectedJourneyId) ?? tripJourneys[0];
-  const journeyItems = selectedJourney?.items ?? [];
+  const journeyItems = selectedJourney?.items ?? EMPTY_JOURNEY_ITEMS;
 
   const displayPlaces = places;
 
@@ -301,7 +302,10 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     if (mode === "memories") return pin.kind === "memory";
     return pin.kind === "memory" && Number(pin.memory.happenedOn.slice(0, 4)) <= selectedYear;
   }), [pins, mode, selectedYear]);
-  const visiblePins = useMemo<MapPin[]>(() => mode === "trips" ? tripPins : modePins.filter(pin => pin.label !== "trip" && activeLabels.has(pin.label)), [mode, modePins, tripPins, activeLabels]);
+  const visiblePins = useMemo<MapPin[]>(() => {
+    if (mode === "trips") return tripPins;
+    return modePins.filter(pin => pin.label !== "trip" && activeLabels.has(pin.label));
+  }, [mode, modePins, tripPins, activeLabels]);
   const visiblePinsRef = useRef(visiblePins);
   const tripPinsRef = useRef(tripPins);
   const modeRef = useRef(mode);
@@ -349,7 +353,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     const sheetWidth = sheetEl?.offsetWidth ?? 200;
     const sheetHeight = sheetEl?.offsetHeight ?? 54;
     const otherPinPoints = pinScreenPoints(map, mapContainer, mapHost, pins, screenOffsets, pin.id);
-    setSheetAnchor(computeMemorySheetAnchor({
+    const next = computeMemorySheetAnchor({
       map,
       mapContainer,
       mapHost,
@@ -358,7 +362,15 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
       sheetWidth,
       sheetHeight,
       otherPinPoints,
-    }));
+    });
+    setSheetAnchor(current => (
+      current
+      && current.x === next.x
+      && current.y === next.y
+      && current.placement === next.placement
+        ? current
+        : next
+    ));
   }, []);
 
   useLayoutEffect(() => {
@@ -385,7 +397,7 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
       map?.off("resize", onMapChange);
       window.removeEventListener("resize", onMapChange);
     };
-  }, [selected, updateSheetAnchor, visiblePins]);
+  }, [selected, updateSheetAnchor]);
   useEffect(() => {
     if (!container.current) return;
     let disposed = false;
@@ -497,7 +509,8 @@ export function CoupleMap({ places: initialPlaces, memories, trip: initialTrip, 
     if (!map || mapState !== "ready") return;
     markersRef.current.forEach(marker => marker.remove());
     markersRef.current = [];
-    if (selected && !visiblePins.some(pin => pin.id === selected.id)) clearMapSelection(false);
+    const currentSelection = selectedRef.current;
+    if (currentSelection && !visiblePins.some(pin => pin.id === currentSelection.id)) clearMapSelection(false);
     if (!visiblePins.length) { framePins(map, [], viewMode, 480); return; }
     void import("maplibre-gl").then(maplibregl => {
       const pinCoordinates = visiblePins.map(item => item.coordinates);
