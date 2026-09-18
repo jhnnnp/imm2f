@@ -1390,7 +1390,40 @@ a.outline-button {
 .place-detail-head p {
   font-size: .64rem;
   color: var(--muted);
-  margin: 0
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap
+}
+
+.place-edit-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--sage-deep);
+  font: inherit;
+  font-size: .58rem;
+  font-weight: 650;
+  text-decoration: none
+}
+
+.place-edit-link:hover {
+  text-decoration: underline
+}
+
+.place-location-edit {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-outer, 12px);
+  background: var(--paper)
+}
+
+.place-location-edit .dialog-actions {
+  margin-top: 2px
 }
 
 .detail-heart {

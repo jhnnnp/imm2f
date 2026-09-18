@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import type { Place, PlacePreferenceStatus } from "../types/place";
 import { isDiscoverPlace } from "../discover";
 import { STATUS_META } from "../config/statusMeta";
@@ -21,6 +24,7 @@ export function PlaceDetailPanel({
   onAddDate,
   onStatusChange,
   onSave,
+  onLocationSave,
   preferredPlan,
 }: {
   place: Place;
@@ -28,6 +32,7 @@ export function PlaceDetailPanel({
   onAddDate?: () => void;
   onStatusChange?: (status: PlacePreferenceStatus) => void;
   onSave?: () => void;
+  onLocationSave?: (input: { address: string; district: string }) => Promise<{ error?: string } | void>;
   preferredPlan?: "trip" | "date" | null;
 }) {
   const preview = isDiscoverPlace(place);
@@ -36,9 +41,60 @@ export function PlaceDetailPanel({
   const kakaoUrl = place.externalSource === "kakao" && place.mapUrl
     ? place.mapUrl
     : kakaoPlaceUrl(place.name, place.coordinates);
+  const [editing, setEditing] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setEditing(false);
+    setPending(false);
+    setError("");
+  }, [place.id]);
+
+  async function saveLocation(formData: FormData) {
+    if (!onLocationSave) return;
+    setPending(true);
+    setError("");
+    const result = await onLocationSave({
+      address: String(formData.get("address") ?? ""),
+      district: String(formData.get("district") ?? ""),
+    });
+    setPending(false);
+    if (result && "error" in result && result.error) {
+      setError(result.error);
+      return;
+    }
+    setEditing(false);
+  }
+
   return <div className="place-detail-panel">
     <div className={`detail-photo tone-${place.visualTone} ${place.image ? "" : "is-empty"}`}>{place.image ? <img src={place.image} alt={place.name} /> : <PlaceGraphicCover place={place} />}<span>{place.categoryLabel.toUpperCase()} · {preview ? "CANDIDATE" : "PLACE"}</span></div>
-    <div className="place-detail-head"><div><span className="eyebrow">{preview ? "PLACE PREVIEW" : "PLACE NOTE"}</span><h2>{place.name}</h2><p>{address}</p></div>{!preview && <button className={`detail-heart ${saved ? "is-on" : ""}`} type="button" aria-pressed={saved} aria-label={saved ? "가고 싶어요 해제" : "가고 싶어요"} onClick={() => onSave?.()}>{saved ? "♥" : "♡"}</button>}</div>
+    <div className="place-detail-head"><div><span className="eyebrow">{preview ? "PLACE PREVIEW" : "PLACE NOTE"}</span><h2>{place.name}</h2>
+      {!editing && (
+        <p>
+          {address}
+          {onLocationSave && <button className="place-edit-link" type="button" onClick={() => setEditing(true)}>수정</button>}
+        </p>
+      )}
+    </div>{!preview && <button className={`detail-heart ${saved ? "is-on" : ""}`} type="button" aria-pressed={saved} aria-label={saved ? "가고 싶어요 해제" : "가고 싶어요"} onClick={() => onSave?.()}>{saved ? "♥" : "♡"}</button>}</div>
+    {editing && (
+      <form className="place-location-edit" action={formData => void saveLocation(formData)}>
+        <label className="field">
+          <span>주소</span>
+          <input name="address" required defaultValue={place.roadAddress || place.address || ""} placeholder="전북 군산시 경촌4길 14" />
+        </label>
+        <label className="field">
+          <span>동네</span>
+          <input name="district" defaultValue={place.district} placeholder="군산시 경암동" />
+        </label>
+        <p className="form-hint">구석구석 위치가 어긋나면 주소로 카카오 좌표를 다시 맞춰요.</p>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="dialog-actions">
+          <button className="outline-button" type="button" onClick={() => { setEditing(false); setError(""); }}>취소</button>
+          <button className="primary-button" type="submit" disabled={pending}>{pending ? "맞추는 중..." : "위치 저장"}</button>
+        </div>
+      </form>
+    )}
     {place.recommendReason ? <p className="detail-description">{place.recommendReason}</p> : place.description ? <p className="detail-description">{place.description}{place.description.endsWith(".") ? "" : "."}</p> : <p className="detail-description muted">{preview ? "저장하면 우리의  메모를 남길 수 있어요." : "아직 우리의  메모는 없어요."}</p>}
     {place.coordinates && <PlaceLocationMap name={place.name} coordinates={place.coordinates} />}
     {preview && (place.detailedCategory || place.openingHours || place.detailFacts?.length) && <dl className="place-api-facts">

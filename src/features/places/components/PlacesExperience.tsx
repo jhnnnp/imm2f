@@ -7,7 +7,8 @@ import { ContextPanel } from "@/components/layout/ContextPanel";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { PLACE_ADMINISTRATIVE_AREAS, PLACE_AREA_GROUPS, areaGroupById, browseDiscoverInput } from "../config/regions";
-import { searchDiscoverPlaces, loadTourPlaceDetail, updateMyPlaceStatus } from "../actions";
+import { searchDiscoverPlaces, loadTourPlaceDetail, lookupPlaceLocation, updateMyPlaceStatus, updatePlaceLocation } from "../actions";
+import { applyPlaceLocation } from "../location";
 import { addItemToCouplePlan } from "@/features/planning/actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { isDiscoverPlace, mergeCandidateWithSaved, placeToCandidate, uniqueByExternalId } from "../discover";
@@ -215,6 +216,26 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     if (source) setNoticeHref(source === "date" ? "/date" : "/trip");
   }
 
+  function applyPlace(place: Place) {
+    const same = (item: Place) => item.id === place.id || Boolean(place.externalPlaceId && item.externalPlaceId === place.externalPlaceId && item.externalSource === place.externalSource);
+    setPlaces(current => current.map(item => same(item) ? { ...item, ...place } : item));
+    setDiscover(current => current.map(item => same(item) ? { ...item, ...place } : item));
+  }
+
+  async function handleLocationSave(input: { address: string; district: string }) {
+    if (!selected) return { error: "장소를 먼저 골라 주세요." };
+    if (isDiscoverPlace(selected)) {
+      const result = await lookupPlaceLocation(selected.name, input);
+      if ("error" in result) return result;
+      applyPlace(applyPlaceLocation(selected, result.location));
+      return;
+    }
+    if (!persist) return { error: "로그인 후 위치를 수정할 수 있어요." };
+    const result = await updatePlaceLocation(selected.id, input);
+    if ("error" in result) return result;
+    applyPlace(result.place);
+  }
+
   function handleSection(next: Section) {
     setSection(next);
     if (next === "map") setLayout("grid");
@@ -354,7 +375,7 @@ export function PlacesExperience({ initialPlaces, persist, initialSelectedId }: 
     <>
       {selected && (
         <ContextPanel>
-          <PlaceDetailPanel place={selected} preferredPlan={source} onAdd={() => addSelectedToPlan("trip")} onAddDate={() => addSelectedToPlan("date")} onStatusChange={status => void persistStatus(selected.id, status)} onSave={() => openSave(selected)} />
+          <PlaceDetailPanel key={selected.id} place={selected} preferredPlan={source} onAdd={() => addSelectedToPlan("trip")} onAddDate={() => addSelectedToPlan("date")} onStatusChange={status => void persistStatus(selected.id, status)} onSave={() => openSave(selected)} onLocationSave={input => handleLocationSave(input)} />
         </ContextPanel>
       )}
       <div className="page-title-row">

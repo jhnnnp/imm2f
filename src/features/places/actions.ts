@@ -13,6 +13,7 @@ import { applyRanking, rankDiscoverCandidates, type RankedCandidate } from "@/li
 import { mapPlaceRow, visualToneForCategory } from "./mappers";
 import { discoverSearchCategories, isAllowedKakaoDiscoverPlace, kakaoGroupCode } from "./config/kakaoCategories";
 import { PLACE_CATEGORIES, usesTourApi } from "./config/placeCategories";
+import { resolvePlaceLocation, type PlaceLocationInput, type PlaceLocationPatch } from "./location";
 import type { DiscoverCandidate, Place, PlaceCategoryId, PlacePreferenceStatus } from "./types/place";
 import type { Database } from "@/lib/supabase/database.types";
 
@@ -335,4 +336,47 @@ export async function updateMyPlaceStatus(placeId: string, status: PlacePreferen
   }
   revalidatePath("/");
   return { ok: true };
+}
+
+export async function lookupPlaceLocation(name: string, input: PlaceLocationInput): Promise<{ location: PlaceLocationPatch } | { error: string }> {
+  const address = input.address.trim();
+  if (!address) return { error: "주소를 입력해 주세요." };
+  return { location: await resolvePlaceLocation(name, { address, district: input.district }) };
+}
+
+export async function updatePlaceLocation(placeId: string, input: PlaceLocationInput): Promise<{ place: Place } | { error: string }> {
+  const session = await getAppSession();
+  if (session.mode !== "authenticated") return { error: "로그인 후 위치를 수정할 수 있어요." };
+  const supabase = await createClient();
+  if (!supabase) return { error: "Supabase 환경 변수가 아직 없어요." };
+  const address = input.address.trim();
+  if (!address) return { error: "주소를 입력해 주세요." };
+
+  const { data: current, error: loadError } = await supabase
+    .from("places")
+    .select("*")
+    .eq("id", placeId)
+    .eq("couple_id", session.coupleId)
+    .maybeSingle();
+  if (loadError || !current) return { error: loadError?.message ?? "장소를 찾지 못했어요." };
+
+  const patch = await resolvePlaceLocation(current.name, { address, district: input.district });
+  const { data, error } = await supabase
+    .from("places")
+    .update({
+      address: patch.address,
+      road_address: patch.roadAddress || null,
+      district: patch.district,
+      lng: patch.coordinates?.[0] ?? current.lng,
+      lat: patch.coordinates?.[1] ?? current.lat,
+      map_url: current.external_source === "kakao" && patch.mapUrl ? patch.mapUrl : current.map_url,
+    })
+    .eq("id", placeId)
+    .eq("couple_id", session.coupleId)
+    .select("*")
+    .single();
+  if (error || !data) return { error: error?.message ?? "위치를 저장하지 못했어요." };
+  revalidatePath("/");
+  const prefs = await loadPreferences([data.id]);
+  return { place: toPlace(data, prefs, session.userId, session.partner?.userId ?? null) };
 }
