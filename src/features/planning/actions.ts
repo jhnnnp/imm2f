@@ -95,8 +95,10 @@ async function attachStoredPlanCoordinates(
   items: PlanItem[],
 ) {
   if (!items.length) return items;
-  const uuidIds = [...new Set(items.map(item => item.placeId).filter(isUuidPlaceId))];
-  const discoverIds = [...new Set(items.flatMap(item => {
+  const missingItems = items.filter(item => !asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]));
+  if (!missingItems.length) return items;
+  const uuidIds = [...new Set(missingItems.map(item => item.placeId).filter(isUuidPlaceId))];
+  const discoverIds = [...new Set(missingItems.flatMap(item => {
     const parsed = parseDiscoverPlaceId(item.placeId);
     return parsed ? [parsed.externalPlaceId] : [];
   }))];
@@ -204,6 +206,7 @@ export const loadCouplePlan = cache(async (kind: PlanKind): Promise<CouplePlan> 
       .eq("kind", kind)
       .maybeSingle();
   }
+  if (planQuery.error) throw new Error("일정을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
   const plan = planQuery.data as PlanRow | null;
   if (!plan) return emptyPlan(true);
 
@@ -217,6 +220,7 @@ export const loadCouplePlan = cache(async (kind: PlanKind): Promise<CouplePlan> 
   if (!withCoords.error) {
     itemRows = withCoords.data;
   } else {
+    if (!isMissingSchemaObject(withCoords.error)) throw new Error("일정의 장소를 불러오지 못했어요.");
     const withDay = await supabase
       .from("plan_items")
       .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index")
@@ -226,11 +230,13 @@ export const loadCouplePlan = cache(async (kind: PlanKind): Promise<CouplePlan> 
     if (!withDay.error) {
       itemRows = withDay.data;
     } else {
+      if (!isMissingSchemaObject(withDay.error)) throw new Error("일정의 장소를 불러오지 못했어요.");
       const withoutDay = await supabase
         .from("plan_items")
         .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo")
         .eq("plan_id", plan.id)
         .order("sort_order", { ascending: true });
+      if (withoutDay.error) throw new Error("일정의 장소를 불러오지 못했어요.");
       itemRows = withoutDay.data;
     }
   }
@@ -369,6 +375,13 @@ export async function saveCouplePlan(
     ? created ? "여행 계획을 만들었어요" : "여행 계획을 수정했어요"
     : created ? "데이트 계획을 만들었어요" : "데이트 계획을 수정했어요";
 
+  if (kind === "date" && existing?.start_date && existing.start_date !== nextStart && before.length) {
+    // Check the revision before preserving a snapshot from the previous date.
+    if (meta?.expectedRevision !== undefined && existing.revision_id !== undefined && meta.expectedRevision !== existing.revision_id) return { error: "파트너가 일정을 바꿨어요. 최신 일정을 확인하고 다시 저장해 주세요.", conflict: true };
+    const preserved = await saveDateDraft({ date: existing.start_date, title: existing.title ?? "우리가 고른 데이트", notes: existing.subtitle ?? "", items: before });
+    if ("error" in preserved) return preserved;
+  }
+
   const payload = normalized.map((item, order) => ({
     client_id: item.id,
     place_id: item.placeId,
@@ -490,6 +503,9 @@ export async function saveCouplePlan(
       });
     }
     revalidatePath("/");
+  revalidatePath(`/${kind}`);
+  revalidatePath("/calendar");
+  revalidatePath("/our-map");
     return { ok: true, version: fallbackVersion, revision: nextRevision };
   }
   const result = saved as { plan_id?: string; version?: number; revision?: number } | null;
@@ -511,6 +527,9 @@ export async function saveCouplePlan(
   }
 
   revalidatePath("/");
+  revalidatePath(`/${kind}`);
+  revalidatePath("/calendar");
+  revalidatePath("/our-map");
 
   return { ok: true, version: result.version, revision: result.revision };
 }
@@ -538,14 +557,15 @@ export const listDateDrafts = cache(async (): Promise<DateDaySnapshot[]> => {
       items: parseDraftItems(row.items),
     }));
   }
-  if (!isMissingSchemaObject(error)) return [];
+  if (!isMissingSchemaObject(error)) throw new Error("날짜별 일정을 불러오지 못했어요.");
   const fallback = await supabase
     .from("activities")
     .select("entity_id, after_value, created_at")
     .eq("couple_id", session.coupleId)
     .eq("entity_type", "date_draft")
     .order("created_at", { ascending: false });
-  if (fallback.error || !fallback.data) return [];
+  if (fallback.error) throw new Error("저장된 일정을 불러오지 못했어요.");
+  if (!fallback.data) return [];
   const byDate = new Map<string, DateDaySnapshot>();
   for (const row of fallback.data) {
     const date = row.entity_id;
@@ -569,6 +589,8 @@ export const listDateDrafts = cache(async (): Promise<DateDaySnapshot[]> => {
 
 export async function saveDateDraft(day: DateDaySnapshot): Promise<{ ok: true } | { error: string }> {
   if (!day.date) return { ok: true };
+  revalidatePath("/date");
+  revalidatePath("/calendar");
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { error: "로그인 후 데이트를 나눠 저장할 수 있어요." };
   const supabase = await createClient();

@@ -7,7 +7,7 @@ import { seoulTodayIso } from "@/lib/dates";
 
 export const metadata: Metadata = { title: "Date" };
 
-export default function DatePage({ searchParams }: { searchParams: Promise<{ from?: string }> }) {
+export default function DatePage({ searchParams }: { searchParams: Promise<{ from?: string; day?: string }> }) {
   return (
     <RouteSuspense>
       <DatePageContent searchParams={searchParams} />
@@ -15,7 +15,7 @@ export default function DatePage({ searchParams }: { searchParams: Promise<{ fro
   );
 }
 
-async function DatePageContent({ searchParams }: { searchParams: Promise<{ from?: string }> }) {
+async function DatePageContent({ searchParams }: { searchParams: Promise<{ from?: string; day?: string }> }) {
   const params = await searchParams;
   const [plan, archives, drafts, tasteSeed] = await Promise.all([
     loadCouplePlan("date"),
@@ -26,7 +26,8 @@ async function DatePageContent({ searchParams }: { searchParams: Promise<{ from?
 
   return (
     <DatePlanner
-      today={seoulTodayIso()}
+      key={params.day ?? "today"}
+      today={/^\d{4}-\d{2}-\d{2}$/.test(params.day ?? "") ? params.day! : seoulTodayIso()}
       initialPlan={plan}
       initialArchives={archives.dates}
       initialDrafts={drafts}

@@ -22,7 +22,7 @@ export function AppLink({
   return (
     <Link
       href={href}
-      prefetch={false}
+      prefetch={prefetchMode === "never" ? false : undefined}
       {...props}
       onMouseEnter={(event: MouseEvent<HTMLAnchorElement>) => {
         warm();

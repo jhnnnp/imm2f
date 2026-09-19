@@ -22,6 +22,7 @@ export type Place = {
   phone?: string;
   openingHours?: string | null;
   description: string;
+  memoAuthorId?: string;
   durationMinutes: number;
   expectedCostTwo: number | null;
   coordinates: [number, number] | null;

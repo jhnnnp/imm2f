@@ -5,15 +5,16 @@ import { listArchivedTripPlans, loadCouplePlan } from "@/features/planning/actio
 
 export const metadata: Metadata = { title: "Trip" };
 
-export default function TripPage() {
+export default function TripPage({ searchParams }: { searchParams: Promise<{ day?: string }> }) {
   return (
     <RouteSuspense>
-      <TripPageContent />
+      <TripPageContent searchParams={searchParams} />
     </RouteSuspense>
   );
 }
 
-async function TripPageContent() {
+async function TripPageContent({ searchParams }: { searchParams: Promise<{ day?: string }> }) {
+  const params = await searchParams;
   const [plan, archives] = await Promise.all([loadCouplePlan("trip"), listArchivedTripPlans()]);
-  return <TripPlanner initialPlan={plan} initialArchives={archives} />;
+  return <TripPlanner key={params.day ?? "default"} initialDay={Number(params.day) || 0} initialPlan={plan} initialArchives={archives} />;
 }

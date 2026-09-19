@@ -1,6 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { addDays, formatKoShort } from "@/lib/dates";
+import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
+import { itemsForDay } from "@/features/planning/planOrder";
+import { readMapWorkspace } from "@/features/collaboration/workspaceReads";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { GeoJSONSource, Map as MapLibreMap, Marker, StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -215,10 +219,15 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
   const [places, setPlaces] = useState(initialPlaces);
   const [tripItems, setTripItems] = useState(initialTrip.items);
   useHydratePlanCoordinates("trip", tripItems, setTripItems);
+  useSharedRefresh(async () => {
+    const { places: nextPlaces, trip: nextTrip } = await readMapWorkspace();
+    setPlaces(current => JSON.stringify(current) === JSON.stringify(nextPlaces) ? current : nextPlaces); setTripItems(current => JSON.stringify(current) === JSON.stringify(nextTrip.items) ? current : nextTrip.items); setTripTitle(nextTrip.title); setTripDayCount(nextTrip.dayCount);
+  });
   const [tripTitle, setTripTitle] = useState(initialTrip.title || "우리가 고른 여행");
   const [tripDayCount, setTripDayCount] = useState(Math.max(1, initialTrip.dayCount));
   const [archivedTrips] = useState<ArchivedTripPlan[]>(initialArchivedTrips);
   const [selectedJourneyId, setSelectedJourneyId] = useState("current");
+  const [selectedTripDay, setSelectedTripDay] = useState(0);
   const [journeyMenuOpen, setJourneyMenuOpen] = useState(false);
   const [mapState, setMapState] = useState<MapState>("loading");
   const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
@@ -267,12 +276,12 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     });
     return next;
   }, [displayPlaces, memories]);
-  const tripPins = useMemo<TripPin[]>(() => journeyItems
+  const tripPins = useMemo<TripPin[]>(() => itemsForDay(journeyItems, selectedTripDay)
     .flatMap(item => {
       const coordinates = asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]);
       return coordinates ? [{ item, coordinates }] : [];
     })
-    .sort((a, b) => (a.item.dayIndex ?? 0) - (b.item.dayIndex ?? 0) || a.item.startTime.localeCompare(b.item.startTime) || a.item.order - b.item.order)
+    .sort((a, b) => (a.item.dayIndex ?? 0) - (b.item.dayIndex ?? 0) || a.item.order - b.item.order)
     .map(({ item, coordinates }, index) => ({
       kind: "trip" as const,
       id: `trip:${item.id}`,
@@ -280,7 +289,7 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
       item,
       dayOrder: index + 1,
       coordinates,
-    })), [journeyItems]);
+    })), [journeyItems, selectedTripDay]);
 
   const tripCoordinateList = useMemo(
     () => tripPins.map(pin => pin.coordinates),
@@ -413,6 +422,7 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
       if (disposed || !container.current) return;
       const map = new maplibregl.Map({
         container: container.current,
+        pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
         style: MAP_STYLE,
         center: DEFAULT_CENTER,
         zoom: 13,
@@ -493,7 +503,6 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
           geometry: { type: "LineString", coordinates: tripRoadPath },
         }],
       });
-      syncCoupleTripRoute(map, tripPins, false);
       for (const layerId of TRIP_ROUTE_LAYERS) {
         if (map.getLayer(layerId)) map.setLayoutProperty(layerId, "visibility", "visible");
       }
@@ -516,7 +525,9 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     const currentSelection = selectedRef.current;
     if (currentSelection && !visiblePins.some(pin => pin.id === currentSelection.id)) clearMapSelection(false);
     if (!visiblePins.length) { framePins(map, [], viewMode, 480); return; }
+    let disposed = false;
     void import("maplibre-gl").then(maplibregl => {
+      if (disposed || mapRef.current !== map) return;
       const pinCoordinates = visiblePins.map(item => item.coordinates);
       markersRef.current = visiblePins.map((pin, index) => {
         const element = document.createElement("button");
@@ -552,6 +563,7 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
       });
       framePins(map, visiblePins, viewMode, 620);
     });
+    return () => { disposed = true; };
   }, [visiblePins, mapState, viewMode, clearMapSelection]);
 
   function toggleFilter(label: PinLabel) {
@@ -597,7 +609,7 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
         {mode === "trips" && selectedJourney && <div className="memory-trip-summary" aria-label={`${selectedJourney.title} 일정`}>
           <div className="memory-trip-picker" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setJourneyMenuOpen(false); }}>
             <button type="button" className="memory-trip-picker-trigger" aria-haspopup="listbox" aria-expanded={journeyMenuOpen} onClick={() => setJourneyMenuOpen(value => !value)}><span>{formatJourneyRange(selectedJourney.startDate, selectedJourney.dayCount)}</span><b>{selectedJourney.title}</b><i aria-hidden="true">⌄</i></button>
-            {journeyMenuOpen && <div className="memory-trip-picker-menu" role="listbox" aria-label="여행 선택">{tripJourneys.map(journey => <button type="button" role="option" aria-selected={journey.id === selectedJourneyId} key={journey.id} onClick={() => { clearMapSelection(false); setSelectedJourneyId(journey.id); setJourneyMenuOpen(false); }}><span>{formatJourneyRange(journey.startDate, journey.dayCount)}</span><b>{journey.title}</b></button>)}</div>}
+            {journeyMenuOpen && <div className="memory-trip-picker-menu" role="listbox" aria-label="여행 선택">{tripJourneys.map(journey => <button type="button" role="option" aria-selected={journey.id === selectedJourneyId} key={journey.id} onClick={() => { clearMapSelection(false); setSelectedJourneyId(journey.id); setSelectedTripDay(0); setJourneyMenuOpen(false); }}><span>{formatJourneyRange(journey.startDate, journey.dayCount)}</span><b>{journey.title}</b></button>)}</div>}
           </div>
           <span>{journeyItems.length}곳</span>
         </div>}
@@ -605,10 +617,12 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
       </div>
     </div>
 
+    {mode === "trips" && selectedJourney && <nav className="trip-day-tabs" aria-label="여행 날짜">{Array.from({ length: selectedJourney.dayCount }, (_, day) => <button type="button" key={day} aria-pressed={selectedTripDay === day} onClick={() => { clearMapSelection(false); setSelectedTripDay(day); }}>DAY {day + 1}{selectedJourney.startDate && <small> · {formatKoShort(addDays(selectedJourney.startDate, day))}</small>}</button>)}</nav>}
     {mode !== "trips" && <div className="memory-map-filters" aria-label="장소 분류">{FILTERS.map(filter => <button type="button" key={filter.id} className={`is-${filter.id} ${activeLabels.has(filter.id) ? "is-active" : ""}`} aria-pressed={activeLabels.has(filter.id)} onClick={() => toggleFilter(filter.id)}><i /><span>{filter.label}</span><b>{counts[filter.id]}</b></button>)}</div>}
 
-    {mode === "trips" && selectedJourney && <div className="memory-map-stats"><b>{formatJourneyRange(selectedJourney.startDate, selectedJourney.dayCount)}</b><span>{tripPins.length}곳</span><i /><span>여행 전체 동선</span></div>}
+    {mode === "trips" && selectedJourney && <div className="memory-map-stats"><b>{formatJourneyRange(selectedJourney.startDate, selectedJourney.dayCount)}</b><span>{tripPins.length}곳</span><i /><span>DAY {selectedTripDay + 1} 동선</span></div>}
 
+    {mode === "trips" && selectedJourney && !tripPins.length && <div className="map-filter-empty">이날은 지도에 표시할 장소가 없어요.</div>}
     {mode === "trips" && !selectedJourney && <div className="memory-map-empty"><b>아직 지도에 올릴 여행이 없어요.</b><span>여행 일정에 장소를 담으면 동선이 보여요.</span><Link href="/trip">여행 짜기 →</Link></div>}
     {mode !== "trips" && !pins.length && <div className="memory-map-empty"><b>첫 장소가 기억 도시의 시작이에요.</b><span>둘이 좋아하는 장소를 저장하면 지도 위에 흔적이 생겨요.</span><Link href="/places">장소 둘러보기 →</Link></div>}
     {mapState === "ready" && mode !== "trips" && visiblePins.length === 0 && pins.length > 0 && <div className="map-filter-empty">이 보기에는 아직 표시할 기억이 없어요.</div>}

@@ -3,6 +3,7 @@ export type WallTextWeight = "normal" | "bold";
 
 export type WallText = {
   id: string;
+  authorId?: string;
   x: number;
   y: number;
   z: number;
@@ -19,10 +20,11 @@ export const WALL_TEXT_SIZES = [18, 24, 32, 42] as const;
 export function createWallText(input: Partial<WallText> & { x: number; y: number }): WallText {
   return {
     id: crypto.randomUUID(),
+    authorId: input.authorId,
     x: input.x,
     y: input.y,
     z: input.z ?? 40,
-    text: input.text?.trim() || "우리의 한 줄",
+    text: input.text?.trim() ?? "",
     color: input.color ?? "#2b312e",
     fontFamily: input.fontFamily ?? "hand",
     fontWeight: input.fontWeight ?? "normal",
@@ -44,10 +46,11 @@ export function parseWallTexts(raw: unknown): WallText[] {
     const fontSize = Number(record.fontSize);
     return [{
       id: String(record.id ?? crypto.randomUUID()),
+      authorId: typeof record.authorId === "string" ? record.authorId : undefined,
       x,
       y,
       z: Number.isFinite(Number(record.z)) ? Number(record.z) : 40,
-      text: String(record.text ?? "").slice(0, 280) || "우리의 한 줄",
+      text: String(record.text ?? "").slice(0, 280),
       color: String(record.color ?? "#2b312e"),
       fontFamily,
       fontWeight,

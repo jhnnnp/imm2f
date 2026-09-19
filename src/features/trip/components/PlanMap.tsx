@@ -94,10 +94,11 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
   const locatedRef = useRef<Array<PlanItem & { coordinates: [number, number] }>>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
   const located = useMemo(() => planItemsWithCoordinates(items), [items]);
   const routeKey = useMemo(
-    () => located.map(item => `${item.coordinates[0]},${item.coordinates[1]}`).join("|"),
+    () => located.map(item => `${item.id}:${item.placeName}:${item.coordinates[0]},${item.coordinates[1]}`).join("|"),
     [located],
   );
   const coordinateList = useMemo(() => located.map(item => item.coordinates), [located]);
@@ -121,6 +122,7 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
           try {
             const map = new maplibregl.Map({
               container: container.current,
+              pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
               style: MAP_STYLE,
               center: start,
               zoom: 13,
@@ -159,7 +161,8 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
               map.once("idle", finishLoad);
               readyTimer = window.setTimeout(finishLoad, 800);
             });
-            map.on("webglcontextlost", () => {
+            map.on("webglcontextlost", event => {
+              event.originalEvent?.preventDefault();
               if (!disposed) setError(true);
             });
             map.on("webglcontextrestored", () => {
@@ -191,7 +194,7 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
       mapRef.current = null;
       setMapInstance(null);
     };
-  }, []);
+  }, [attempt]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -251,7 +254,7 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
     />
     {!located.length && <div className="map-unavailable is-overlay"><div><b>표시할 좌표가 없어요</b><span>장소를 담으면 실제 지도와 동선이 보여요.</span></div></div>}
     {located.length > 0 && !ready && !error && <div className="map-loading"><span>여행 지도를 펼치고 있어요.</span><i /></div>}
-    {located.length > 0 && error && <div className="map-error"><b>지도를 불러오지 못했어요</b><span>장소와 일정은 그대로 저장되어 있어요.</span></div>}
+    {located.length > 0 && error && <div className="map-error"><b>지도를 불러오지 못했어요</b><span>장소와 일정은 그대로 저장되어 있어요.</span><button type="button" className="outline-button" onClick={() => setAttempt(value => value + 1)}>지도 다시 열기</button></div>}
     {located.length > 0 && <div className="map-summary"><span>{dayLabel ?? "DAY 1"}</span><b>{located.length}곳</b><small>번호 순서대로 동선이 이어져요</small></div>}
   </section>;
 }

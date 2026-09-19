@@ -48,7 +48,7 @@ const KIND_META: Record<NoteKind, {
     detailLabel: "이루고 싶은 이유나 계획",
     collectionLabel: "버킷리스트",
     emptyTitle: "함께 이루고 싶은 일을 적어보세요",
-    emptyDescription: "가고 싶은 곳부터 사소한 도전까지, 우리의다음 장면을 시작해요.",
+    emptyDescription: "가고 싶은 곳부터 사소한 도전까지, 우리의 다음 장면을 시작해요.",
   },
 };
 
@@ -297,6 +297,7 @@ export function CoupleNotesBoard({
         </div>
         <div className="note-card-body">
           <h2>{note.title}</h2>
+          {collaborators && note.createdBy && <small className="memo-author">{note.createdBy === collaborators.viewerId ? collaborators.viewerName : collaborators.partnerName} · 작성</small>}
           {note.detail && <p>{note.detail}</p>}
           {note.extra && (isWebLink(note.extra)
             ? kind === "gift"

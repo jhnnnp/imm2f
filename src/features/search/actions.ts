@@ -13,6 +13,7 @@ export type WorkspaceHit = {
 
 export async function searchWorkspace(query: string): Promise<WorkspaceHit[]> {
   const q = query.trim().toLowerCase();
+  if (!q) return [];
   const [{ places }, { memories }, trip, date] = await Promise.all([
     listPlaces(),
     listMemories({ photos: "none" }),
@@ -47,7 +48,6 @@ export async function searchWorkspace(query: string): Promise<WorkspaceHit[]> {
     }] : []),
   ];
 
-  if (!q) return hits.slice(0, 8);
   return hits.filter(hit =>
     hit.label.toLowerCase().includes(q) || hit.detail.toLowerCase().includes(q),
   ).slice(0, 12);

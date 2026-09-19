@@ -1,5 +1,6 @@
 "use client";
 
+import { useAppSession } from "@/features/auth/components/SessionProvider";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { TripScheduleStop } from "../tripPlaceMatch";
@@ -42,6 +43,8 @@ export function PlaceDetailPanel({
   preferredPlan?: "trip" | "date" | null;
   tripScheduleStops?: TripScheduleStop[];
 }) {
+  const session = useAppSession();
+  const memoAuthor = session.mode === "authenticated" && place.memoAuthorId ? (place.memoAuthorId === session.userId ? session.displayName : place.memoAuthorId === session.partner?.userId ? session.partner.displayName : "이전 작성자") : null;
   const preview = isDiscoverPlace(place);
   const saved = HEART_SAVED.includes(place.userStatus);
   const address = place.roadAddress || place.address || place.district;
@@ -154,7 +157,7 @@ export function PlaceDetailPanel({
           </div>
         </form>
       ) : memoText ? (
-        <p className="detail-description">{memoText}{memoText.endsWith(".") ? "" : "."}</p>
+        <><p className="detail-description">{memoText}</p><small className="memo-author">{memoAuthor ? `${memoAuthor} · 마지막으로 작성` : "함께 남긴 메모"}</small></>
       ) : (
         <p className="detail-description muted">{preview ? "저장하면 우리의 메모를 남길 수 있어요." : "아직 우리의 메모는 없어요."}</p>
       )}

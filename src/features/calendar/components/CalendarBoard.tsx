@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { saveCouplePlan } from "@/features/planning/actions";
-import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
+import { readCalendarWorkspace } from "@/features/collaboration/workspaceReads";
+import { hasDateContent, upsertDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
+import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
 import type { CouplePlan } from "@/features/planning/types/plan";
 import { addDays, formatKoDate, toIsoDate } from "@/lib/dates";
 
@@ -20,21 +21,35 @@ function shiftMonth(date: Date, delta: number) {
 export function CalendarBoard({
   trip,
   date,
-  memories,
+  memories: initialMemories,
+  drafts: initialDrafts,
 }: {
   trip: CouplePlan;
   date: CouplePlan;
   memories: MemoryMark[];
+  drafts: DateDaySnapshot[];
 }) {
   const [cursor, setCursor] = useState<Date | null>(null);
   const [todayIso, setTodayIso] = useState("");
   const [selected, setSelected] = useState("");
   const [tripStart, setTripStart] = useState(trip.startDate ?? "");
   const [dateStart, setDateStart] = useState(date.startDate ?? "");
-  const [notice, setNotice] = useState("");
+  const [memories, setMemories] = useState(initialMemories);
+  const [drafts, setDrafts] = useState(initialDrafts);
   const [tripPlan, setTripPlan] = useState(trip);
   const [datePlan, setDatePlan] = useState(date);
   const [modalOpen, setModalOpen] = useState(false);
+  useSharedRefresh(async () => {
+    const { trip: nextTrip, date: nextDate, drafts: nextDrafts, memories: nextMemories } = await readCalendarWorkspace();
+    setTripPlan(nextTrip); setTripStart(nextTrip.startDate ?? "");
+    setDatePlan(nextDate); setDateStart(nextDate.startDate ?? "");
+    setDrafts(nextDrafts); setMemories(nextMemories);
+  });
+  const dateDays = useMemo(() => {
+    const current = { date: dateStart, title: datePlan.title, notes: datePlan.notes, items: datePlan.items };
+    return (dateStart && hasDateContent(current) ? upsertDateDay(drafts, current) : drafts).filter(hasDateContent);
+  }, [dateStart, datePlan, drafts]);
+
   const modalCloseRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -68,44 +83,31 @@ export function CalendarBoard({
       events.push({
         kind: "여행",
         title: tripPlan.title || "우리가 고른 여행",
-        href: "/trip",
+        href: `/trip?day=${offset}`,
         detail: `DAY ${offset + 1} · ${tripPlan.items.filter(item => (item.dayIndex ?? 0) === offset).length}곳`,
       });
     }
-    if (dateStart === selected && datePlan.items.length) {
+    const selectedDate = dateDays.find(day => day.date === selected);
+    if (selectedDate) {
       events.push({
         kind: "데이트",
-        title: datePlan.title || "우리가 고른 데이트",
-        href: "/date",
-        detail: `${datePlan.items.length}곳`,
+        title: selectedDate.title || "우리가 고른 데이트",
+        href: `/date?day=${selected}`,
+        detail: `${selectedDate.items.length}곳${selectedDate.notes ? " · 메모 있음" : ""}`,
       });
     }
     memories.filter(item => item.happenedOn === selected).forEach(item => {
       events.push({ kind: "추억", title: item.title, href: "/memories", detail: "그날의 기록" });
     });
     return events;
-  }, [selected, tripDays, tripPlan, dateStart, datePlan, memories]);
-
-  async function assign(kind: "trip" | "date") {
-    const startDate = selected || todayIso;
-    if (!startDate) return;
-    const plan = kind === "trip" ? tripPlan : datePlan;
-    const result = await saveCouplePlan(kind, plan.items, {
-      title: plan.title,
-      subtitle: plan.notes,
-      startDate,
-      dayCount: kind === "trip" ? plan.dayCount : 1,
-      expectedRevision: plan.revision,
-    });
-    if ("error" in result) {
-      setNotice(result.error);
-      return;
-    }
-    if (kind === "trip") setTripStart(startDate);
-    else setDateStart(startDate);
-    setNotice(kind === "trip" ? "여행 시작일을 붙였어요." : "데이트 날짜를 붙였어요.");
-    emitCoupleActivitiesChanged();
-  }
+  }, [selected, tripDays, tripPlan, dateDays, memories]);
+  const selectedStops = useMemo(() => {
+    const day = [...tripDays].sort().indexOf(selected);
+    return [
+      ...tripPlan.items.filter(item => day >= 0 && (item.dayIndex ?? 0) === day).map(item => ({ ...item, source: "여행" })),
+      ...(dateDays.find(day => day.date === selected)?.items ?? []).map(item => ({ ...item, source: "데이트" })),
+    ].sort((a, b) => a.startTime.localeCompare(b.startTime) || a.order - b.order);
+  }, [tripDays, tripPlan.items, dateDays, selected]);
 
   if (!cursor) {
     return <p className="form-hint">캘린더를 펼치고 있어요.</p>;
@@ -152,8 +154,8 @@ export function CalendarBoard({
             const isToday = iso === todayIso;
             const isSelected = iso === selected;
             const marks = [
-              tripDays.has(iso) ? { label: "여행", className: "is-trip" } : null,
-              dateStart === iso ? { label: "데이트", className: "is-date" } : null,
+              tripDays.has(iso) && tripPlan.items.length > 0 ? { label: "여행", className: "is-trip" } : null,
+              dateDays.some(day => day.date === iso) ? { label: "데이트", className: "is-date" } : null,
               memories.some(item => item.happenedOn === iso) ? { label: "추억", className: "is-memory" } : null,
             ].filter(Boolean);
             return (
@@ -161,6 +163,7 @@ export function CalendarBoard({
                 type="button"
                 className={`${isToday ? "today-cell" : ""} ${isSelected ? "is-selected" : ""} ${cell.outside ? "is-outside" : ""}`}
                 key={iso}
+                aria-label={`${formatKoDate(iso)}${marks.length ? ` · ${marks.map(mark => mark?.label).join(", ")}` : " · 일정 없음"}`}
                 aria-current={isToday ? "date" : undefined}
                 aria-pressed={isSelected}
                 onClick={() => {
@@ -187,7 +190,7 @@ export function CalendarBoard({
             <button ref={modalCloseRef} className="calendar-modal-close" type="button" aria-label="닫기" onClick={() => setModalOpen(false)}>×</button>
             <span className="eyebrow">DAY DETAILS</span>
             <h2 id="calendar-modal-title">{selected ? formatKoDate(selected) : "선택한 날짜"}</h2>
-            {notice && <p className="calendar-modal-notice">{notice}</p>}
+
             {selectedEvents.length > 0 ? (
               <div className="calendar-event-list">
                 {selectedEvents.map(event => (
@@ -202,13 +205,11 @@ export function CalendarBoard({
             ) : (
               <div className="calendar-modal-empty">
                 <b>아직 일정이 없는 날이에요.</b>
-                <p>이 날짜를 데이트 날짜나 여행 시작일로 지정할 수 있어요.</p>
+                <p>함께 보낼 하루를 계획해 볼까요?</p>
               </div>
             )}
-            <div className="calendar-assign">
-              {tripPlan.items.length ? <button className="outline-button" type="button" onClick={() => void assign("trip")}>{tripStart ? "여행 시작일 변경" : "여행 시작일로"}</button> : null}
-              {datePlan.items.length ? <button className="primary-button" type="button" onClick={() => void assign("date")}>{dateStart ? "데이트 날짜 변경" : "데이트 날짜로"}</button> : null}
-            </div>
+            {selectedStops.length > 0 && <ol className="calendar-day-agenda" aria-label="이날의 장소와 시간">{selectedStops.map(item => <li key={`${item.source}-${item.id}`}><time>{item.startTime}</time><span><b>{item.placeName}</b><small>{item.source} · {item.durationMinutes}분{item.memo ? ` · ${item.memo}` : ""}</small></span></li>)}</ol>}
+            <div className="calendar-assign"><Link className="primary-button" href={`/date?day=${selected}`}>이날의 데이트 계획하기</Link></div>
           </section>
         </div>
       )}

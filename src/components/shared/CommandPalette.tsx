@@ -9,6 +9,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const ref = useRef<HTMLDialogElement>(null);
   const router = useRouter();
   const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
   const [hits, setHits] = useState<WorkspaceHit[]>([]);
 
   useEffect(() => {
@@ -20,12 +22,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   }, [open]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !query.trim()) { setHits([]); setSearching(false); setSearchError(""); return; }
+    setSearching(true); setSearchError("");
+    setHits([]);
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void searchWorkspace(query).then(next => {
         if (!cancelled) setHits(next);
-      });
+      }).catch(() => { if (!cancelled) setSearchError("검색을 불러오지 못했어요. 다시 입력해 주세요."); }).finally(() => { if (!cancelled) setSearching(false); });
     }, 120);
     return () => {
       cancelled = true;
@@ -35,8 +39,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   const commands = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return SEARCH_COMMANDS;
-    return SEARCH_COMMANDS.filter(item => item.label.toLowerCase().includes(q));
+    if (!q) return [];
+    return SEARCH_COMMANDS.filter(item => q.split(/\s+/).every(word => item.label.toLowerCase().includes(word))).slice(0, 4);
   }, [query]);
 
   const go = (href: string) => {
@@ -54,8 +58,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           onChange={event => setQuery(event.target.value)}
           placeholder="장소, 추억, 일정을 찾아 보세요"
         />
-        <kbd>ESC</kbd>
+        <button type="button" className="text-button" onClick={onClose} aria-label="검색 닫기">닫기</button>
       </div>
+      {!query.trim() && <p className="command-hint">찾고 싶은 장소나 여행, 추억을 입력해 주세요.</p>}
       {commands.length > 0 && (
       <div className="command-section">
         <span>빠른 실행</span>
@@ -72,6 +77,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         ))}
       </div>
       )}
+      {query.trim() && !searching && !hits.length && !commands.length && <p className="command-hint">{searchError || "찾는 기록이 없어요. 장소 이름이나 다른 단어로 검색해 보세요."}</p>}
       {hits.length > 0 && (
         <div className="command-section">
           <span>검색 결과</span>

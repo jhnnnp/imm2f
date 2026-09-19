@@ -121,9 +121,9 @@ export function PlanItemCard({
       </div>
       {editing && !letter && (
         <div className="timeline-edit-panel">
-          <label><span>일정 시간</span><input type="time" value={startTime} onChange={event => setStartTime(event.target.value)} /></label>
-          <label><span>소요 시간</span><select value={durationMinutes} onChange={event => setDurationMinutes(Number(event.target.value))}>{[30, 45, 60, 90, 120, 150, 180].map(minutes => <option key={minutes} value={minutes}>{minutes >= 60 ? `${Math.floor(minutes / 60)}시간${minutes % 60 ? ` ${minutes % 60}분` : ""}` : `${minutes}분`}</option>)}</select></label>
-          <button className="primary-button" type="button" onClick={() => {
+          <label><span>일정 시간</span><input type="time" step={300} required value={startTime} onChange={event => setStartTime(event.target.value)} /></label>
+          <label><span>소요 시간</span><select value={durationMinutes} onChange={event => setDurationMinutes(Number(event.target.value))}>{[...new Set([30, 45, 60, 90, 120, 150, 180, item.durationMinutes])].sort((a, b) => a - b).map(minutes => <option key={minutes} value={minutes}>{minutes >= 60 ? `${Math.floor(minutes / 60)}시간${minutes % 60 ? ` ${minutes % 60}분` : ""}` : `${minutes}분`}</option>)}</select></label>
+          <button className="primary-button" type="button" disabled={!startTime || durationMinutes <= 0} onClick={() => {
             onUpdate?.(item.id, { startTime, durationMinutes });
             onEdit(null);
           }}>적용</button>

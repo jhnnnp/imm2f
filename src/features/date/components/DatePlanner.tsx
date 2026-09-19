@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { readDateWorkspace } from "@/features/collaboration/workspaceReads";
+import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
 import { ContextPanel } from "@/components/layout/ContextPanel";
 import { DatePickerButton } from "@/components/shared/DatePickerButton";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
@@ -12,7 +14,7 @@ import { applyDateSwitch, emptyDateDay, hasDateContent, landingDateDay, upsertDa
 import type { CourseKeepInput, CourseKeepResult } from "@/features/ai/courseKeep";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import { useHydratePlanCoordinates } from "@/features/planning/useHydratePlanCoordinates";
-import { archiveDatePlan, listArchivedDatePlans, loadCouplePlan, openDateDay, saveCouplePlan, saveDateDraft, type ArchivedDatePlan } from "@/features/planning/actions";
+import { archiveDatePlan, listArchivedDatePlans, loadCouplePlan, saveCouplePlan, saveDateDraft, type ArchivedDatePlan } from "@/features/planning/actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import type { CouplePlan, PlanChange, PlanItem } from "@/features/planning/types/plan";
 import type { TasteDateSeed } from "@/features/taste/types";
@@ -54,6 +56,8 @@ export function DatePlanner({
   const [archiveFocusId, setArchiveFocusId] = useState("");
   const [recording, setRecording] = useState(false);
   const revisionRef = useRef(initialPlan.revision);
+  const dirtyRef = useRef(false);
+  const pendingSaves = useRef(0);
   const saveQueueRef = useRef(Promise.resolve());
   const notesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const titleRef = useRef(title);
@@ -64,23 +68,15 @@ export function DatePlanner({
   dateRef.current = startDate;
 
   useHydratePlanCoordinates("date", items, setItems);
+  useSharedRefresh(async () => {
+    if (dirtyRef.current) return;
+    const { plan: remote, drafts: nextDrafts } = await readDateWorkspace();
+    if (dirtyRef.current) return;
+    revisionRef.current = remote.revision;
+    const next = landingDateDay({ plan: remote, drafts: nextDrafts, today: dateRef.current });
+    setDrafts(current => JSON.stringify(current) === JSON.stringify(next.drafts) ? current : next.drafts); setItems(current => JSON.stringify(current) === JSON.stringify(next.focus.items) ? current : next.focus.items); setTitle(next.focus.title); setNotes(next.focus.notes);
+  });
 
-  useEffect(() => {
-    if (initialPlan.startDate === today) return;
-    saveQueueRef.current = saveQueueRef.current.then(async () => {
-      const result = await openDateDay({
-        fromDate: initialPlan.startDate,
-        toDate: today,
-        snapshot: {
-          title: initialPlan.title || "우리가 고른 데이트",
-          notes: initialPlan.notes,
-          items: initialPlan.items,
-        },
-        expectedRevision: revisionRef.current,
-      });
-      if ("revision" in result) revisionRef.current = result.revision;
-    });
-  }, [initialPlan, today]);
 
   useEffect(() => {
     return () => {
@@ -102,6 +98,8 @@ export function DatePlanner({
   );
 
   const persist = (next: PlanItem[], extra?: { title?: string; subtitle?: string; startDate?: string | null }) => {
+    dirtyRef.current = true;
+    pendingSaves.current += 1;
     const mapped = next.map(item => ({ ...item, dayIndex: item.dayIndex ?? 0 }));
     const nextTitle = extra?.title ?? titleRef.current;
     const nextNotes = extra && "subtitle" in extra ? extra.subtitle ?? "" : notesRef.current;
@@ -112,7 +110,7 @@ export function DatePlanner({
     if (nextDate) {
       setDrafts(current => upsertDateDay(current, { date: nextDate, title: nextTitle, notes: nextNotes, items: mapped }));
     }
-    saveQueueRef.current = saveQueueRef.current.then(async () => {
+    saveQueueRef.current = saveQueueRef.current.catch(() => {}).then(async () => {
       const result = await saveCouplePlan("date", mapped, {
         title: nextTitle,
         subtitle: nextNotes,
@@ -122,15 +120,18 @@ export function DatePlanner({
       });
       if ("version" in result) {
         revisionRef.current = result.revision;
-        emitCoupleActivitiesChanged();
         if (nextDate) {
-          await saveDateDraft({ date: nextDate, title: nextTitle, notes: nextNotes, items: mapped });
+          const draftResult = await saveDateDraft({ date: nextDate, title: nextTitle, notes: nextNotes, items: mapped });
+          if ("error" in draftResult) setSaveError(draftResult.error);
         }
       } else {
         setSaveError(result.error);
       }
-      setNotesSaveState("saved");
-    });
+      pendingSaves.current -= 1;
+      dirtyRef.current = pendingSaves.current > 0 || "error" in result;
+      setNotesSaveState(pendingSaves.current > 0 ? "saving" : "saved");
+      emitCoupleActivitiesChanged();
+    }).catch(() => { pendingSaves.current = Math.max(0, pendingSaves.current - 1); setSaveError("아직 저장되지 않았어요. 연결을 확인하고 다시 시도해 주세요."); setNotesSaveState("typing"); });
   };
 
   const applyFocus = (focus: DateDaySnapshot, nextDrafts: DateDaySnapshot[]) => {
@@ -144,42 +145,10 @@ export function DatePlanner({
 
   const switchDate = (nextDate: string) => {
     if (nextDate === startDate) return;
-    const snapshot = { title, notes, items };
-    saveQueueRef.current = saveQueueRef.current.then(async () => {
-      setSaveError("");
-      setNotesSaveState("saving");
-      const result = await openDateDay({
-        fromDate: startDate || null,
-        toDate: nextDate || null,
-        snapshot,
-        expectedRevision: revisionRef.current,
-      });
-      if ("error" in result) {
-        const local = applyDateSwitch({
-          current: { date: startDate, ...snapshot },
-          drafts,
-          nextDate,
-        });
-        applyFocus(local.focus, local.drafts);
-        const saved = await saveCouplePlan("date", local.focus.items, {
-          title: local.focus.title,
-          subtitle: local.focus.notes,
-          startDate: local.focus.date || null,
-          dayCount: 1,
-          expectedRevision: revisionRef.current,
-        });
-        if ("version" in saved) {
-          revisionRef.current = saved.revision;
-          emitCoupleActivitiesChanged();
-        }
-        else setSaveError(saved.error);
-        setNotesSaveState("saved");
-        return;
-      }
-      revisionRef.current = result.revision;
-      applyFocus(result.focus, result.drafts);
-      setNotesSaveState("saved");
-    });
+    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    if (notesSaveState === "typing") persist(items, { subtitle: notes });
+    const local = applyDateSwitch({ current: { date: startDate, title, notes, items }, drafts, nextDate });
+    applyFocus(local.focus, local.drafts);
   };
 
   const apply = (changes: PlanChange[]) => {
@@ -198,6 +167,7 @@ export function DatePlanner({
 
   const scheduleNotesSave = (value: string) => {
     if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    dirtyRef.current = true;
     setNotesSaveState("typing");
     notesTimerRef.current = setTimeout(() => saveNotes(value), 800);
   };
@@ -263,7 +233,7 @@ export function DatePlanner({
       <div className="page-title-row date-planner-header">
         <div>
           <span className="eyebrow">DATE PLANNER</span>
-          <input className="title-input" value={title} onChange={event => setTitle(event.target.value)} onBlur={() => persist(items, { title })} aria-label="데이트 제목" />
+          <input className="title-input" value={title} onChange={event => { dirtyRef.current = true; setTitle(event.target.value); }} onBlur={() => persist(items, { title })} aria-label="데이트 제목" />
         </div>
         <div className="page-actions date-planner-actions trip-planner-actions">
           <DatePickerButton
@@ -314,7 +284,7 @@ export function DatePlanner({
       ) : !items.length ? (
         <div className="empty-soft">
           <h1 suppressHydrationWarning>{startDate ? `${formatKoDate(startDate)} 일정이 없어요` : "데이트 일정이 없어요"}</h1>
-          <p>{startDate ? "이 날만 따로 짜면 돼요. 다른 날짜 코스는 그대로 남아 있어요." : "어디로 갈지만 말해 주면 하루 코스를 만들어 드려요."}</p>
+          <p>{startDate ? "이날 함께하고 싶은 장소를 담아 보세요. 날짜를 고르면 다른 날의 약속도 볼 수 있어요." : "어디로 갈지만 말해 주면 하루 코스를 만들어 드려요."}</p>
           <div className="dialog-actions">
             <button className="primary-button" type="button" onClick={() => setPanel("ai")}>AI에게 데이트 추천받기</button>
             <Link className="outline-button" href="/places?from=date">직접 장소 찾기</Link>
@@ -350,7 +320,7 @@ export function DatePlanner({
                   onReorder={persist}
                   onRemove={id => persist(items.filter(item => item.id !== id))}
                 />
-                <Link className="add-schedule date-add-letter" href="/places?from=date">한 장 더 끼워 넣기</Link>
+                <Link className="add-schedule date-add-letter" href="/places?from=date">데이트 장소 추가</Link>
               </div>
             </section>
           </div>

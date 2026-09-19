@@ -19,18 +19,24 @@ export function useHydratePlanCoordinates(
   setItems: (items: PlanItem[]) => void,
 ) {
   const lastKey = useRef("");
+  const latest = useRef(items);
+  latest.current = items;
 
+  const key = needsCoordinateHydrate(items) ? hydrateSignature(kind, items) : "";
   useEffect(() => {
-    if (!needsCoordinateHydrate(items)) return;
-    const key = hydrateSignature(kind, items);
+    if (!key) return;
     if (lastKey.current === key) return;
     lastKey.current = key;
     let cancelled = false;
     void hydrateCouplePlanCoordinates(kind).then(plan => {
-      if (!cancelled) setItems(plan.items);
-    });
+      if (!cancelled) {
+        const coordinates = new Map(plan.items.map(item => [item.id, item.coordinates]));
+        setItems(latest.current.map(item => ({ ...item, coordinates: item.coordinates ?? coordinates.get(item.id) ?? null })));
+      }
+    }).catch(() => { /* Keep the current itinerary if coordinate lookup is unavailable. */ });
     return () => {
       cancelled = true;
+      if (lastKey.current === key) lastKey.current = "";
     };
-  }, [kind, items, setItems]);
+  }, [kind, key, setItems]);
 }

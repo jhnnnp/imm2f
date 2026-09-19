@@ -45,14 +45,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setSession(next);
       writeCachedSession(next);
     };
+    let refreshing = false;
     const refresh = () => {
+      if (refreshing) return;
+      refreshing = true;
       void getAppSession().then(apply).catch(() => {
-        if (!cancelled) apply({ mode: "guest" });
-      });
+        if (!cancelled && !readCachedSession()) apply({ mode: "guest" });
+      }).finally(() => { refreshing = false; });
     };
     refresh();
     const supabase = createClient();
-    const subscription = supabase?.auth.onAuthStateChange(() => refresh());
+    const subscription = supabase?.auth.onAuthStateChange(event => {
+      if (event === "SIGNED_OUT") apply({ mode: "guest" });
+      else if (event === "SIGNED_IN" || event === "USER_UPDATED") refresh();
+    });
     return () => {
       cancelled = true;
       subscription?.data.subscription.unsubscribe();

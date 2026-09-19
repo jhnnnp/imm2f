@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
 import { flushSync } from "react-dom";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -8,7 +9,7 @@ import { ContextPanel } from "@/components/layout/ContextPanel";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { PLACE_ADMINISTRATIVE_AREAS, PLACE_AREA_GROUPS, areaGroupById, browseDiscoverInput } from "../config/regions";
-import { searchDiscoverPlaces, loadTourPlaceDetail, lookupPlaceLocation, updateMyPlaceStatus, updatePlaceDescription, updatePlaceLocation } from "../actions";
+import { listPlaces, searchDiscoverPlaces, loadTourPlaceDetail, lookupPlaceLocation, updateMyPlaceStatus, updatePlaceDescription, updatePlaceLocation } from "../actions";
 import { applyPlaceLocation } from "../location";
 import { addItemToCouplePlan } from "@/features/planning/actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
@@ -112,6 +113,11 @@ export function PlacesExperience({
   const discoverRequestRef = useRef(0);
   const regionSearchRef = useRef<HTMLDivElement>(null);
   placesRef.current = places;
+  useSharedRefresh(async () => {
+    const before = placesRef.current;
+    const result = await listPlaces();
+    if (before === placesRef.current && result.persist) setPlaces(result.places);
+  });
 
   useEffect(() => {
     if (!selectedParam) return;

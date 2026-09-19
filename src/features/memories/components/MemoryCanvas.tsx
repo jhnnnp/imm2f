@@ -30,6 +30,7 @@ import {
 } from "../canvasCamera";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import {
+  emptyBoardState,
   isBoardEmpty,
   mergeWallBoard,
   readBoardState,
@@ -39,6 +40,7 @@ import {
   type CorkPose,
 } from "../corkLayout";
 import { saveMemoryWallBoard, loadMemoryWallBoard } from "../wallBoardActions";
+import { mergeBoardEdits } from "../mergeBoardEdits";
 import { subscribeMemoryWallBoard } from "../wallBoardLive";
 import {
   createWallText,
@@ -174,6 +176,7 @@ export function MemoryCanvas({
   coupleIdRef.current = coupleId;
   const [camera, setCameraState] = useState<Camera>(cameraRef.current);
   const [strokes, setStrokes] = useState<InkStroke[]>([]);
+  const editingTextRef = useRef<string | null>(null);
   const [texts, setTexts] = useState<WallText[]>([]);
   const [tool, setTool] = useState<CanvasTool>("select");
   const [color, setColor] = useState(INK_COLORS[0].color as string);
@@ -190,6 +193,7 @@ export function MemoryCanvas({
   posesRef.current = poses;
   strokesRef.current = strokes;
   textsRef.current = texts;
+  editingTextRef.current = editingTextId;
   cameraRef.current = camera;
 
   const boardSnapshot = useCallback((): CorkBoardState => ({
@@ -200,17 +204,38 @@ export function MemoryCanvas({
     texts: textsRef.current,
   }), []);
 
+  const baseRef = useRef<CorkBoardState>(emptyBoardState());
+  const remoteVersionRef = useRef<string | null>(null);
+  const dirtyRef = useRef(false);
+  const savingRef = useRef(false);
+  const [syncError, setSyncError] = useState("");
   const flushRemoteSave = useCallback((state: CorkBoardState) => {
     if (remoteSaveTimer.current) window.clearTimeout(remoteSaveTimer.current);
-    remoteSaveTimer.current = window.setTimeout(() => {
-      lastSelfSaveAtRef.current = Date.now();
-      void saveMemoryWallBoard(state).then(result => {
-        if ("ok" in result) writeBoardSyncedAt(coupleIdRef.current, result.updatedAt);
-      });
+    remoteSaveTimer.current = window.setTimeout(async () => {
+      if (savingRef.current) { flushRemoteSave(boardSnapshot()); return; }
+      savingRef.current = true;
+      const sent = boardSnapshot();
+      const base = baseRef.current;
+      try {
+        const result = await saveMemoryWallBoard(sent, base);
+        if ("error" in result) { setSyncError(result.error); return; }
+        const next = mergeBoardEdits(sent, boardSnapshot(), result.state);
+        baseRef.current = result.state;
+        remoteVersionRef.current = result.updatedAt;
+        posesRef.current = next.poses; strokesRef.current = next.strokes; textsRef.current = next.texts;
+        setPoses(next.poses); setStrokes(next.strokes); setTexts(next.texts);
+        writeBoardState(coupleIdRef.current, next);
+        writeBoardSyncedAt(coupleIdRef.current, result.updatedAt);
+        dirtyRef.current = JSON.stringify({ ...next, camera: null }) !== JSON.stringify({ ...result.state, camera: null });
+        setSyncError("");
+        if (dirtyRef.current) flushRemoteSave(next);
+      } catch { setSyncError("아직 저장되지 않았어요. 연결을 확인한 뒤 다시 저장해 주세요."); }
+      finally { savingRef.current = false; }
     }, 420);
-  }, []);
+  }, [boardSnapshot, setPoses]);
 
   const persist = useCallback((next?: { poses?: Record<string, CorkPose>; strokes?: InkStroke[]; texts?: WallText[]; camera?: Camera }) => {
+    dirtyRef.current = true;
     if (next?.poses) posesRef.current = next.poses;
     if (next?.strokes) strokesRef.current = next.strokes;
     if (next?.texts) textsRef.current = next.texts;
@@ -253,10 +278,11 @@ export function MemoryCanvas({
   const setCamera = useCallback((update: Camera | ((current: Camera) => Camera)) => {
     setCameraState(current => {
       const next = typeof update === "function" ? update(current) : update;
-      persist({ camera: next });
+      cameraRef.current = next;
+      writeBoardState(coupleIdRef.current, { ...boardSnapshot(), camera: next });
       return next;
     });
-  }, [persist]);
+  }, [boardSnapshot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -280,13 +306,15 @@ export function MemoryCanvas({
 
     void loadMemoryWallBoard().then(({ state: remote, updatedAt }) => {
       if (cancelled) return;
-      const merged = mergeWallBoard(local, remote, updatedAt, coupleId);
+      baseRef.current = remote ?? emptyBoardState();
+      remoteVersionRef.current = updatedAt;
+      const merged = remote ? { ...remote, camera: local.camera } : local;
       applyBoard(merged);
       writeBoardState(coupleId, merged);
       if (updatedAt) writeBoardSyncedAt(coupleId, updatedAt);
       finishCamera(merged);
       if ((!remote || isBoardEmpty(remote)) && !isBoardEmpty(local)) {
-        void saveMemoryWallBoard(local).then(result => {
+        void saveMemoryWallBoard(local, emptyBoardState()).then(result => {
           if ("ok" in result) writeBoardSyncedAt(coupleId, result.updatedAt);
         });
       }
@@ -296,34 +324,22 @@ export function MemoryCanvas({
       finishCamera(local);
     });
 
-    const live = subscribeMemoryWallBoard(coupleId, (remote, updatedAt, updatedBy) => {
-      if (cancelled) return;
-      if (updatedBy && userId && updatedBy === userId && Date.now() - lastSelfSaveAtRef.current < 1200) {
-        return;
-      }
-      if (drawRef.current || textDragRef.current) return;
-      applyingRemoteRef.current = true;
-      applyBoard(remote);
-      writeBoardState(coupleId, remote);
+    const receive = (remote: CorkBoardState, updatedAt: string) => {
+      if (cancelled || updatedAt === remoteVersionRef.current || savingRef.current || drawRef.current || textDragRef.current || editingTextRef.current) return;
+      remoteVersionRef.current = updatedAt;
+      const next = dirtyRef.current ? mergeBoardEdits(baseRef.current, boardSnapshot(), remote) : { ...remote, camera: cameraRef.current };
+      baseRef.current = remote;
+      applyBoard(next);
+      writeBoardState(coupleId, next);
       writeBoardSyncedAt(coupleId, updatedAt);
-      applyingRemoteRef.current = false;
-    });
-
-    let poll: number | undefined;
-    void live.connected.then(connected => {
-      if (cancelled || connected) return;
-      poll = window.setInterval(() => {
-        void loadMemoryWallBoard().then(({ state: remote, updatedAt }) => {
-          if (cancelled || !remote || drawRef.current) return;
-          const merged = mergeWallBoard(readBoardState(coupleId), remote, updatedAt, coupleId);
-          applyingRemoteRef.current = true;
-          applyBoard(merged);
-          writeBoardState(coupleId, merged);
-          if (updatedAt) writeBoardSyncedAt(coupleId, updatedAt);
-          applyingRemoteRef.current = false;
-        });
-      }, 5000);
-    });
+    };
+    const live = subscribeMemoryWallBoard(coupleId, receive);
+    const poll = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void loadMemoryWallBoard().then(({ state, updatedAt }) => {
+        if (state && updatedAt) receive(state, updatedAt);
+      }).catch(() => {});
+    }, 5000);
 
     return () => {
       cancelled = true;
@@ -333,7 +349,7 @@ export function MemoryCanvas({
   }, [applyBoard, coupleId, userId]);
 
   useEffect(() => {
-    if (!loadedRef.current) return;
+    if (!loadedRef.current || JSON.stringify(poses) === JSON.stringify(baseRef.current.poses)) return;
     persist({ poses });
   }, [persist, poses]);
 
@@ -349,7 +365,7 @@ export function MemoryCanvas({
       texts: textsRef.current,
     };
     writeBoardState(coupleIdRef.current, state);
-    void saveMemoryWallBoard(state);
+    if (dirtyRef.current) void saveMemoryWallBoard(state, baseRef.current);
   }, []);
 
   useEffect(() => {
@@ -432,7 +448,7 @@ export function MemoryCanvas({
     range.collapse(false);
     selection.removeAllRanges();
     selection.addRange(range);
-  }, [editingTextId, texts]);
+  }, [editingTextId]);
 
   function applyInk(next: InkStroke[], historic: boolean) {
     if (historic) {
@@ -483,6 +499,7 @@ export function MemoryCanvas({
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest("[contenteditable=true], textarea, input")) return;
     if (event.button === 1 || event.button === 2) {
       event.preventDefault();
     }
@@ -512,6 +529,7 @@ export function MemoryCanvas({
     if (tool === "text" && event.button === 0) {
       const world = screenToWorld(cameraRef.current, viewPoint(event));
       const created = createWallText({
+        authorId: userId ?? undefined,
         x: world.x,
         y: world.y,
         z: nextTextLayerZ(posesRef.current, textsRef.current),
@@ -768,6 +786,7 @@ export function MemoryCanvas({
   return (
     <MemoryCanvasContext.Provider value={context}>
       {toolbarHost ? createPortal(toolbar, toolbarHost) : null}
+      {syncError && <p role="alert" className="form-error">{syncError} <button type="button" onClick={() => flushRemoteSave(boardSnapshot())}>다시 저장</button></p>}
       <div className={`memory-canvas ${drawing || panning || tool === "text" ? `is-${tool}` : ""} ${spacePan ? "is-space" : ""}`}>
         <div
           ref={viewRef}
@@ -784,7 +803,7 @@ export function MemoryCanvas({
           <p className="memory-canvas-hint">
             {tool === "select" && "사진을 옮기고 각도를 틀 수 있어요. 빈 곳을 끌거나 스페이스로 종이를 밀고, 트랙패드는 두 손가락으로 확대합니다."}
             {tool === "pan" && "종이를 밀어 이동합니다. 휠은 이동, Ctrl 휠은 확대입니다."}
-            {tool === "pen" && "펜으로 벡터 획을 남깁니다. 두 손가락이나 스페이스로 종이를 움직일 수 있어요."}
+            {tool === "pen" && "사진 옆에 자유롭게 그려 보세요. 스페이스를 누른 채 끌면 종이를 옮길 수 있어요."}
             {tool === "marker" && "형광펜으로 장면 위에 표시를 남깁니다."}
             {tool === "eraser" && "획을 문질러 지웁니다. Ctrl+Z로 되돌릴 수 있어요."}
             {tool === "text" && "사진 위 아무 곳이나 눌러 글을 남기세요. 선택 도구로 옮기고, Delete로 지울 수 있어요."}
@@ -805,6 +824,7 @@ export function MemoryCanvas({
                 <div
                   key={item.id}
                   data-text-id={item.id}
+                  title={session.mode === "authenticated" && item.authorId ? `${item.authorId === session.userId ? session.displayName : session.partner?.displayName ?? "파트너"}의 글` : undefined}
                   className={`memory-wall-text is-${item.fontFamily}${item.fontWeight === "bold" ? " is-bold" : ""}${selectedTextId === item.id ? " is-selected" : ""}`}
                   style={{
                     left: item.x,
@@ -817,14 +837,19 @@ export function MemoryCanvas({
                 >
                   {editingTextId === item.id ? (
                     <span
+                      role="textbox"
+                      aria-label="추억에 남길 글"
+                      data-placeholder="여기에 글을 남겨 주세요"
+                      onPointerDown={event => event.stopPropagation()}
                       contentEditable
                       suppressContentEditableWarning
                       onBlur={event => {
-                        const value = event.currentTarget.textContent?.trim() || "우리의 한 줄";
+                        const value = event.currentTarget.textContent?.trim() || "";
                         patchText(item.id, { text: value.slice(0, 280) });
                         setEditingTextId(null);
                       }}
                       onKeyDown={event => {
+                        event.stopPropagation();
                         if (event.key === "Enter" && !event.shiftKey) {
                           event.preventDefault();
                           event.currentTarget.blur();

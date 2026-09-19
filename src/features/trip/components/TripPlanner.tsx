@@ -1,5 +1,6 @@
 "use client";
 
+import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
 import { useMemo, useRef, useState } from "react";
 import { useHydratePlanCoordinates } from "@/features/planning/useHydratePlanCoordinates";
 import dynamic from "next/dynamic";
@@ -15,6 +16,7 @@ import { stripLegacyDemoArchive, stripLegacyDemoPlan } from "@/features/planning
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import type { CouplePlan, PlanChange, PlanItem } from "@/features/planning/types/plan";
 import { addDays, formatKoDate, formatKoShort } from "@/lib/dates";
+import { itemsForDay, replacePlanDay } from "@/features/planning/planOrder";
 import { PlanMap } from "./PlanMap";
 
 const AIPlanEditor = dynamic(
@@ -25,19 +27,14 @@ const AIPlanEditor = dynamic(
 type Panel = "ai" | "activity";
 type Tab = "schedule" | "map" | "notes" | "archive";
 
-function mergeDay(all: PlanItem[], dayIndex: number, nextDay: PlanItem[]) {
-  const others = all.filter(item => (item.dayIndex ?? 0) !== dayIndex);
-  return [...others, ...nextDay.map((item, order) => ({ ...item, dayIndex, order }))]
-    .sort((a, b) => (a.dayIndex - b.dayIndex) || a.startTime.localeCompare(b.startTime) || a.order - b.order)
-    .map((item, order) => ({ ...item, order }));
-}
-
 export function TripPlanner({
   initialPlan,
   initialArchives,
+  initialDay = 0,
 }: {
   initialPlan: CouplePlan;
   initialArchives: ArchivedTripPlan[];
+  initialDay?: number;
 }) {
   const router = useRouter();
   const plan = stripLegacyDemoPlan(initialPlan);
@@ -46,7 +43,7 @@ export function TripPlanner({
   const [notes, setNotes] = useState(plan.notes);
   const [startDate, setStartDate] = useState(plan.startDate || "");
   const [dayCount, setDayCount] = useState(Math.max(1, plan.dayCount || 1));
-  const [selectedDay, setSelectedDay] = useState(0);
+  const [selectedDay, setSelectedDay] = useState(Math.max(0, Math.min(initialDay, plan.dayCount - 1)));
   const [panel, setPanel] = useState<Panel>("activity");
   const [tab, setTab] = useState<Tab>("schedule");
   const [saved, setSaved] = useState(true);
@@ -57,11 +54,22 @@ export function TripPlanner({
   }));
   const [archiveNotice, setArchiveNotice] = useState("");
   const revisionRef = useRef(initialPlan.revision);
+  const dirtyRef = useRef(false);
+  const pendingSaves = useRef(0);
+  useSharedRefresh(async () => {
+    if (dirtyRef.current) return;
+    const remote = await loadCouplePlan("trip");
+    if (dirtyRef.current || remote.revision === revisionRef.current) return;
+    revisionRef.current = remote.revision;
+    setItems(remote.items); setTitle(remote.title); setNotes(remote.notes);
+    setStartDate(remote.startDate ?? ""); setDayCount(remote.dayCount);
+    setSelectedDay(day => Math.min(day, Math.max(0, remote.dayCount - 1)));
+  });
   const saveQueueRef = useRef(Promise.resolve());
   useHydratePlanCoordinates("trip", items, setItems);
 
   const dayItems = useMemo(
-    () => items.filter(item => (item.dayIndex ?? 0) === selectedDay),
+    () => itemsForDay(items, selectedDay),
     [items, selectedDay],
   );
   const dayLabel = `DAY ${selectedDay + 1}`;
@@ -78,10 +86,12 @@ export function TripPlanner({
   }
 
   const persist = (next: PlanItem[], extra?: { title?: string; subtitle?: string; startDate?: string | null; dayCount?: number }) => {
+    dirtyRef.current = true;
+    pendingSaves.current += 1;
     setSaved(false);
     setSaveError("");
     setItems(next);
-    saveQueueRef.current = saveQueueRef.current.then(async () => {
+    saveQueueRef.current = saveQueueRef.current.catch(() => {}).then(async () => {
       const result = await saveCouplePlan("trip", next, {
         title: extra?.title ?? title,
         subtitle: extra?.subtitle ?? notes,
@@ -93,8 +103,10 @@ export function TripPlanner({
         revisionRef.current = result.revision;
         emitCoupleActivitiesChanged();
       } else setSaveError(result.error);
-      setSaved(true);
-    });
+      pendingSaves.current -= 1;
+      dirtyRef.current = pendingSaves.current > 0 || "error" in result;
+      setSaved(pendingSaves.current === 0);
+    }).catch(() => { pendingSaves.current = Math.max(0, pendingSaves.current - 1); setSaveError("아직 저장되지 않았어요. 연결을 확인하고 다시 시도해 주세요."); });
   };
 
   const apply = (changes: PlanChange[]) => {
@@ -107,7 +119,7 @@ export function TripPlanner({
   };
 
   const replace = (next: PlanItem[]) => {
-    persist(mergeDay(items, selectedDay, next));
+    persist(replacePlanDay(items, selectedDay, next));
   };
 
   const keepCourse = async (input: CourseKeepInput): Promise<CourseKeepResult> => {
@@ -179,7 +191,7 @@ export function TripPlanner({
         <div>
           <span className="eyebrow">{items.length ? `TRIP · ${dayCount} DAYS · ${items.length} PLACES` : "TRIP"}</span>
           {items.length ? (
-            <input className="title-input" value={title} onChange={event => setTitle(event.target.value)} onBlur={() => persist(items, { title })} aria-label="여행 제목" />
+            <input className="title-input" value={title} onChange={event => { dirtyRef.current = true; setTitle(event.target.value); }} onBlur={() => persist(items, { title })} aria-label="여행 제목" />
           ) : (
             <h1>아직 잡아 둔 여행이 없어요</h1>
           )}
@@ -231,7 +243,7 @@ export function TripPlanner({
           <h2>둘이 남기는 메모</h2>
           <textarea
             value={notes}
-            onChange={event => setNotes(event.target.value)}
+            onChange={event => { dirtyRef.current = true; setNotes(event.target.value); }}
             onBlur={() => persist(items, { subtitle: notes })}
             placeholder="숙소 체크인, 꼭 먹고 싶은 것, 비 올 때 대안..."
             rows={8}
@@ -278,17 +290,17 @@ export function TripPlanner({
               {!dayItems.length ? (
                 <div className="empty-soft planner-empty">
                   <h1>{items.length ? "이날은 비어 있어요" : "여행 초안이 비어 있어요"}</h1>
-                  <p>Places에서 담고, 오른쪽 AI로 3안을 만들 수 있어요. 담기는 지금 고른 날에 붙어요.</p>
+                  <p>함께 가고 싶은 장소를 이 날짜에 담아 보세요. AI에게 하루 코스를 추천받을 수도 있어요.</p>
                   <div className="dialog-actions">
                 <Link className="primary-button" href={`/places?from=trip&day=${selectedDay}`}>이 날의 장소 찾기</Link>
-                <button className="outline-button" type="button" onClick={() => setPanel("ai")}>AI로 3안 만들기</button>
+                <button className="outline-button" type="button" onClick={() => setPanel("ai")}>여행 코스 추천받기</button>
                   </div>
                 </div>
               ) : (
                 <>
                   <PlanTimeline
                     items={dayItems}
-                    onReorder={next => persist(mergeDay(items, selectedDay, next))}
+                    onReorder={next => persist(replacePlanDay(items, selectedDay, next))}
                     onUpdate={updateItem}
                     onRemove={id => persist(items.filter(item => item.id !== id))}
                   />

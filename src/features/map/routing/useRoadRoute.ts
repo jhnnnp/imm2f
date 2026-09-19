@@ -21,6 +21,7 @@ export function useRoadRoute(
 
     let cancelled = false;
     setLoading(true);
+    setPath(null);
 
     void fetchRoadRoute(coordinates, profile).then(next => {
       if (cancelled) return;

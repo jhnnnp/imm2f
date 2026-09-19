@@ -70,11 +70,19 @@ export const listPlaces = cache(async (): Promise<{ persist: boolean; places: Pl
     .eq("couple_id", session.coupleId)
     .order("created_at", { ascending: true });
 
-  if (error || !data) return { persist: true, places: [] };
-  const prefs = await loadPreferences(data.map(row => row.id));
+  if (error) throw new Error("저장한 장소를 불러오지 못했어요.");
+  if (!data) return { persist: true, places: [] };
+  const [prefs, memoEdits] = await Promise.all([
+    loadPreferences(data.map(row => row.id)),
+    supabase.from("activities").select("entity_id, actor_user_id").eq("couple_id", session.coupleId).eq("entity_type", "place_memo").order("created_at", { ascending: false }),
+  ]);
+  const authors = new Map<string, string>();
+  for (const row of memoEdits.data ?? []) {
+    if (row.entity_id && row.actor_user_id && !authors.has(row.entity_id)) authors.set(row.entity_id, row.actor_user_id);
+  }
   return {
     persist: true,
-    places: data.map(row => toPlace(row, prefs, session.userId, session.partner?.userId ?? null)),
+    places: data.map(row => ({ ...toPlace(row, prefs, session.userId, session.partner?.userId ?? null), memoAuthorId: authors.get(row.id) })),
   };
 });
 
@@ -370,9 +378,11 @@ export async function updatePlaceDescription(placeId: string, description: strin
     .select("*")
     .single();
   if (error || !data) return { error: error?.message ?? "메모를 저장하지 못했어요." };
-  revalidatePath("/");
+  await supabase.from("activities").insert({ couple_id: session.coupleId, actor_user_id: session.userId, entity_type: "place_memo", entity_id: placeId, action: "PLACE_UPDATED", title: "장소 메모를 남겼어요", detail: data.name });
+  revalidatePath("/places");
+  revalidatePath("/our-map");
   const prefs = await loadPreferences([data.id]);
-  return { place: toPlace(data, prefs, session.userId, session.partner?.userId ?? null) };
+  return { place: { ...toPlace(data, prefs, session.userId, session.partner?.userId ?? null), memoAuthorId: session.userId } };
 }
 
 export async function updatePlaceLocation(placeId: string, input: PlaceLocationInput): Promise<{ place: Place } | { error: string }> {

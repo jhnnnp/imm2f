@@ -32,7 +32,7 @@ export const NOTE_STATUS: Record<NoteKind, ReadonlyArray<{ id: string; label: st
 export const NOTE_COPY: Record<NoteKind, { eyebrow: string; title: string; lead: string; placeholder: string; extra: string; extraPh: string }> = {
   vault: {
     eyebrow: "VAULT",
-    title: "우리의  아는 보관함",
+    title: "우리의 보관함",
     lead: "예약 번호, 편지, 두고 싶은 말을 여기에 모아 둬요.",
     placeholder: "제주 렌터카 예약번호",
     extra: "코드 / 링크",
@@ -41,7 +41,7 @@ export const NOTE_COPY: Record<NoteKind, { eyebrow: string; title: string; lead:
   gift: {
     eyebrow: "GIFTS",
     title: "마음을 준비하는 선물",
-    lead: "주고 싶은 마음부터 전한 순간까지, 우리의선물 기록을 차곡차곡 관리해요.",
+    lead: "주고 싶은 마음부터 전한 순간까지, 우리의 선물 기록을 차곡차곡 관리해요.",
     placeholder: "손편지와 작은 꽃",
     extra: "상품 링크",
     extraPh: "https://example.com/product",

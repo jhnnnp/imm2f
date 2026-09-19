@@ -545,7 +545,7 @@ export function MemoryTimeline({
         <div>
           <span className="eyebrow">OUR ARCHIVE · {new Date().getFullYear()}</span>
           <h1>함께여서 기억나는 장면들</h1>
-          <p>종이를 밀고 확대하며, 펜과 텍스트로 남긴 표시는 커플끼리 함께 보여요.</p>
+          <p>사진 옆에 글을 남기고, 펜으로 마음을 더해 보세요. 둘이 함께 꾸미는 추억이에요.</p>
         </div>
       </div>
       <div className="page-actions date-planner-actions trip-planner-actions memory-page-actions">

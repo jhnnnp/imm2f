@@ -161,7 +161,7 @@ export function TasteStudio({ initial, places }: { initial: TasteBoard; places: 
             <h1>우리의 취향</h1>
             <p>
               {board.compare
-                ? "둘이 남긴 기준으로 다음 데이트의 뼈대를 만들어요. 점수가 아니라 타협안입니다."
+                ? "둘의 취향과 식사 조건을 함께 살펴, 함께 즐길 데이트 코스를 추천해요."
                 : "각자 데이트 기준을 남기면, 겹치는 동네와 빼야 할 음식이 바로 코스에 반영돼요."}
             </p>
           </div>

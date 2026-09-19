@@ -108,3 +108,9 @@ describe("landingDateDay", () => {
     expect(result.focus.items[0]?.placeName).toBe("서울숲");
   });
 });
+
+it("recovers a marked saved day when the active plan for that date is empty", () => {
+  const saved = { date: "2026-09-18", title: "우리 약속", notes: "저녁에 만나기", items: [stop("군산역")] };
+  const result = landingDateDay({ plan: { startDate: saved.date, title: "우리가 고른 데이트", notes: "", items: [] }, drafts: [saved], today: saved.date });
+  expect(result.focus).toEqual(saved);
+});

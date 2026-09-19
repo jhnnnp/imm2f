@@ -80,5 +80,9 @@ export function landingDateDay(input: {
     items: input.plan.items,
   };
   const drafts = current.date && hasDateContent(current) ? upsertDateDay(input.drafts, current) : input.drafts;
+  const savedFocus = drafts.find(day => day.date === input.today);
+  if (savedFocus && current.date === input.today && !hasDateContent(current)) {
+    return { drafts, focus: savedFocus, mode: "noop" as const };
+  }
   return applyDateSwitch({ current, drafts, nextDate: input.today });
 }

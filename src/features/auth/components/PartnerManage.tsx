@@ -59,7 +59,7 @@ export function PartnerManage({
         <aside className="partner-manage-taste">
           <span className="eyebrow">OUR TASTE</span>
           <h3>다음 데이트의 기준</h3>
-          <p>동네, 페이스, 못 먹는 음식을 남기면 해제보다 먼저 할 일이 생겨요. 점수가 아니라 타협안입니다.</p>
+          <p>좋아하는 동네와 걷는 속도, 피하고 싶은 음식을 함께 알려 주세요. 둘 다 편안한 데이트를 추천해 드릴게요.</p>
           <Link className="primary-button" href="/insights">우리 기준 열기</Link>
         </aside>
         <aside className="partner-manage-leave">
