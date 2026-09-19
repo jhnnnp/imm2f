@@ -35,6 +35,11 @@ export function useTossDismiss(
       event.preventDefault();
       const box = boundRef.current?.getBoundingClientRect();
       if (!box || (event.clientX === 0 && event.clientY === 0)) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-toss-safe]")) {
+        setOutside(false);
+        return;
+      }
       setOutside(
         event.clientX < box.left - padding
         || event.clientX > box.right + padding

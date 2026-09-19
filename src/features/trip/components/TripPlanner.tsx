@@ -1,7 +1,7 @@
 "use client";
 
 import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type DragEvent } from "react";
 import { useHydratePlanCoordinates } from "@/features/planning/useHydratePlanCoordinates";
 import dynamic from "next/dynamic";
 import Link from "next/link";
@@ -16,7 +16,7 @@ import { stripLegacyDemoArchive, stripLegacyDemoPlan } from "@/features/planning
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import type { CouplePlan, PlanChange, PlanItem } from "@/features/planning/types/plan";
 import { addDays, formatKoDate, formatKoShort } from "@/lib/dates";
-import { itemsForDay, replacePlanDay } from "@/features/planning/planOrder";
+import { itemsForDay, movePlanItemToDay, replacePlanDay } from "@/features/planning/planOrder";
 import { PlanMap } from "./PlanMap";
 
 const AIPlanEditor = dynamic(
@@ -56,6 +56,10 @@ export function TripPlanner({
   const revisionRef = useRef(initialPlan.revision);
   const dirtyRef = useRef(false);
   const pendingSaves = useRef(0);
+  const draggingItemId = useRef<string | null>(null);
+  const movedToDayRef = useRef(false);
+  const [dayDropTarget, setDayDropTarget] = useState<number | null>(null);
+  const [draggingSchedule, setDraggingSchedule] = useState(false);
   useSharedRefresh(async () => {
     if (dirtyRef.current) return;
     const remote = await loadCouplePlan("trip");
@@ -180,6 +184,31 @@ export function TripPlanner({
     persist(items, { dayCount: nextCount });
   };
 
+  const consumeExternalDrop = () => {
+    const moved = movedToDayRef.current;
+    movedToDayRef.current = false;
+    return moved;
+  };
+
+  const readDraggedItemId = (event: DragEvent) => {
+    const fromType = event.dataTransfer.getData("application/x-plan-item") || event.dataTransfer.getData("text/plain");
+    return fromType || draggingItemId.current;
+  };
+
+  const dropOnDay = (day: number, event: DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const itemId = readDraggedItemId(event);
+    setDayDropTarget(null);
+    setDraggingSchedule(false);
+    if (!itemId) return;
+    const current = items.find(item => item.id === itemId);
+    if (!current || (current.dayIndex ?? 0) === day) return;
+    movedToDayRef.current = true;
+    persist(movePlanItemToDay(items, itemId, day));
+    selectDay(day);
+  };
+
   return (
     <>
       {panel === "ai" && (
@@ -252,12 +281,36 @@ export function TripPlanner({
         </section>
       ) : (
         <div className="planner-shell">
-          <aside className="day-rail">
+          <aside className={`day-rail${draggingSchedule ? " is-receiving" : ""}`} data-toss-safe>
             <span className="eyebrow">DAYS</span>
+            {draggingSchedule && <p className="day-rail-hint" role="status">DAY 위에 놓으면 그 날짜로 옮겨요</p>}
             {Array.from({ length: dayCount }, (_, day) => {
               const count = items.filter(item => (item.dayIndex ?? 0) === day).length;
+              const isDropTarget = dayDropTarget === day && selectedDay !== day;
               return (
-                <button className={selectedDay === day ? "is-active" : ""} type="button" key={day} onClick={() => selectDay(day)}>
+                <button
+                  className={`${selectedDay === day ? "is-active" : ""}${isDropTarget ? " is-drop-target" : ""}`}
+                  type="button"
+                  key={day}
+                  onClick={() => selectDay(day)}
+                  onDragEnter={event => {
+                    if (!draggingSchedule || selectedDay === day) return;
+                    event.preventDefault();
+                    setDayDropTarget(day);
+                  }}
+                  onDragOver={event => {
+                    if (!draggingSchedule || selectedDay === day) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    if (dayDropTarget !== day) setDayDropTarget(day);
+                  }}
+                  onDragLeave={event => {
+                    if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                    setDayDropTarget(current => (current === day ? null : current));
+                  }}
+                  onDrop={event => dropOnDay(day, event)}
+                  aria-label={draggingSchedule && selectedDay !== day ? `DAY ${day + 1}로 일정 옮기기` : undefined}
+                >
                   <b>DAY {day + 1}</b>
                   <small>{startDate ? formatKoShort(addDays(startDate, day)) : `${count}곳`}</small>
                   <i>{count}</i>
@@ -303,6 +356,17 @@ export function TripPlanner({
                     onReorder={next => persist(replacePlanDay(items, selectedDay, next))}
                     onUpdate={updateItem}
                     onRemove={id => persist(items.filter(item => item.id !== id))}
+                    onDragSessionStart={id => {
+                      draggingItemId.current = id;
+                      movedToDayRef.current = false;
+                      setDraggingSchedule(true);
+                    }}
+                    onDragSessionEnd={() => {
+                      draggingItemId.current = null;
+                      setDraggingSchedule(false);
+                      setDayDropTarget(null);
+                    }}
+                    consumeExternalDrop={consumeExternalDrop}
                   />
                   <Link className="add-schedule" href={`/places?from=trip&day=${selectedDay}`}>＋ 이 날에 장소 추가</Link>
                 </>

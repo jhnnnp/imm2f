@@ -67,6 +67,7 @@ export function PlanItemCard({
       onDragStart={event => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", item.id);
+        event.dataTransfer.setData("application/x-plan-item", item.id);
         onDragStart(item.id);
       }}
       onDragEnter={() => onDragEnter(item.id)}
@@ -76,7 +77,7 @@ export function PlanItemCard({
     >
       {letter && <span className="letter-pin" aria-hidden="true" />}
       <div className="timeline-item-head">
-        <button className="drag" type="button" aria-label="드래그하여 순서 변경" title="끌어서 순서 변경">⠿</button>
+        <button className="drag" type="button" aria-label="드래그하여 순서 변경 또는 다른 날짜로 이동" title="끌어서 순서 변경 · 왼쪽 DAY로 옮기기">⠿</button>
         {letter ? <span className="letter-stamp">{stamp}</span> : <time>{item.startTime}</time>}
         <span className="timeline-category">{item.category}</span>
         <div className="item-actions" ref={menuRef}>

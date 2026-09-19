@@ -10,6 +10,9 @@ export function PlanTimeline({
   onReorder,
   onRemove,
   onUpdate,
+  onDragSessionStart,
+  onDragSessionEnd,
+  consumeExternalDrop,
   columns = 1,
   fill = false,
   variant = "schedule",
@@ -18,6 +21,10 @@ export function PlanTimeline({
   onReorder: (items: PlanItem[]) => void;
   onRemove?: (id: string) => void;
   onUpdate?: (id: string, patch: Pick<PlanItem, "startTime" | "durationMinutes">) => void;
+  onDragSessionStart?: (id: string) => void;
+  onDragSessionEnd?: () => void;
+  /** Return true when a drop was handled outside this list (e.g. another day). */
+  consumeExternalDrop?: () => boolean;
   columns?: 1 | 2;
   fill?: boolean;
   variant?: "schedule" | "letter";
@@ -67,15 +74,22 @@ export function PlanTimeline({
             index={index}
             variant={variant}
             tossing={draggingId === item.id && dismissing}
-            onDragStart={id => { dragged.current = id; droppedInside.current = false; setDraggingId(id); }}
+            onDragStart={id => {
+              dragged.current = id;
+              droppedInside.current = false;
+              setDraggingId(id);
+              onDragSessionStart?.(id);
+            }}
             onDragEnter={id => { if (!dismissing) setOverId(id); }}
             onDragEnd={() => {
-              if (!droppedInside.current && dismissingRef.current && dragged.current && onRemove) {
+              const handledOutside = consumeExternalDrop?.() ?? false;
+              if (!handledOutside && !droppedInside.current && dismissingRef.current && dragged.current && onRemove) {
                 onRemove(dragged.current);
               }
               dragged.current = null;
               setDraggingId(null);
               setOverId(null);
+              onDragSessionEnd?.();
             }}
             onDrop={drop}
             onRemove={onRemove}
