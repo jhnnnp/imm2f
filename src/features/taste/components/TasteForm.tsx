@@ -59,7 +59,7 @@ const STEPS = [
     id: "table",
     title: "식사와 분위기",
     short: "음식",
-    hint: "못 먹는 음식은 상대 코스에서도 빠집니다.",
+    hint: "둘 중 한 명이라도 먹기 어려운 음식은 추천에서 빼드릴게요.",
     next: "기준 저장",
   },
 ] as const;

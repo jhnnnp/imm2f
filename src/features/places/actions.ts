@@ -149,22 +149,25 @@ export async function searchDiscoverPlaces(input: DiscoverSearchInput | string):
   return { ...raw, places: raw.places.filter(keepDiscoverPlace) };
 }
 
+const ACTIVE_PLACE_STATUSES: PlacePreferenceStatus[] = ["want", "must_visit", "revisit"];
+
 async function ensureWantPreference(placeId: string, userId: string) {
   const supabase = await createClient();
-  if (!supabase) return;
+  if (!supabase) return false;
   const { data } = await supabase
     .from("place_preferences")
-    .select("user_id")
+    .select("status")
     .eq("place_id", placeId)
     .eq("user_id", userId)
     .maybeSingle();
-  if (data) return;
-  await supabase.from("place_preferences").insert({
+  if (data && ACTIVE_PLACE_STATUSES.includes(data.status as PlacePreferenceStatus)) return true;
+  await supabase.from("place_preferences").upsert({
     place_id: placeId,
     user_id: userId,
     status: "want",
     fit: 0,
-  });
+  }, { onConflict: "place_id,user_id" });
+  return false;
 }
 
 export async function saveKakaoPlace(input: SaveKakaoPlaceInput): Promise<{ place: Place; duplicate?: boolean } | { error: string }> {
@@ -184,7 +187,7 @@ export async function saveKakaoPlace(input: SaveKakaoPlaceInput): Promise<{ plac
     .maybeSingle();
 
   if (existing) {
-    await ensureWantPreference(existing.id, session.userId);
+    const wasAlreadySaved = await ensureWantPreference(existing.id, session.userId);
     const nextDescription = input.description.trim();
     const { data: updated, error: updateError } = await supabase
       .from("places")
@@ -195,7 +198,7 @@ export async function saveKakaoPlace(input: SaveKakaoPlaceInput): Promise<{ plac
     if (updateError) return { error: updateError.message };
     const row = updated ?? existing;
     const prefs = await loadPreferences([row.id]);
-    return { place: toPlace(row, prefs, session.userId, session.partner?.userId ?? null), duplicate: true };
+    return { place: toPlace(row, prefs, session.userId, session.partner?.userId ?? null), duplicate: wasAlreadySaved };
   }
 
   const { data, error } = await supabase
@@ -235,7 +238,7 @@ export async function saveKakaoPlace(input: SaveKakaoPlaceInput): Promise<{ plac
         .eq("external_place_id", candidate.externalPlaceId)
         .maybeSingle();
       if (raced) {
-        await ensureWantPreference(raced.id, session.userId);
+        const wasAlreadySaved = await ensureWantPreference(raced.id, session.userId);
         const nextDescription = input.description.trim();
         const { data: updated, error: updateError } = await supabase
           .from("places")
@@ -246,7 +249,7 @@ export async function saveKakaoPlace(input: SaveKakaoPlaceInput): Promise<{ plac
         if (updateError) return { error: updateError.message };
         const row = updated ?? raced;
         const prefs = await loadPreferences([row.id]);
-        return { place: toPlace(row, prefs, session.userId, session.partner?.userId ?? null), duplicate: true };
+        return { place: toPlace(row, prefs, session.userId, session.partner?.userId ?? null), duplicate: wasAlreadySaved };
       }
     }
     return { error: error.message };
@@ -285,6 +288,9 @@ export async function createPlace(input: CreatePlaceInput): Promise<{ place: Pla
   if (!name) return { error: "장소 이름을 입력해 주세요." };
   const category = PLACE_CATEGORIES.find(item => item.id === input.category)?.id ?? "cafe";
   const categoryLabel = PLACE_CATEGORIES.find(item => item.id === category)?.label ?? "장소";
+  const location = input.district.trim()
+    ? await resolvePlaceLocation(name, { address: input.district, district: input.district })
+    : null;
 
   const { data, error } = await supabase
     .from("places")
@@ -293,7 +299,12 @@ export async function createPlace(input: CreatePlaceInput): Promise<{ place: Pla
       name,
       category,
       category_label: categoryLabel,
-      district: input.district.trim(),
+      district: location?.district || input.district.trim(),
+      address: location?.address || input.district.trim(),
+      road_address: location?.roadAddress || null,
+      lng: location?.coordinates?.[0] ?? null,
+      lat: location?.coordinates?.[1] ?? null,
+      map_url: location?.mapUrl ?? null,
       description: input.description.trim(),
       duration_minutes: Number.isFinite(input.durationMinutes) ? input.durationMinutes : 60,
       expected_cost_two: optionalCost(input.expectedCostTwo),
@@ -408,9 +419,9 @@ export async function updatePlaceLocation(placeId: string, input: PlaceLocationI
       address: patch.address,
       road_address: patch.roadAddress || null,
       district: patch.district,
-      lng: patch.coordinates?.[0] ?? current.lng,
-      lat: patch.coordinates?.[1] ?? current.lat,
-      map_url: current.external_source === "kakao" && patch.mapUrl ? patch.mapUrl : current.map_url,
+      lng: patch.coordinates?.[0] ?? null,
+      lat: patch.coordinates?.[1] ?? null,
+      map_url: current.external_source === "kakao" ? (patch.mapUrl ?? null) : current.map_url,
     })
     .eq("id", placeId)
     .eq("couple_id", session.coupleId)

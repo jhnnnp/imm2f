@@ -148,7 +148,7 @@ export function parseTasteInput(input: TasteInput): TasteProfile | { error: stri
     drink,
     indoor_play: indoorPlay,
     note: input.note,
-  }) ?? { error: "아직 고르지 않은 기준이 있어요. 동네, 페이스, 활동, 식사를 채워 주세요." };
+  }) ?? { error: "아직 비어 있는 항목이 있어요. 가고 싶은 동네와 하루의 속도, 하고 싶은 것, 식사 취향을 확인해 주세요." };
 }
 
 export function allowedAvoid(value: string) {

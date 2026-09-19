@@ -91,6 +91,8 @@ export function PlacesExperience({
   const [dialogMode, setDialogMode] = useState<DialogMode>("manual");
   const [pendingCandidate, setPendingCandidate] = useState<DiscoverCandidate | null>(null);
   const [pendingInitialDescription, setPendingInitialDescription] = useState("");
+  const [planPending, setPlanPending] = useState<"trip" | "date" | null>(null);
+  const [statusPendingId, setStatusPendingId] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchCategory, setSearchCategory] = useState<PlaceCategoryId | "all">("all");
@@ -212,30 +214,34 @@ export function PlacesExperience({
   }, []);
 
   async function persistStatus(id: string, status: PlacePreferenceStatus) {
+    if (statusPendingId) return;
     const previous = places.find(place => place.id === id) ?? discover.find(place => place.id === id);
     const applyStatus = (current: Place[]) => current.map(place => place.id === id ? { ...place, userStatus: status } : place);
-    const nextPlaces = applyStatus(places);
-    const updated = nextPlaces.find(place => place.id === id);
-    setPlaces(nextPlaces);
-    setDiscover(applyStatus);
-    if (updated && !isKeptInArchive(updated)) {
-      setSelectedId(nextPlaces.find(place => place.id !== id && isKeptInArchive(place))?.id ?? "");
-    }
+    setStatusPendingId(id);
     if (!persist) {
       setNotice("로그인과 데이터베이스 연결이 필요해요.");
+      setStatusPendingId(null);
       return;
     }
-    const result = await updateMyPlaceStatus(id, status);
+    const [result] = await Promise.all([
+      updateMyPlaceStatus(id, status),
+      new Promise(resolve => window.setTimeout(resolve, 450)),
+    ]);
     if (!("error" in result)) {
+      const nextPlaces = applyStatus(places);
+      const updated = nextPlaces.find(place => place.id === id);
+      setPlaces(nextPlaces);
+      setDiscover(applyStatus);
+      if (updated && !isKeptInArchive(updated)) {
+        setSelectedId(nextPlaces.find(place => place.id !== id && isKeptInArchive(place))?.id ?? "");
+      }
       emitCoupleActivitiesChanged();
+      setStatusPendingId(null);
       return;
     }
     setNotice(result.error);
-    if (!previous) return;
-    const restore = (current: Place[]) => current.map(place => place.id === id ? { ...place, userStatus: previous.userStatus } : place);
-    setPlaces(restore);
-    setDiscover(restore);
-    setSelectedId(id);
+    if (previous) setSelectedId(id);
+    setStatusPendingId(null);
   }
 
   function toggleSave(id: string) {
@@ -369,25 +375,28 @@ export function PlacesExperience({
       setNotice("로그인과 데이터베이스 연결이 필요해요.");
       return;
     }
+    setPlanPending(kind);
     const result = await addItemToCouplePlan(kind, {
-      id: `plan-${kind}-${selected.id}`,
-      placeId: selected.id,
-      placeName: selected.name,
-      category: selected.categoryLabel,
-      startTime: "13:00",
-      durationMinutes: selected.durationMinutes || 60,
-      expectedCost: selected.expectedCostTwo || 0,
-      order: 0,
-      memo: selected.description || "",
-      dayIndex: kind === "trip" ? Number(searchParams.get("day") || 0) : 0,
-      coordinates: selected.coordinates,
-    });
+        id: `plan-${kind}-${selected.id}`,
+        placeId: selected.id,
+        placeName: selected.name,
+        category: selected.categoryLabel,
+        startTime: "13:00",
+        durationMinutes: selected.durationMinutes || 60,
+        expectedCost: selected.expectedCostTwo || 0,
+        order: 0,
+        memo: selected.description || "",
+        dayIndex: kind === "trip" ? Number(searchParams.get("day") || 0) : 0,
+        coordinates: selected.coordinates,
+      }).catch(() => ({ error: `${label}에 담지 못했어요. 연결을 확인하고 다시 시도해 주세요.` }));
     if ("error" in result) {
       setNotice(result.error);
+      setPlanPending(null);
       return;
     }
     setNotice(result.duplicate ? `${selected.name}은 이미 ${label}에 있어요.` : `${withObjectParticle(selected.name)} ${label}에 넣었어요.`);
     if (kind === "trip") setTripItems(result.items);
+    setPlanPending(null);
     emitCoupleActivitiesChanged();
   }
 
@@ -413,6 +422,18 @@ export function PlacesExperience({
         ? { ...browseInput(group, area), categories, page: 1 }
         : { ...browseInput(group, area), category: "all", page: 1 },
     );
+  }
+
+  function runBrowseResultSearch() {
+    const query = browseResultQuery.trim();
+    if (!query) {
+      runBrowse({});
+      return;
+    }
+    const base = browseInput(browseGroup, browseArea);
+    void runDiscover(browseCategories.length
+      ? { ...base, query, categories: browseCategories, page: 1 }
+      : { ...base, query, category: "all", page: 1 });
   }
 
   function toggleBrowseCategory(category: PlaceCategoryId) {
@@ -445,8 +466,8 @@ export function PlacesExperience({
     const nextPage = discoverPage + 1;
     if (section === "search") void runDiscover({ query: searchQuery, category: searchCategory, page: nextPage }, true);
     if (section === "browse") void runDiscover(browseCategories.length
-      ? { ...browseInput(browseGroup, browseArea), categories: browseCategories, page: nextPage }
-      : { ...browseInput(browseGroup, browseArea), category: "all", page: nextPage }, true);
+      ? { ...browseInput(browseGroup, browseArea), ...(browseResultQuery.trim() ? { query: browseResultQuery.trim() } : {}), categories: browseCategories, page: nextPage }
+      : { ...browseInput(browseGroup, browseArea), ...(browseResultQuery.trim() ? { query: browseResultQuery.trim() } : {}), category: "all", page: nextPage }, true);
     if (section === "map" && mapOrigin) void runDiscover({ ...mapOrigin, category: mapCategory, page: nextPage }, true);
   }
 
@@ -459,11 +480,7 @@ export function PlacesExperience({
   const regionSuggestions = (PLACE_ADMINISTRATIVE_AREAS[browseGroup] ?? [])
     .filter(area => !browseRegionQuery.trim() || area.toLowerCase().includes(browseRegionQuery.trim().toLowerCase()))
     .slice(0, 8);
-  const normalizedBrowseResultQuery = browseResultQuery.trim().toLowerCase();
-  const visibleBrowseDiscover = normalizedBrowseResultQuery
-    ? discover.filter(place => [place.name, place.categoryLabel, place.district, place.address, place.roadAddress]
-      .some(value => value?.toLowerCase().includes(normalizedBrowseResultQuery)))
-    : discover;
+  const visibleBrowseDiscover = discover;
 
   const copy = {
     saved: { title: "우리의 장소", body: null },
@@ -481,6 +498,8 @@ export function PlacesExperience({
             place={selected}
             preferredPlan={source}
             tripScheduleStops={selectedTripStops}
+            planPending={planPending}
+            savePending={statusPendingId === selected.id}
             onAdd={() => addSelectedToPlan("trip")}
             onAddDate={() => addSelectedToPlan("date")}
             onStatusChange={status => void persistStatus(selected.id, status)}
@@ -625,7 +644,6 @@ export function PlacesExperience({
                     setBrowseArea("all");
                     setBrowseRegionQuery("");
                     runBrowse({ group: selectedBrowseGroup.id, area: "all" });
-                    runBrowse({ group: selectedBrowseGroup.id, area: "all" });
                   }}
                 >
                   {selectedBrowseGroup.label} 전체
@@ -726,6 +744,7 @@ export function PlacesExperience({
                 onTripSchedule={tripLinkedPlaceIds.has(place.id)}
                 onSelect={() => setSelectedId(place.id)}
                 onToggleSave={() => toggleSave(place.id)}
+                savePending={statusPendingId === place.id}
               />
             ))}</div>
           )
@@ -762,10 +781,10 @@ export function PlacesExperience({
         browseArea ? (
           <>
             {(discover.length > 0 || browseResultQuery) && (
-              <div className="result-search-toolbar">
-                <div><b>검색 결과</b><span>{visibleBrowseDiscover.length}곳{browseResultQuery ? ` / 전체 ${discover.length}곳` : ""}</span></div>
-                <label><span aria-hidden="true">⌕</span><input value={browseResultQuery} onChange={event => setBrowseResultQuery(event.target.value)} placeholder="결과에서 이름·주소 찾기" aria-label="검색 결과 내 찾기" />{browseResultQuery && <button type="button" onClick={() => setBrowseResultQuery("")} aria-label="결과 검색어 지우기">×</button>}</label>
-              </div>
+              <form className="result-search-toolbar" onSubmit={event => { event.preventDefault(); runBrowseResultSearch(); }}>
+                <div><b>{selectedBrowseGroup?.label ?? "선택 지역"} 전체 검색 결과</b><span>{visibleBrowseDiscover.length}곳</span></div>
+                <label><span aria-hidden="true">⌕</span><input value={browseResultQuery} onChange={event => setBrowseResultQuery(event.target.value)} placeholder={`${selectedBrowseGroup?.label ?? "이 지역"}의 장소 이름·주소 검색`} aria-label="선택 지역 전체에서 검색" />{browseResultQuery && <button type="button" onClick={() => { setBrowseResultQuery(""); runBrowse({}); }} aria-label="검색어 지우기">×</button>}</label>
+              </form>
             )}
             <PlaceDiscoverResults
               places={visibleBrowseDiscover}
@@ -774,8 +793,8 @@ export function PlacesExperience({
               error={discoverError}
               isEnd={discoverIsEnd}
               layout={layout}
-              emptyTitle={browseResultQuery ? "결과 안에서 일치하는 장소가 없어요." : "이 동네의 후보가 아직 없어요."}
-              emptyBody={browseResultQuery ? "검색어를 줄이거나 다른 이름과 주소로 찾아보세요." : "다른 동네를 고르거나, 종류를 바꿔 보세요."}
+              emptyTitle={browseResultQuery ? "이 지역에서 일치하는 장소가 없어요." : "이 동네의 후보가 아직 없어요."}
+              emptyBody={browseResultQuery ? "다른 이름이나 주소로 다시 검색해 보세요." : "다른 동네를 고르거나, 종류를 바꿔 보세요."}
               onSelect={handleSelect}
               onSave={openSave}
               onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}

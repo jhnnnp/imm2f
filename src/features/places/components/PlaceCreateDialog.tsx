@@ -6,6 +6,7 @@ import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { createPlace, saveKakaoPlace } from "../actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import type { DiscoverCandidate, Place, PlaceCategoryId } from "../types/place";
+import { withObjectParticle } from "@/lib/korean";
 
 export function PlaceCreateDialog({
   open,
@@ -59,13 +60,14 @@ export function PlaceCreateDialog({
       return;
     }
 
-    const result = await saveKakaoPlace({ candidate, description: nextDescription, durationMinutes: 60, expectedCostTwo: null });
+    const result = await saveKakaoPlace({ candidate, description: nextDescription, durationMinutes: 60, expectedCostTwo: null })
+      .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
     setPending(false);
     if ("error" in result) {
       setError(result.error);
       return;
     }
-    onSaved(result.place, result.duplicate ? `${result.place.name}은 이미 저장된 장소예요.` : `${result.place.name}을 우리의 장소에 저장했어요.`);
+    onSaved(result.place, result.duplicate ? `${result.place.name}은 이미 저장된 장소예요.` : `${withObjectParticle(result.place.name)} 우리의 장소에 저장했어요.`);
     emitCoupleActivitiesChanged();
     onClose();
   }
@@ -88,25 +90,26 @@ export function PlaceCreateDialog({
       return;
     }
 
-    const result = await createPlace(input);
+    const result = await createPlace(input)
+      .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
     setPending(false);
     if ("error" in result) {
       setError(result.error);
       return;
     }
-    onSaved(result.place, `${result.place.name}을 우리의 장소에 저장했어요.`);
+    onSaved(result.place, `${withObjectParticle(result.place.name)} 우리의 장소에 저장했어요.`);
     emitCoupleActivitiesChanged();
     onClose();
   }
 
   return createPortal(
-    <div className="dialog-backdrop" onClick={onClose} role="presentation">
+    <div className="dialog-backdrop" onClick={() => { if (!pending) onClose(); }} role="presentation">
       <div className="place-create-dialog" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="place-create-title">
         <span className="eyebrow">NEW PLACE</span>
         <h2 id="place-create-title">{mode === "manual" ? "직접 입력" : "이 장소 저장"}</h2>
 
         {mode === "confirm" && candidate && (
-          <form className="auth-form" key={`confirm-${candidate.externalSource}-${candidate.externalPlaceId}`} action={formData => void confirmKakao(formData)}>
+          <form className="auth-form" key={`confirm-${candidate.externalSource}-${candidate.externalPlaceId}`} action={formData => void confirmKakao(formData)} aria-busy={pending}>
             <div className="kakao-picked">
               <b>{candidate.name}</b>
               <small>{candidate.categoryLabel} · {candidate.roadAddress || candidate.address}</small>
@@ -116,16 +119,17 @@ export function PlaceCreateDialog({
               <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것" />
             </label>
             <p className="form-hint">저장하기 전까지는 목록에만 보여요.</p>
+            {pending && <div className="place-save-progress" role="status" aria-live="assertive"><i className="modal-spinner" aria-hidden="true" /><span><b>우리의 장소에 저장하고 있어요</b><small>잠시만 기다려 주세요.</small></span></div>}
             {error && <p className="form-error" role="alert">{error}</p>}
             <div className="dialog-actions">
-              <button className="outline-button" type="button" onClick={onClose}>닫기</button>
-              <button className="primary-button" type="submit" disabled={pending}>{pending ? "저장 중..." : "저장"}</button>
+              <button className="outline-button" type="button" onClick={onClose} disabled={pending}>닫기</button>
+              <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
             </div>
           </form>
         )}
 
         {mode === "manual" && (
-          <form className="auth-form" key="manual-place" action={formData => void submitManual(formData)}>
+          <form className="auth-form" key="manual-place" action={formData => void submitManual(formData)} aria-busy={pending}>
             <p className="form-hint">검색에서 못 찾은 장소만 직접 입력해요.</p>
             <label className="field">
               <span>이름</span>
@@ -145,10 +149,11 @@ export function PlaceCreateDialog({
               <span>우리의  메모</span>
               <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="둘에게 이 장소가 특별한 이유" />
             </label>
+            {pending && <div className="place-save-progress" role="status" aria-live="assertive"><i className="modal-spinner" aria-hidden="true" /><span><b>주소와 장소 정보를 저장하고 있어요</b><small>위치까지 확인한 뒤 목록에 추가할게요.</small></span></div>}
             {error && <p className="form-error" role="alert">{error}</p>}
             <div className="dialog-actions">
-              <button className="outline-button" type="button" onClick={onClose}>닫기</button>
-              <button className="primary-button" type="submit" disabled={pending}>{pending ? "저장 중..." : "저장"}</button>
+              <button className="outline-button" type="button" onClick={onClose} disabled={pending}>닫기</button>
+              <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
             </div>
           </form>
         )}

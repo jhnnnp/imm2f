@@ -41,6 +41,7 @@ export type KakaoSearchResult =
 
 const KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json";
 const KAKAO_CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json";
+const KAKAO_ADDRESS_URL = "https://dapi.kakao.com/v2/local/search/address.json";
 const PAGE_SIZE = 15;
 const NATURE_CATEGORY = /공원|숲|산|봉우리|해변|해수욕|계곡|호수|폭포|수목원|식물원|자연|생태|한강|하천|섬|해안/;
 const STAY_CATEGORY = /호텔|펜션|숙박|게스트하우스|리조트|모텔|여관/;
@@ -238,4 +239,52 @@ export async function searchKakaoPlacesRemote(input: KakaoSearchInput): Promise<
 
 export async function searchKakaoKeyword(query: string): Promise<KakaoSearchResult> {
   return searchKakaoPlacesRemote({ query });
+}
+
+type KakaoAddressDocument = {
+  address_name?: string;
+  x?: string;
+  y?: string;
+  road_address?: { address_name?: string } | null;
+  address?: { address_name?: string } | null;
+};
+
+export type KakaoGeocodeResult = {
+  address: string;
+  roadAddress: string;
+  district: string;
+  coordinates: [number, number];
+};
+
+/** Resolves a postal address directly. Keyword search cannot reliably locate unlisted venues. */
+export async function geocodeKakaoAddressRemote(address: string): Promise<KakaoGeocodeResult | null> {
+  const query = address.trim();
+  if (query.length < 2) return null;
+  const keys = getKakaoApiKeys();
+  if (!keys.length) return null;
+  const url = new URL(KAKAO_ADDRESS_URL);
+  url.searchParams.set("query", query);
+  try {
+    for (const key of keys) {
+      const response = await requestKakao(key, url);
+      if (!response.ok) continue;
+      const payload = JSON.parse(await response.text()) as { documents?: KakaoAddressDocument[] };
+      const document = payload.documents?.[0];
+      if (!document) continue;
+      const lng = Number(document.x);
+      const lat = Number(document.y);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+      const roadAddress = document.road_address?.address_name ?? "";
+      const normalizedAddress = document.address?.address_name || document.address_name || query;
+      return {
+        address: normalizedAddress,
+        roadAddress,
+        district: districtFromAddress(roadAddress || normalizedAddress),
+        coordinates: [lng, lat],
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }

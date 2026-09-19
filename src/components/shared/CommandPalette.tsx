@@ -6,7 +6,7 @@ import { SEARCH_COMMANDS } from "@/components/layout/navigation";
 import { searchWorkspace, type WorkspaceHit } from "@/features/search/actions";
 
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const ref = useRef<HTMLDialogElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -14,12 +14,22 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const [hits, setHits] = useState<WorkspaceHit[]>([]);
 
   useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
     if (!open) setQuery("");
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      if (!ref.current?.parentElement?.contains(event.target as Node)) onClose();
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open, onClose]);
 
   useEffect(() => {
     if (!open || !query.trim()) { setHits([]); setSearching(false); setSearchError(""); return; }
@@ -48,8 +58,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     router.push(href);
   };
 
+  if (!open) return null;
   return (
-    <dialog ref={ref} onClose={onClose} className="command-dialog">
+    <div ref={ref} className="command-popover" role="search" aria-label="전체 검색">
       <div className="command-search">
         <span>⌕</span>
         <input
@@ -58,12 +69,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           onChange={event => setQuery(event.target.value)}
           placeholder="장소, 추억, 일정을 찾아 보세요"
         />
-        <button type="button" className="text-button" onClick={onClose} aria-label="검색 닫기">닫기</button>
+        {searching ? <i className="button-spinner" aria-label="검색 중" /> : query && <button type="button" className="text-button" onClick={() => setQuery("")} aria-label="검색어 지우기">×</button>}
       </div>
-      {!query.trim() && <p className="command-hint">찾고 싶은 장소나 여행, 추억을 입력해 주세요.</p>}
+      {!query.trim() && <p className="command-hint">검색어를 입력하면 관련 장소와 기록을 바로 보여드려요.</p>}
       {commands.length > 0 && (
       <div className="command-section">
-        <span>빠른 실행</span>
+          <span>바로가기</span>
         {commands.map(item => (
           <a
             href={item.href}
@@ -98,6 +109,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           ))}
         </div>
       )}
-    </dialog>
+    </div>
   );
 }

@@ -10,12 +10,14 @@ export function PlaceCard({
   onSelect,
   onToggleSave,
   onTripSchedule = false,
+  savePending = false,
 }: {
   place: Place;
   selected: boolean;
   onSelect: () => void;
   onToggleSave: () => void;
   onTripSchedule?: boolean;
+  savePending?: boolean;
 }) {
   const discover = isDiscoverPlace(place);
   const saved = ["want", "must_visit", "revisit"].includes(place.userStatus);
@@ -26,7 +28,7 @@ export function PlaceCard({
       {onTripSchedule && !discover ? <PlaceTripStamp /> : null}
       {discover && <span className="match soft">둘러보기</span>}
     </button>
-    <button className={`heart ${saved ? "is-on" : ""}`} onClick={onToggleSave} aria-label={saved ? "저장됨" : "이 장소 저장"}>{saved ? "♥" : "♡"}</button>
+    <button className={`heart ${saved ? "is-on" : ""} ${savePending ? "is-loading" : ""}`} onClick={onToggleSave} aria-label={savePending ? "장소 상태 저장 중" : saved ? "저장됨" : "이 장소 저장"} aria-busy={savePending} disabled={savePending}>{savePending ? <i className="button-spinner" aria-hidden="true" /> : saved ? "♥" : "♡"}</button>
     <button className="place-info" onClick={onSelect}>
       <span>{place.categoryLabel} · {place.district}{place.category === "festival" && place.openingHours ? ` · ${place.openingHours}` : ""}</span><h3>{place.name}</h3><p>{place.recommendReason || place.description || place.roadAddress || place.address || place.district}</p>
       {discover

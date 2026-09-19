@@ -32,6 +32,8 @@ export function PlaceDetailPanel({
   onDescriptionSave,
   preferredPlan,
   tripScheduleStops = [],
+  planPending = null,
+  savePending = false,
 }: {
   place: Place;
   onAdd: () => void;
@@ -42,6 +44,8 @@ export function PlaceDetailPanel({
   onDescriptionSave?: (description: string) => Promise<{ error?: string } | void>;
   preferredPlan?: "trip" | "date" | null;
   tripScheduleStops?: TripScheduleStop[];
+  planPending?: "trip" | "date" | null;
+  savePending?: boolean;
 }) {
   const session = useAppSession();
   const memoAuthor = session.mode === "authenticated" && place.memoAuthorId ? (place.memoAuthorId === session.userId ? session.displayName : place.memoAuthorId === session.partner?.userId ? session.partner.displayName : "이전 작성자") : null;
@@ -111,7 +115,7 @@ export function PlaceDetailPanel({
           {onLocationSave && <button className="place-edit-link" type="button" onClick={() => setEditing(true)}>수정</button>}
         </p>
       )}
-    </div>{!preview && <button className={`detail-heart ${saved ? "is-on" : ""}`} type="button" aria-pressed={saved} aria-label={saved ? "가고 싶어요 해제" : "가고 싶어요"} onClick={() => onSave?.()}>{saved ? "♥" : "♡"}</button>}</div>
+    </div>{!preview && <button className={`detail-heart ${saved ? "is-on" : ""} ${savePending ? "is-loading" : ""}`} type="button" aria-pressed={saved} aria-busy={savePending} disabled={savePending} aria-label={savePending ? "장소 상태 저장 중" : saved ? "가고 싶어요 해제" : "가고 싶어요"} onClick={() => onSave?.()}>{savePending ? <i className="button-spinner" aria-hidden="true" /> : saved ? "♥" : "♡"}</button>}</div>
     {editing && (
       <form className="place-location-edit" action={formData => void saveLocation(formData)}>
         <label className="field">
@@ -126,7 +130,7 @@ export function PlaceDetailPanel({
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="dialog-actions">
           <button className="outline-button" type="button" onClick={() => { setEditing(false); setError(""); }}>취소</button>
-          <button className="primary-button" type="submit" disabled={pending}>{pending ? "맞추는 중..." : "위치 저장"}</button>
+          <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "위치 확인 중..." : "위치 저장"}</button>
         </div>
       </form>
     )}
@@ -153,7 +157,7 @@ export function PlaceDetailPanel({
           {memoError ? <p className="form-error" role="alert">{memoError}</p> : null}
           <div className="dialog-actions">
             <button className="outline-button" type="button" onClick={() => { setMemoEditing(false); setMemoDraft(place.description); setMemoError(""); }} disabled={memoPending}>취소</button>
-            <button className="primary-button" type="submit" disabled={memoPending}>{memoPending ? "저장 중..." : "메모 저장"}</button>
+            <button className={`primary-button${memoPending ? " is-loading" : ""}`} type="submit" disabled={memoPending} aria-busy={memoPending}>{memoPending && <i className="button-spinner" aria-hidden="true" />}{memoPending ? "메모 저장 중..." : "메모 저장"}</button>
           </div>
         </form>
       ) : memoText ? (
@@ -173,7 +177,7 @@ export function PlaceDetailPanel({
             <li key={stop.key}>
               <div className="place-trip-stop-head">
                 <span className="place-trip-day">
-                  {stop.scope === "archive" ? "지난 여행" : "진행 중"} · {stop.item.dayIndex + 1}일차 · {stop.item.startTime}
+                  {stop.scope === "archive" ? "지난 여행" : "진행 중"} · {stop.item.dayIndex + 1}일차
                 </span>
                 {stop.scope === "archive"
                   ? <Link className="place-edit-link" href="/memories">기록 보기</Link>
@@ -210,12 +214,12 @@ export function PlaceDetailPanel({
     ) : (
       <div className="status-box"><span>내 마음</span>{onStatusChange ? <div className="status-picker" role="group" aria-label="이 장소에 대한 내 마음">{STATUS_OPTIONS.map(status => {
         const active = optionIsActive(place.userStatus, status);
-        return <button type="button" className={`status-pill ${active ? "is-active" : ""}`} key={status} aria-pressed={active} onClick={() => onStatusChange(active ? "neutral" : status)}>{STATUS_META[status].label}</button>;
+        return <button type="button" className={`status-pill ${active ? "is-active" : ""}`} key={status} aria-pressed={active} disabled={savePending} onClick={() => onStatusChange(active ? "neutral" : status)}>{savePending && active ? <><i className="button-spinner" aria-hidden="true" /> 저장 중</> : STATUS_META[status].label}</button>;
       })}</div> : <PlaceStatusBadge status={place.userStatus} />}<span>파트너</span><PlaceStatusBadge status={place.partnerStatus} /></div>
     )}
-    {preferredPlan === "date" && onAddDate && <button className="primary-button full" type="button" onClick={onAddDate}>이 데이트에 추가</button>}
-    {preferredPlan === "trip" && <button className="primary-button full" type="button" onClick={onAdd}>선택한 날에 추가</button>}
-    {preferredPlan !== "trip" && <button className="outline-button full" type="button" onClick={onAdd}>여행 일정에 추가</button>}
-    {preferredPlan !== "date" && onAddDate && <button className="outline-button full" type="button" onClick={onAddDate}>데이트 일정에 추가</button>}
+    {preferredPlan === "date" && onAddDate && <button className={`primary-button full${planPending === "date" ? " is-loading" : ""}`} type="button" onClick={onAddDate} disabled={Boolean(planPending)} aria-busy={planPending === "date"}>{planPending === "date" && <i className="button-spinner" aria-hidden="true" />}{planPending === "date" ? "데이트에 담는 중..." : "이 데이트에 추가"}</button>}
+    {preferredPlan === "trip" && <button className={`primary-button full${planPending === "trip" ? " is-loading" : ""}`} type="button" onClick={onAdd} disabled={Boolean(planPending)} aria-busy={planPending === "trip"}>{planPending === "trip" && <i className="button-spinner" aria-hidden="true" />}{planPending === "trip" ? "선택한 날에 담는 중..." : "선택한 날에 추가"}</button>}
+    {preferredPlan !== "trip" && <button className={`outline-button full${planPending === "trip" ? " is-loading" : ""}`} type="button" onClick={onAdd} disabled={Boolean(planPending)} aria-busy={planPending === "trip"}>{planPending === "trip" && <i className="button-spinner" aria-hidden="true" />}{planPending === "trip" ? "여행에 담는 중..." : "여행 일정에 추가"}</button>}
+    {preferredPlan !== "date" && onAddDate && <button className={`outline-button full${planPending === "date" ? " is-loading" : ""}`} type="button" onClick={onAddDate} disabled={Boolean(planPending)} aria-busy={planPending === "date"}>{planPending === "date" && <i className="button-spinner" aria-hidden="true" />}{planPending === "date" ? "데이트에 담는 중..." : "데이트 일정에 추가"}</button>}
   </div>;
 }

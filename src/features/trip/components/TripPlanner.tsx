@@ -53,6 +53,7 @@ export function TripPlanner({
     return next ? [next] : [];
   }));
   const [archiveNotice, setArchiveNotice] = useState("");
+  const [archiving, setArchiving] = useState(false);
   const revisionRef = useRef(initialPlan.revision);
   const dirtyRef = useRef(false);
   const pendingSaves = useRef(0);
@@ -80,13 +81,15 @@ export function TripPlanner({
   const dayDate = startDate ? formatKoDate(addDays(startDate, selectedDay)) : "";
 
   async function finishTrip() {
-    if (!items.length) return;
+    if (!items.length || archiving) return;
+    setArchiving(true);
     const result = await archiveTripPlan({ title, startDate, dayCount, items });
-    if ("error" in result) { setSaveError(result.error); return; }
+    if ("error" in result) { setSaveError(result.error); setArchiving(false); return; }
     emitCoupleActivitiesChanged();
     setArchivedTrips(await listArchivedTripPlans());
     setArchiveNotice("둘이 공유하는 지난 여행에 보관했어요.");
     setTab("archive");
+    setArchiving(false);
   }
 
   const persist = (next: PlanItem[], extra?: { title?: string; subtitle?: string; startDate?: string | null; dayCount?: number }) => {
@@ -238,8 +241,8 @@ export function TripPlanner({
               persist(items, { startDate: value || null });
             }}
           />
-          <div className="save-status"><i /> {saveError || (saved ? "저장됨" : "저장 중...")}</div>
-          {items.length > 0 && <button className="outline-button trip-finish-button" type="button" onClick={finishTrip}>지난 여행</button>}
+          <div className={`save-status${saved ? "" : " is-saving"}`} role="status" aria-live="polite"><i /> {saveError || (saved ? "저장됨" : "저장 중...")}</div>
+          {items.length > 0 && <button className="outline-button trip-finish-button" type="button" onClick={finishTrip} disabled={archiving}>{archiving ? "지난 여행에 보관 중..." : "지난 여행"}</button>}
           <div className="date-action-group">
             <button className={`date-action-button is-history ${panel === "activity" ? "is-active" : ""}`} type="button" onClick={() => setPanel("activity")}>
               <HeaderActionIcon name="activity" /><span>최근 활동</span>
@@ -283,7 +286,7 @@ export function TripPlanner({
         <div className="planner-shell">
           <aside className={`day-rail${draggingSchedule ? " is-receiving" : ""}`} data-toss-safe>
             <span className="eyebrow">DAYS</span>
-            {draggingSchedule && <p className="day-rail-hint" role="status">DAY 위에 놓으면 그 날짜로 옮겨요</p>}
+            {draggingSchedule && <p className="day-rail-hint" role="status">일정을 다른 날로 옮기세요</p>}
             {Array.from({ length: dayCount }, (_, day) => {
               const count = items.filter(item => (item.dayIndex ?? 0) === day).length;
               const isDropTarget = dayDropTarget === day && selectedDay !== day;
@@ -353,6 +356,7 @@ export function TripPlanner({
                 <>
                   <PlanTimeline
                     items={dayItems}
+                    showTime={false}
                     onReorder={next => persist(replacePlanDay(items, selectedDay, next))}
                     onUpdate={updateItem}
                     onRemove={id => persist(items.filter(item => item.id !== id))}

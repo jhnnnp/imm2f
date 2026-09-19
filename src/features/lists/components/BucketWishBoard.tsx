@@ -281,7 +281,7 @@ export function BucketWishBoard({
             </label>
             <div className="bucket-card-edit-actions">
               <button type="button" className="outline-button" onClick={() => setExpandedId(null)} disabled={pending}>취소</button>
-              <button type="submit" className="primary-button" disabled={pending}>{pending ? "저장 중..." : "저장"}</button>
+              <button type="submit" className={`primary-button${pending ? " is-loading" : ""}`} disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
             </div>
           </form>
         )}

@@ -1202,6 +1202,24 @@ a.outline-button {
   color: var(--rose)
 }
 
+.heart.is-loading,
+.detail-heart.is-loading {
+  cursor: wait;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.heart .button-spinner,
+.detail-heart .button-spinner,
+.status-pill .button-spinner {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  border-color: rgba(83, 111, 99, .22);
+  border-top-color: var(--sage-deep);
+}
+
 .place-info {
   padding: 14px
 }
@@ -3348,6 +3366,27 @@ dialog::backdrop {
   flex: 1;
   font-size: .8rem
 }
+
+.global-search-wrap { position: relative; min-width: 0; margin-left: auto; width: min(300px, 34vw); }
+.global-search-wrap .global-search { width: 100%; }
+.command-popover {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  max-height: min(520px, calc(100dvh - 110px));
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+  box-shadow: 0 18px 48px rgba(31, 35, 33, .18);
+}
+
+button:disabled,
+[aria-busy="true"] button[type="submit"] { cursor: wait; opacity: .68; }
+.primary-button:disabled,
+.outline-button:disabled { box-shadow: none; }
 
 .command-section {
   padding: 13px
@@ -5787,6 +5826,9 @@ a.primary-button {
   font-size: .8rem
 }
 
+.field input,
+.field select { min-height: 42px; }
+
 .field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -5968,6 +6010,37 @@ body>.dialog-backdrop {
   gap: 8px;
   margin-top: 6px
 }
+
+.primary-button.is-loading,
+.outline-button.is-loading { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 96px; }
+.primary-button.is-loading .button-spinner { margin-right: 0; }
+.outline-button .button-spinner { border-color: rgba(83, 111, 99, .2); border-top-color: var(--sage-deep); }
+.save-status.is-saving > i { width: 12px; height: 12px; border: 2px solid rgba(83, 111, 99, .2); border-top-color: var(--sage-deep); border-radius: 50%; animation: ui-spin .7s linear infinite; }
+.place-save-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid rgba(83, 111, 99, .2);
+  border-radius: 12px;
+  background: rgba(231, 239, 235, .72);
+  color: var(--sage-deep);
+}
+.place-save-progress span { display: grid; gap: 3px; }
+.place-save-progress b { font-size: .78rem; }
+.place-save-progress small { color: var(--muted); font-size: .64rem; }
+.modal-spinner {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border: 3px solid rgba(83, 111, 99, .18);
+  border-top-color: var(--sage-deep);
+  border-radius: 50%;
+  animation: ui-spin .7s linear infinite;
+}
+.auth-form[aria-busy="true"] .field input,
+.auth-form[aria-busy="true"] .field textarea,
+.auth-form[aria-busy="true"] .field select { opacity: .68; pointer-events: none; }
 
 .place-search-form {
   display: grid;
@@ -8933,8 +9006,12 @@ a.add-schedule {
 }
 
 .day-rail-hint {
-  padding: 0 4px;
-  margin: 12px 0 0
+  padding: 10px 12px;
+  margin: 16px 8px 10px;
+  border-radius: 10px;
+  background: var(--sage-soft);
+  color: var(--sage-deep);
+  line-height: 1.45
 }
 
 .item-menu {
@@ -26641,6 +26718,12 @@ html.is-toss-blur .toss-veil {
 .memory-wall-text.is-bold { font-weight: 700; }
 .memory-wall-text.is-selected { outline: 1px dashed #58796980; outline-offset: 6px; }
 .memory-canvas.is-text .memory-wall-text { cursor: text; }
+.memory-wall-text.is-mine > span { font-weight: 700; }
+.memory-wall-text.is-partner > span { opacity: .76; }
+.memory-wall-author { display: block; margin-top: 3px; color: var(--muted); font: 600 10px/1.2 system-ui, sans-serif; letter-spacing: .04em; }
+.memory-sync-status { display: flex; align-items: center; gap: 7px; margin: 7px 10px 0; color: var(--muted); font-size: .72rem; }
+.memory-sync-status.is-saving { color: var(--sage-deep); }
+.memory-sync-status.is-saved { color: var(--sage-deep); }
 .calendar-day-agenda { padding: 0; list-style: none; display: grid; gap: 14px; }
 .calendar-day-agenda li { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .calendar-day-agenda time { color: var(--sage-deep); }

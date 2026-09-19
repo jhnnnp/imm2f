@@ -16,6 +16,7 @@ export function PlanItemCard({
   tossing = false,
   onDragEnter,
   onDragEnd,
+  showTime = true,
 }: {
   item: PlanItem;
   index?: number;
@@ -31,6 +32,7 @@ export function PlanItemCard({
   tossing?: boolean;
   onDragEnter: (id: string) => void;
   onDragEnd: () => void;
+  showTime?: boolean;
 }) {
   const letter = variant === "letter";
   const [startTime, setStartTime] = useState(item.startTime);
@@ -78,7 +80,7 @@ export function PlanItemCard({
       {letter && <span className="letter-pin" aria-hidden="true" />}
       <div className="timeline-item-head">
         <button className="drag" type="button" aria-label="드래그하여 순서 변경 또는 다른 날짜로 이동" title="끌어서 순서 변경 · 왼쪽 DAY로 옮기기">⠿</button>
-        {letter ? <span className="letter-stamp">{stamp}</span> : <time>{item.startTime}</time>}
+        {letter ? <span className="letter-stamp">{stamp}</span> : showTime ? <time>{item.startTime}</time> : null}
         <span className="timeline-category">{item.category}</span>
         <div className="item-actions" ref={menuRef}>
           <button
@@ -95,7 +97,7 @@ export function PlanItemCard({
           </button>
           {menuOpen && (
             <div className="item-action-menu" role="menu">
-              {!letter && (
+              {!letter && showTime && (
                 <button type="button" role="menuitem" onClick={() => {
                   onEdit(editing ? null : item.id);
                   setMenuOpen(false);
@@ -113,14 +115,14 @@ export function PlanItemCard({
       </div>
       <div className="timeline-item-body">
         <h3>{item.placeName}</h3>
-        {(item.memo || !letter) && (
+        {(item.memo || (!letter && showTime)) && (
           <p>
             {item.memo && <span>{item.memo}</span>}
-            {!letter && <small>{item.durationMinutes}분</small>}
+            {!letter && showTime && <small>{item.durationMinutes}분</small>}
           </p>
         )}
       </div>
-      {editing && !letter && (
+      {editing && !letter && showTime && (
         <div className="timeline-edit-panel">
           <label><span>일정 시간</span><input type="time" step={300} required value={startTime} onChange={event => setStartTime(event.target.value)} /></label>
           <label><span>소요 시간</span><select value={durationMinutes} onChange={event => setDurationMinutes(Number(event.target.value))}>{[...new Set([30, 45, 60, 90, 120, 150, 180, item.durationMinutes])].sort((a, b) => a - b).map(minutes => <option key={minutes} value={minutes}>{minutes >= 60 ? `${Math.floor(minutes / 60)}시간${minutes % 60 ? ` ${minutes % 60}분` : ""}` : `${minutes}분`}</option>)}</select></label>

@@ -16,6 +16,7 @@ export function PlanTimeline({
   columns = 1,
   fill = false,
   variant = "schedule",
+  showTime = true,
 }: {
   items: PlanItem[];
   onReorder: (items: PlanItem[]) => void;
@@ -28,6 +29,7 @@ export function PlanTimeline({
   columns?: 1 | 2;
   fill?: boolean;
   variant?: "schedule" | "letter";
+  showTime?: boolean;
 }) {
   const boundRef = useRef<HTMLDivElement>(null);
   const dragged = useRef<string | null>(null);
@@ -73,6 +75,7 @@ export function PlanTimeline({
             item={item}
             index={index}
             variant={variant}
+            showTime={showTime}
             tossing={draggingId === item.id && dismissing}
             onDragStart={id => {
               dragged.current = id;

@@ -62,9 +62,12 @@ export function Topbar() {
   return <>
     <header className="topbar">
       <div className="today"><span>우리의 공간</span><b suppressHydrationWarning>{today || "오늘"}</b></div>
-      <button className="global-search" type="button" onClick={() => setSearchOpen(true)} aria-label="전체 검색 열기">
-        <span>⌕</span><b>장소, 여행, 추억 검색</b><kbd>⌘K</kbd>
-      </button>
+      <div className="global-search-wrap">
+        <button className="global-search" type="button" onClick={() => setSearchOpen(true)} aria-label="전체 검색 열기" aria-expanded={searchOpen}>
+          <span>⌕</span><b>장소, 여행, 추억 검색</b><kbd>⌘K</kbd>
+        </button>
+        <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
+      </div>
       <div className="notify-wrap" ref={notifyRef}>
         <button
           className="icon-button notification-button"
@@ -115,6 +118,5 @@ export function Topbar() {
         )}
       </div>
     </header>
-    <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
   </>;
 }

@@ -209,16 +209,18 @@ export function MemoryCanvas({
   const dirtyRef = useRef(false);
   const savingRef = useRef(false);
   const [syncError, setSyncError] = useState("");
+  const [syncStatus, setSyncStatus] = useState<"idle" | "saving" | "saved">("idle");
   const flushRemoteSave = useCallback((state: CorkBoardState) => {
     if (remoteSaveTimer.current) window.clearTimeout(remoteSaveTimer.current);
     remoteSaveTimer.current = window.setTimeout(async () => {
       if (savingRef.current) { flushRemoteSave(boardSnapshot()); return; }
       savingRef.current = true;
+      setSyncStatus("saving");
       const sent = boardSnapshot();
       const base = baseRef.current;
       try {
         const result = await saveMemoryWallBoard(sent, base);
-        if ("error" in result) { setSyncError(result.error); return; }
+        if ("error" in result) { setSyncError(result.error); setSyncStatus("idle"); return; }
         const next = mergeBoardEdits(sent, boardSnapshot(), result.state);
         baseRef.current = result.state;
         remoteVersionRef.current = result.updatedAt;
@@ -228,8 +230,9 @@ export function MemoryCanvas({
         writeBoardSyncedAt(coupleIdRef.current, result.updatedAt);
         dirtyRef.current = JSON.stringify({ ...next, camera: null }) !== JSON.stringify({ ...result.state, camera: null });
         setSyncError("");
+        setSyncStatus("saved");
         if (dirtyRef.current) flushRemoteSave(next);
-      } catch { setSyncError("아직 저장되지 않았어요. 연결을 확인한 뒤 다시 저장해 주세요."); }
+      } catch { setSyncError("아직 저장되지 않았어요. 연결을 확인한 뒤 다시 저장해 주세요."); setSyncStatus("idle"); }
       finally { savingRef.current = false; }
     }, 420);
   }, [boardSnapshot, setPoses]);
@@ -675,6 +678,9 @@ export function MemoryCanvas({
           <button className="memory-studio-action" type="button" onClick={onReset}>가지런히</button>
         </div>
       </div>
+      <p className={`memory-sync-status is-${syncStatus}`} role="status" aria-live="polite">
+        {syncStatus === "saving" ? <><i className="button-spinner" aria-hidden="true" /> 함께 저장하는 중</> : syncStatus === "saved" ? "✓ 함께 저장됨" : "변경하면 두 사람에게 함께 저장돼요"}
+      </p>
       {(tool === "pen" || tool === "marker") && (
         <div className="memory-studio-ink">
           <div className="memory-studio-swatches" aria-label="잉크 색">
@@ -825,7 +831,7 @@ export function MemoryCanvas({
                   key={item.id}
                   data-text-id={item.id}
                   title={session.mode === "authenticated" && item.authorId ? `${item.authorId === session.userId ? session.displayName : session.partner?.displayName ?? "파트너"}의 글` : undefined}
-                  className={`memory-wall-text is-${item.fontFamily}${item.fontWeight === "bold" ? " is-bold" : ""}${selectedTextId === item.id ? " is-selected" : ""}`}
+                  className={`memory-wall-text is-${item.fontFamily}${item.fontWeight === "bold" ? " is-bold" : ""}${item.authorId === userId ? " is-mine" : " is-partner"}${selectedTextId === item.id ? " is-selected" : ""}`}
                   style={{
                     left: item.x,
                     top: item.y,
@@ -845,7 +851,8 @@ export function MemoryCanvas({
                       suppressContentEditableWarning
                       onBlur={event => {
                         const value = event.currentTarget.textContent?.trim() || "";
-                        patchText(item.id, { text: value.slice(0, 280) });
+                        if (value) patchText(item.id, { text: value.slice(0, 280) });
+                        else removeText(item.id);
                         setEditingTextId(null);
                       }}
                       onKeyDown={event => {
@@ -859,7 +866,7 @@ export function MemoryCanvas({
                       {item.text}
                     </span>
                   ) : (
-                    <span>{item.text}</span>
+                    <><span>{item.text}</span><small className="memory-wall-author">{item.authorId === userId ? "나" : session.mode === "authenticated" ? session.partner?.displayName ?? "파트너" : "파트너"}</small></>
                   )}
                 </div>
               ))}

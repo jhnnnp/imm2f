@@ -679,7 +679,7 @@ export function MemoryTimeline({
               <details className="memory-location-details"><summary>지도 위치 세밀하게 조정</summary><div className="coordinate-fields"><label className="field"><span>위도</span><input inputMode="decimal" value={latitude} onChange={event => setLatitude(event.target.value)} /></label><label className="field"><span>경도</span><input inputMode="decimal" value={longitude} onChange={event => setLongitude(event.target.value)} /></label></div></details>
               {!drafts.length && <label className="field"><span>사진 URL <small>선택</small></span><input value={coverUrl} onChange={event => setCoverUrl(event.target.value)} placeholder="https://..." /></label>}
               {error && <p className="form-error" role="alert">{error}</p>}
-              <div className="dialog-actions"><button className="outline-button" type="button" onClick={() => setCreateStep("photo")} disabled={pending}>이전</button><button className="primary-button" type="submit" disabled={pending}>{pending ? "우리의보관함에 저장 중..." : "기억으로 남기기"}</button></div>
+              <div className="dialog-actions"><button className="outline-button" type="button" onClick={() => setCreateStep("photo")} disabled={pending}>이전</button><button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "추억 저장 중..." : "기억으로 남기기"}</button></div>
             </>}
           </form>
         </div>
@@ -862,7 +862,7 @@ export function MemoryTimeline({
                   </div>
                 </details>
                 {error && <p className="form-error" role="alert">{error}</p>}
-                <div className="dialog-actions"><button className="outline-button" type="button" onClick={cancelEdit} disabled={pending}>취소</button><button className="primary-button" type="submit" disabled={pending || metadataPending}>{pending ? "저장 중..." : "변경 저장"}</button></div>
+                <div className="dialog-actions"><button className="outline-button" type="button" onClick={cancelEdit} disabled={pending}>취소</button><button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending || metadataPending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "변경 저장 중..." : "변경 저장"}</button></div>
               </form>
             )}
           </article>

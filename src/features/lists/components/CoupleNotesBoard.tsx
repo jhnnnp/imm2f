@@ -488,7 +488,7 @@ export function CoupleNotesBoard({
                 </label>
                 <div className="dialog-actions">
                   <button className="outline-button" type="button" onClick={() => closeDialog()} disabled={pending}>취소</button>
-                  <button className="primary-button" type="submit" disabled={pending}>{pending ? "저장 중..." : kind === "gift" ? "선물 플랜 저장" : "저장"}</button>
+                  <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : kind === "gift" ? "선물 플랜 저장" : "저장"}</button>
                 </div>
                   </>
                 )}

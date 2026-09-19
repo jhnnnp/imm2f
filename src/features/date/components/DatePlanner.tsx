@@ -10,11 +10,11 @@ import { ContextPanel } from "@/components/layout/ContextPanel";
 import { DatePickerButton } from "@/components/shared/DatePickerButton";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { DateArchiveJournal } from "@/features/date/components/DateArchiveJournal";
-import { applyDateSwitch, emptyDateDay, hasDateContent, landingDateDay, upsertDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
+import { emptyDateDay, hasDateContent, landingDateDay, upsertDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
 import type { CourseKeepInput, CourseKeepResult } from "@/features/ai/courseKeep";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import { useHydratePlanCoordinates } from "@/features/planning/useHydratePlanCoordinates";
-import { archiveDatePlan, listArchivedDatePlans, loadCouplePlan, saveCouplePlan, saveDateDraft, type ArchivedDatePlan } from "@/features/planning/actions";
+import { archiveDatePlan, listArchivedDatePlans, loadCouplePlan, openDateDay, saveCouplePlan, saveDateDraft, type ArchivedDatePlan } from "@/features/planning/actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import type { CouplePlan, PlanChange, PlanItem } from "@/features/planning/types/plan";
 import type { TasteDateSeed } from "@/features/taste/types";
@@ -55,6 +55,7 @@ export function DatePlanner({
   const [archiveNotice, setArchiveNotice] = useState("");
   const [archiveFocusId, setArchiveFocusId] = useState("");
   const [recording, setRecording] = useState(false);
+  const [switchingDate, setSwitchingDate] = useState(false);
   const revisionRef = useRef(initialPlan.revision);
   const dirtyRef = useRef(false);
   const pendingSaves = useRef(0);
@@ -143,12 +144,31 @@ export function DatePlanner({
     setShowArchive(false);
   };
 
-  const switchDate = (nextDate: string) => {
-    if (nextDate === startDate) return;
+  const switchDate = async (nextDate: string) => {
+    if (nextDate === startDate || switchingDate) return;
     if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
-    if (notesSaveState === "typing") persist(items, { subtitle: notes });
-    const local = applyDateSwitch({ current: { date: startDate, title, notes, items }, drafts, nextDate });
-    applyFocus(local.focus, local.drafts);
+    setSwitchingDate(true);
+    setNotesSaveState("saving");
+    setSaveError("");
+    const result = await openDateDay({
+      fromDate: startDate || null,
+      toDate: nextDate || null,
+      snapshot: { title, notes, items },
+      expectedRevision: revisionRef.current,
+    });
+    if ("error" in result) {
+      setSaveError(result.error);
+      setNotesSaveState("typing");
+      setSwitchingDate(false);
+      return;
+    }
+    revisionRef.current = result.revision;
+    dirtyRef.current = false;
+    applyFocus(result.focus, result.drafts);
+    setNotesSaveState("saved");
+    setSwitchingDate(false);
+    emitCoupleActivitiesChanged();
+    router.replace(result.focus.date ? `/date?day=${result.focus.date}` : "/date");
   };
 
   const apply = (changes: PlanChange[]) => {
@@ -242,9 +262,9 @@ export function DatePlanner({
             ariaLabel="데이트 날짜"
             markedDates={markedDates}
             markedLabels={markedLabels}
-            onChange={switchDate}
+            onChange={value => void switchDate(value)}
           />
-          <div className="save-status"><i /> {saveError || (notesSaveState === "saving" ? "저장 중..." : "저장됨")}</div>
+          <div className={`save-status${switchingDate || notesSaveState === "saving" ? " is-saving" : ""}`} role="status" aria-live="polite"><i /> {saveError || (switchingDate ? "날짜 일정 불러오는 중..." : notesSaveState === "saving" ? "저장 중..." : "저장됨")}</div>
           {(items.length > 0 || archivedDates.length > 0 || upcoming.length > 0) && (
             <button
               className={`date-action-button is-archive ${showArchive ? "is-active" : ""}`}

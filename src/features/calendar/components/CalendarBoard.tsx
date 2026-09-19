@@ -104,9 +104,9 @@ export function CalendarBoard({
   const selectedStops = useMemo(() => {
     const day = [...tripDays].sort().indexOf(selected);
     return [
-      ...tripPlan.items.filter(item => day >= 0 && (item.dayIndex ?? 0) === day).map(item => ({ ...item, source: "여행" })),
-      ...(dateDays.find(day => day.date === selected)?.items ?? []).map(item => ({ ...item, source: "데이트" })),
-    ].sort((a, b) => a.startTime.localeCompare(b.startTime) || a.order - b.order);
+      ...tripPlan.items.filter(item => day >= 0 && (item.dayIndex ?? 0) === day).sort((a, b) => a.order - b.order).map(item => ({ ...item, source: "여행" })),
+      ...[...(dateDays.find(day => day.date === selected)?.items ?? [])].sort((a, b) => a.order - b.order).map(item => ({ ...item, source: "데이트" })),
+    ];
   }, [tripDays, tripPlan.items, dateDays, selected]);
 
   if (!cursor) {
@@ -208,7 +208,7 @@ export function CalendarBoard({
                 <p>함께 보낼 하루를 계획해 볼까요?</p>
               </div>
             )}
-            {selectedStops.length > 0 && <ol className="calendar-day-agenda" aria-label="이날의 장소와 시간">{selectedStops.map(item => <li key={`${item.source}-${item.id}`}><time>{item.startTime}</time><span><b>{item.placeName}</b><small>{item.source} · {item.durationMinutes}분{item.memo ? ` · ${item.memo}` : ""}</small></span></li>)}</ol>}
+            {selectedStops.length > 0 && <ol className="calendar-day-agenda" aria-label="이날의 장소 순서">{selectedStops.map((item, index) => <li key={`${item.source}-${item.id}`}><time>{index + 1}</time><span><b>{item.placeName}</b><small>{item.source}{item.memo ? ` · ${item.memo}` : ""}</small></span></li>)}</ol>}
             <div className="calendar-assign"><Link className="primary-button" href={`/date?day=${selected}`}>이날의 데이트 계획하기</Link></div>
           </section>
         </div>

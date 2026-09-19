@@ -90,7 +90,7 @@ function pinName(pin: MapPin) { return pin.kind === "place" ? pin.place.name : p
 function sheetEyebrow(pin: MapPin) {
   if (pin.kind === "place") return `${pin.place.categoryLabel} · ${pin.place.district}`;
   if (pin.kind === "memory") return `${pin.memory.happenedOn} · ${pin.memory.locationLabel || "우리의 추억"}`;
-  return `${(pin.item.dayIndex ?? 0) + 1}일차 ${pin.item.startTime} · ${pin.item.category}`;
+  return `${(pin.item.dayIndex ?? 0) + 1}일차 · ${pin.item.category}`;
 }
 function sheetDescription(pin: MapPin, previousCoordinates?: [number, number]) {
   if (pin.kind === "place") return pin.place.description || "우리의 장소로 저장했어요.";
