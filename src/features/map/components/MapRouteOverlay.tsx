@@ -65,9 +65,6 @@ export function MapRouteOverlay({
   className = "map-route-overlay",
   pinVariant = "memory",
   roadProfile = "driving",
-  /** When provided, skip an internal road-route fetch (parent already resolved it). */
-  roadPath: roadPathProp,
-  roadLoading: roadLoadingProp,
 }: {
   map: MapLibreMap | null;
   anchors: RouteAnchor[];
@@ -75,8 +72,6 @@ export function MapRouteOverlay({
   className?: string;
   pinVariant?: "memory" | "planner";
   roadProfile?: RoadRouteProfile;
-  roadPath?: LngLat[] | null;
-  roadLoading?: boolean;
 }) {
   const gradientId = useId().replace(/:/g, "");
   const routeKey = useMemo(
@@ -98,15 +93,11 @@ export function MapRouteOverlay({
     [normalizedAnchors],
   );
 
-  const fetchEnabled = active && roadPathProp === undefined && coordinateList.length >= 2;
-  const { path: fetchedPath, loading: fetchedLoading, usesRoadNetwork: fetchedUsesRoad } = useRoadRoute(
+  const { path: roadPath, loading: roadLoading, usesRoadNetwork } = useRoadRoute(
     coordinateList,
-    fetchEnabled,
+    active && coordinateList.length >= 2,
     roadProfile,
   );
-  const roadPath = roadPathProp !== undefined ? roadPathProp : fetchedPath;
-  const roadLoading = roadLoadingProp !== undefined ? roadLoadingProp : fetchedLoading;
-  const usesRoadNetwork = roadPathProp !== undefined ? Boolean(roadPathProp) : fetchedUsesRoad;
 
   useEffect(() => {
     if (!map || !active || normalizedAnchors.length < 2) {
@@ -114,27 +105,21 @@ export function MapRouteOverlay({
       return;
     }
 
-    let frame = 0;
-    const syncNow = () => {
+    const sync = () => {
       if (roadPath) {
         setPath(screenPathFromCoords(map, normalizedAnchors, roadPath));
         return;
       }
       setPath(buildScreenPath(map, normalizedAnchors));
     };
-    const sync = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(syncNow);
-    };
 
-    syncNow();
+    sync();
     map.on("move", sync);
     map.on("zoom", sync);
     map.on("resize", sync);
     map.on("rotate", sync);
     map.on("pitch", sync);
     return () => {
-      window.cancelAnimationFrame(frame);
       map.off("move", sync);
       map.off("zoom", sync);
       map.off("resize", sync);
