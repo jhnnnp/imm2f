@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { createPlace, saveKakaoPlace } from "../actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import type { DiscoverCandidate, Place, PlaceCategoryId } from "../types/place";
 import { withObjectParticle } from "@/lib/korean";
+
+const SAVE_PENDING_MIN_MS = 450;
 
 export function PlaceCreateDialog({
   open,
@@ -46,8 +48,6 @@ export function PlaceCreateDialog({
     }
     setDescription(mode === "confirm" ? initialDescription : "");
     setError("");
-    setPending(false);
-    onPendingChange?.(false);
   }, [open, mode, candidate?.externalPlaceId, candidate?.externalSource, initialDescription, onPendingChange]);
 
   function setSavePending(next: boolean) {
@@ -57,11 +57,14 @@ export function PlaceCreateDialog({
 
   if (!open || !mounted) return null;
 
-  async function confirmKakao(formData: FormData) {
-    if (!candidate) return;
+  async function confirmKakao(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!candidate || pending) return;
     setSavePending(true);
     setError("");
+    const formData = new FormData(event.currentTarget);
     const nextDescription = String(formData.get("description") ?? description).trim();
+    const startedAt = Date.now();
 
     if (!persist) {
       setSavePending(false);
@@ -69,8 +72,14 @@ export function PlaceCreateDialog({
       return;
     }
 
-    const result = await saveKakaoPlace({ candidate, description: nextDescription, durationMinutes: 60, expectedCostTwo: null })
-      .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
+    const [result] = await Promise.all([
+      saveKakaoPlace({ candidate, description: nextDescription, durationMinutes: 60, expectedCostTwo: null })
+        .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." })),
+      new Promise(resolve => window.setTimeout(resolve, SAVE_PENDING_MIN_MS)),
+    ]);
+    if (Date.now() - startedAt < SAVE_PENDING_MIN_MS) {
+      await new Promise(resolve => window.setTimeout(resolve, SAVE_PENDING_MIN_MS - (Date.now() - startedAt)));
+    }
     setSavePending(false);
     if ("error" in result) {
       setError(result.error);
@@ -81,9 +90,12 @@ export function PlaceCreateDialog({
     onClose();
   }
 
-  async function submitManual(formData: FormData) {
+  async function submitManual(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (pending) return;
     setSavePending(true);
     setError("");
+    const formData = new FormData(event.currentTarget);
     const input = {
       name: String(formData.get("name") ?? ""),
       category: String(formData.get("category") ?? "cafe") as PlaceCategoryId,
@@ -99,8 +111,11 @@ export function PlaceCreateDialog({
       return;
     }
 
-    const result = await createPlace(input)
-      .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
+    const [result] = await Promise.all([
+      createPlace(input)
+        .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." })),
+      new Promise(resolve => window.setTimeout(resolve, SAVE_PENDING_MIN_MS)),
+    ]);
     setSavePending(false);
     if ("error" in result) {
       setError(result.error);
@@ -118,51 +133,51 @@ export function PlaceCreateDialog({
         <h2 id="place-create-title">{mode === "manual" ? "직접 입력" : "이 장소 저장"}</h2>
 
         {mode === "confirm" && candidate && (
-          <form className="auth-form" key={`confirm-${candidate.externalSource}-${candidate.externalPlaceId}`} action={formData => void confirmKakao(formData)} aria-busy={pending}>
+          <form className="auth-form" key={`confirm-${candidate.externalSource}-${candidate.externalPlaceId}`} onSubmit={event => void confirmKakao(event)} aria-busy={pending}>
             <div className="kakao-picked">
               <b>{candidate.name}</b>
               <small>{candidate.categoryLabel} · {candidate.roadAddress || candidate.address}</small>
             </div>
             <label className="field">
               <span>우리의  메모</span>
-              <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것" />
+              <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것" disabled={pending} />
             </label>
             <p className="form-hint">저장하기 전까지는 목록에만 보여요.</p>
             {pending && <div className="place-save-progress" role="status" aria-live="assertive"><i className="modal-spinner" aria-hidden="true" /><span><b>우리의 장소에 저장하고 있어요</b><small>잠시만 기다려 주세요.</small></span></div>}
             {error && <p className="form-error" role="alert">{error}</p>}
             <div className="dialog-actions">
               <button className="outline-button" type="button" onClick={onClose} disabled={pending}>닫기</button>
-              <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
+              <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
             </div>
           </form>
         )}
 
         {mode === "manual" && (
-          <form className="auth-form" key="manual-place" action={formData => void submitManual(formData)} aria-busy={pending}>
+          <form className="auth-form" key="manual-place" onSubmit={event => void submitManual(event)} aria-busy={pending}>
             <p className="form-hint">검색에서 못 찾은 장소만 직접 입력해요.</p>
             <label className="field">
               <span>이름</span>
-              <input name="name" required placeholder="장소 이름" />
+              <input name="name" required placeholder="장소 이름" disabled={pending} />
             </label>
             <label className="field">
               <span>카테고리</span>
-              <select name="category" defaultValue="cafe">
+              <select name="category" defaultValue="cafe" disabled={pending}>
                 {PLACE_CATEGORIES.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}
               </select>
             </label>
             <label className="field">
               <span>동네</span>
-              <input name="district" placeholder="서울 성수동" />
+              <input name="district" placeholder="서울 성수동" disabled={pending} />
             </label>
             <label className="field">
               <span>우리의  메모</span>
-              <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="둘에게 이 장소가 특별한 이유" />
+              <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="둘에게 이 장소가 특별한 이유" disabled={pending} />
             </label>
             {pending && <div className="place-save-progress" role="status" aria-live="assertive"><i className="modal-spinner" aria-hidden="true" /><span><b>주소와 장소 정보를 저장하고 있어요</b><small>위치까지 확인한 뒤 목록에 추가할게요.</small></span></div>}
             {error && <p className="form-error" role="alert">{error}</p>}
             <div className="dialog-actions">
               <button className="outline-button" type="button" onClick={onClose} disabled={pending}>닫기</button>
-              <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
+              <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
             </div>
           </form>
         )}
