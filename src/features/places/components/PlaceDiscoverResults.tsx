@@ -15,6 +15,7 @@ export function PlaceDiscoverResults({
   onSave,
   onLoadMore,
   onManual,
+  isSavePending,
 }: {
   places: Place[];
   selectedId: string;
@@ -28,6 +29,7 @@ export function PlaceDiscoverResults({
   onSave: (place: Place) => void;
   onLoadMore?: () => void;
   onManual?: () => void;
+  isSavePending?: (place: Place) => boolean;
 }) {
   if (error) return <div className="empty-inline" role="alert"><h2>검색을 불러오지 못했어요.</h2><p>{error}</p></div>;
   if (pending && !places.length) return (
@@ -69,7 +71,7 @@ export function PlaceDiscoverResults({
           ))}
         </ul>
       ) : (
-        <div className="place-grid">{places.map(place => <PlaceCard key={place.id} place={place} selected={selectedId === place.id} onSelect={() => onSelect(place.id)} onToggleSave={() => onSave(place)} />)}</div>
+        <div className="place-grid">{places.map(place => <PlaceCard key={place.id} place={place} selected={selectedId === place.id} onSelect={() => onSelect(place.id)} onToggleSave={() => onSave(place)} savePending={isSavePending?.(place) ?? false} />)}</div>
       )}
       </div>
       {onLoadMore && !isEnd && <div className="discover-more"><button className="outline-button" type="button" onClick={onLoadMore} disabled={pending}>{pending ? "불러오는 중..." : "더 보기"}</button></div>}

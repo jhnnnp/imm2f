@@ -93,6 +93,7 @@ export function PlacesExperience({
   const [pendingInitialDescription, setPendingInitialDescription] = useState("");
   const [planPending, setPlanPending] = useState<"trip" | "date" | null>(null);
   const [statusPendingId, setStatusPendingId] = useState<string | null>(null);
+  const [dialogPending, setDialogPending] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchCategory, setSearchCategory] = useState<PlaceCategoryId | "all">("all");
@@ -250,10 +251,21 @@ export function PlacesExperience({
     void persistStatus(id, SAVED.includes(place.userStatus) ? "neutral" : "want");
   }
 
+  function isSavePending(place: Place) {
+    if (statusPendingId === place.id) return true;
+    if (!dialogPending || !pendingCandidate) return false;
+    return Boolean(
+      place.externalPlaceId
+      && place.externalPlaceId === pendingCandidate.externalPlaceId
+      && place.externalSource === pendingCandidate.externalSource,
+    );
+  }
+
   function closePlaceDialog() {
     setDialogOpen(false);
     setPendingCandidate(null);
     setPendingInitialDescription("");
+    setDialogPending(false);
   }
 
   function memoSeedForSaveDialog(place: Place) {
@@ -499,7 +511,7 @@ export function PlacesExperience({
             preferredPlan={source}
             tripScheduleStops={selectedTripStops}
             planPending={planPending}
-            savePending={statusPendingId === selected.id}
+            savePending={isSavePending(selected)}
             onAdd={() => addSelectedToPlan("trip")}
             onAddDate={() => addSelectedToPlan("date")}
             onStatusChange={status => void persistStatus(selected.id, status)}
@@ -744,7 +756,7 @@ export function PlacesExperience({
                 onTripSchedule={tripLinkedPlaceIds.has(place.id)}
                 onSelect={() => setSelectedId(place.id)}
                 onToggleSave={() => toggleSave(place.id)}
-                savePending={statusPendingId === place.id}
+                savePending={isSavePending(place)}
               />
             ))}</div>
           )
@@ -774,6 +786,7 @@ export function PlacesExperience({
           onSave={openSave}
           onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}
           onManual={openManual}
+          isSavePending={isSavePending}
         />
       )}
 
@@ -798,6 +811,7 @@ export function PlacesExperience({
               onSelect={handleSelect}
               onSave={openSave}
               onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}
+              isSavePending={isSavePending}
             />
           </>
         ) : (
@@ -834,6 +848,7 @@ export function PlacesExperience({
               onSelect={handleSelect}
               onSave={openSave}
               onLoadMore={!discoverIsEnd ? handleLoadMore : undefined}
+              isSavePending={isSavePending}
             />
           )}
         </>
@@ -847,6 +862,7 @@ export function PlacesExperience({
         initialDescription={pendingInitialDescription}
         onClose={closePlaceDialog}
         onSaved={handleSaved}
+        onPendingChange={setDialogPending}
       />
     </>
   );

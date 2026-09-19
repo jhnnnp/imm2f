@@ -16,6 +16,7 @@ export function PlaceCreateDialog({
   initialDescription = "",
   onClose,
   onSaved,
+  onPendingChange,
 }: {
   open: boolean;
   mode: "confirm" | "manual";
@@ -24,6 +25,7 @@ export function PlaceCreateDialog({
   initialDescription?: string;
   onClose: () => void;
   onSaved: (place: Place, notice: string) => void;
+  onPendingChange?: (pending: boolean) => void;
 }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -39,30 +41,37 @@ export function PlaceCreateDialog({
       setDescription("");
       setError("");
       setPending(false);
+      onPendingChange?.(false);
       return;
     }
     setDescription(mode === "confirm" ? initialDescription : "");
     setError("");
     setPending(false);
-  }, [open, mode, candidate?.externalPlaceId, candidate?.externalSource, initialDescription]);
+    onPendingChange?.(false);
+  }, [open, mode, candidate?.externalPlaceId, candidate?.externalSource, initialDescription, onPendingChange]);
+
+  function setSavePending(next: boolean) {
+    setPending(next);
+    onPendingChange?.(next);
+  }
 
   if (!open || !mounted) return null;
 
   async function confirmKakao(formData: FormData) {
     if (!candidate) return;
-    setPending(true);
+    setSavePending(true);
     setError("");
     const nextDescription = String(formData.get("description") ?? description).trim();
 
     if (!persist) {
-      setPending(false);
+      setSavePending(false);
       setError("로그인 후 장소를 저장할 수 있어요.");
       return;
     }
 
     const result = await saveKakaoPlace({ candidate, description: nextDescription, durationMinutes: 60, expectedCostTwo: null })
       .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
-    setPending(false);
+    setSavePending(false);
     if ("error" in result) {
       setError(result.error);
       return;
@@ -73,7 +82,7 @@ export function PlaceCreateDialog({
   }
 
   async function submitManual(formData: FormData) {
-    setPending(true);
+    setSavePending(true);
     setError("");
     const input = {
       name: String(formData.get("name") ?? ""),
@@ -85,14 +94,14 @@ export function PlaceCreateDialog({
     };
 
     if (!persist) {
-      setPending(false);
+      setSavePending(false);
       setError("로그인 후 장소를 저장할 수 있어요.");
       return;
     }
 
     const result = await createPlace(input)
       .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
-    setPending(false);
+    setSavePending(false);
     if ("error" in result) {
       setError(result.error);
       return;
