@@ -64,7 +64,6 @@ export function PlaceCreateDialog({
     setError("");
     const formData = new FormData(event.currentTarget);
     const nextDescription = String(formData.get("description") ?? description).trim();
-    const startedAt = Date.now();
 
     if (!persist) {
       setSavePending(false);
@@ -77,9 +76,6 @@ export function PlaceCreateDialog({
         .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." })),
       new Promise(resolve => window.setTimeout(resolve, SAVE_PENDING_MIN_MS)),
     ]);
-    if (Date.now() - startedAt < SAVE_PENDING_MIN_MS) {
-      await new Promise(resolve => window.setTimeout(resolve, SAVE_PENDING_MIN_MS - (Date.now() - startedAt)));
-    }
     setSavePending(false);
     if ("error" in result) {
       setError(result.error);
