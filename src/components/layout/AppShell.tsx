@@ -4,6 +4,7 @@ import { Topbar } from "./Topbar";
 import { ActivityPanel } from "@/features/collaboration/components/ActivityPanel";
 import { NavigationProgress } from "./NavigationProgress";
 import { PageStage } from "./PageStage";
+import { ContextPanelDrawer } from "./ContextPanelDrawer";
 
 export function AppShell({ children, context }: { children: ReactNode; context?: ReactNode }) {
   return (
@@ -14,10 +15,7 @@ export function AppShell({ children, context }: { children: ReactNode; context?:
         <Topbar />
         <PageStage>{children}</PageStage>
       </main>
-      <aside className="context-panel" aria-label="상세 정보">
-        <div id="context-panel-slot" />
-        <div id="context-panel-default">{context ?? <ActivityPanel />}</div>
-      </aside>
+      <ContextPanelDrawer fallback={context ?? <ActivityPanel />} />
     </div>
   );
 }

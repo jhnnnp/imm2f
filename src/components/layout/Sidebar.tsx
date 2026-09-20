@@ -15,6 +15,11 @@ export function Sidebar() {
   const session = useAppSession();
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
+  useEffect(() => {
+    if (!ready || !window.matchMedia("(max-width: 900px)").matches) return;
+    const active = document.querySelector<HTMLElement>(".sidebar .nav-item.is-active");
+    active?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+  }, [pathname, ready]);
   const hasIdentity = session.mode === "authenticated" || session.mode === "setup_error";
   const youName = hasIdentity ? session.displayName : "나";
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? null : null;

@@ -21185,6 +21185,10 @@ a.activity-line:hover {
   }
 
   .context-panel:has(#context-panel-slot:not(:empty)) {
+    transform: translateX(100%)
+  }
+
+  .context-panel.is-open:has(#context-panel-slot:not(:empty)) {
     transform: translateX(0)
   }
 }
@@ -26705,6 +26709,196 @@ html.is-toss-blur .toss-veil {
 .memory-wall-text [contenteditable]:empty::before { content: attr(data-placeholder); opacity: .45; pointer-events: none; }
 .memo-author { display: block; color: var(--muted); font-size: .8rem; margin: 6px 0; }
 .page-stage, .context-panel-stage { animation: none; }
+
+/* Mobile viewport hardening
+ * Keep the shell, overlays and long Korean copy inside the visible area on
+ * narrow phones. These rules intentionally live last so they also cover the
+ * feature-specific styles above. */
+@media(max-width:900px) {
+  .app-shell,
+  .workspace,
+  .page-stage {
+    width: 100%;
+    min-width: 0
+  }
+
+  .workspace {
+    padding-bottom: calc(84px + env(safe-area-inset-bottom));
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch
+  }
+
+  .sidebar {
+    height: calc(68px + env(safe-area-inset-bottom));
+    padding-bottom: calc(6px + env(safe-area-inset-bottom))
+  }
+
+  .nav-list {
+    width: 100%;
+    padding-inline: max(0px, env(safe-area-inset-left)) max(0px, env(safe-area-inset-right));
+    scroll-padding-inline: 10px;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch
+  }
+
+  .topbar,
+  .topbar>* {
+    min-width: 0
+  }
+
+  .global-search-wrap {
+    width: auto;
+    flex: 1 1 auto
+  }
+
+  .global-search {
+    max-width: 100%
+  }
+
+  .page-title-row,
+  .page-intro,
+  .trip-header,
+  .page-actions {
+    min-width: 0;
+    max-width: 100%
+  }
+
+  .page-title-row>div,
+  .page-intro>div,
+  .trip-header>div {
+    min-width: 0
+  }
+
+  .page-title-row h1,
+  .page-title-row p,
+  .page-intro h1,
+  .trip-header h1 {
+    overflow-wrap: anywhere
+  }
+
+  .notify-popover,
+  .account-popover {
+    max-width: calc(100vw - 24px)
+  }
+
+  .dialog-backdrop {
+    align-items: start;
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+    overflow-y: auto
+  }
+
+  .dialog-backdrop>* {
+    min-width: 0;
+    max-width: 100%
+  }
+
+  .place-create-dialog {
+    max-height: calc(100dvh - max(24px, env(safe-area-inset-top)) - max(24px, env(safe-area-inset-bottom)));
+    overscroll-behavior: contain
+  }
+
+  .mobile-context-toggle {
+    position: fixed;
+    right: 14px;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    z-index: 13;
+    min-width: 52px;
+    height: 38px;
+    padding: 0 14px;
+    border: 1px solid rgba(83, 111, 99, .2);
+    border-radius: 999px;
+    background: rgba(251, 249, 244, .96);
+    color: var(--sage-deep);
+    box-shadow: 0 8px 24px rgba(43, 49, 46, .16);
+    font-size: .7rem;
+    font-weight: 700
+  }
+
+  .mobile-context-toggle.is-open {
+    z-index: 14;
+    background: var(--sage-deep);
+    color: #fff
+  }
+}
+
+@media(min-width:901px) {
+  .mobile-context-toggle {
+    display: none
+  }
+}
+
+@media(max-width:600px) {
+  .workspace {
+    padding-inline: 12px
+  }
+
+  .topbar {
+    gap: 4px;
+    margin-bottom: 16px
+  }
+
+  .global-search-wrap {
+    flex: 0 0 42px;
+    width: 42px;
+    margin-left: auto
+  }
+
+  .global-search {
+    width: 42px
+  }
+
+  .notify-popover {
+    position: fixed;
+    top: 58px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-height: calc(100dvh - 146px);
+    overflow-y: auto
+  }
+
+  .account-popover {
+    right: 0;
+    width: min(180px, calc(100vw - 24px))
+  }
+
+  .page-title-row,
+  .page-intro,
+  .trip-header {
+    gap: 10px
+  }
+
+  .page-title-row h1,
+  .page-intro h1,
+  .trip-header h1 {
+    font-size: clamp(1.55rem, 8vw, 1.8rem)
+  }
+
+  .page-actions {
+    width: 100%;
+    justify-content: flex-start
+  }
+
+  .page-actions>button,
+  .page-actions>a {
+    max-width: 100%
+  }
+
+  .dialog-actions {
+    flex-wrap: wrap
+  }
+
+  .dialog-actions>button,
+  .dialog-actions>a {
+    flex: 1 1 auto
+  }
+
+  .place-create-dialog {
+    padding: 18px 16px;
+    border-radius: 14px
+  }
+}
 @media (max-width: 600px) {
   .timeline-edit-panel { grid-template-columns: minmax(0, 1fr); }
   .page-title-row { flex-wrap: wrap; gap: 16px; }
