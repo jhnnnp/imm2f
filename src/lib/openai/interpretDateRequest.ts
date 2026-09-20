@@ -26,6 +26,7 @@ import {
 import { completeJson } from "./client";
 import { isOpenAiConfigured } from "./env";
 import { chatSituationFromMessage } from "./composeDateChat";
+import { explicitDateConstraints } from "@/features/ai/dateConstraints";
 
 export type IntentPayload = {
   intent?: AIPlannerState["intent"];
@@ -122,6 +123,8 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
   const areaScope = asAreaScope(patch.areaScope) ?? (reset ? null : base.areaScope);
   const located = withAreas({ ...base, areaScope }, areas);
   return {
+    budgetWon: base.budgetWon,
+    walkingPreference: base.walkingPreference,
     activities,
     areas: located.areas,
     region: located.region,
@@ -137,7 +140,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     timeWindow: timeWindow ?? timed.timeWindow,
     startTime: patch.startTime === undefined ? timed.startTime : asTime(patch.startTime) ?? timed.startTime,
     endTime: patch.endTime === undefined ? timed.endTime : asTime(patch.endTime) ?? timed.endTime,
-    dateLabel: dateLabel || base.dateLabel,
+    dateLabel: base.dateLabel || dateLabel || null,
     pinOrder: reset ? [] : uniqueStrings(base.pinOrder, 8),
     preserveExistingPlaces: patch.preserveExistingPlaces !== false,
     addStop: patch.addStop === true,
@@ -174,7 +177,7 @@ export function applyInterpretPatch(input: {
   const merged = mergeDateState(input.previousState, input.patch, input.dateLabel);
   const areas = groundedAreas(input.message, input.previousState, merged.areas);
   const activities = groundedActivities(input.message, input.previousState, merged.activities, merged);
-  const state = withAreas({ ...merged, activities, pendingSlot: null }, areas);
+  const state = withAreas({ ...merged, ...explicitDateConstraints(input.message, input.previousState), activities, pendingSlot: null }, areas);
   const next = { ...state, pendingSlot: missingSlot(state) };
   return { state: next, slot: missingSlot(next), reply: usableReply(input.patch.reply) };
 }

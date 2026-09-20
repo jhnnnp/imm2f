@@ -1,3 +1,4 @@
+import { fitSchedule } from "./schedule";
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
 import { distanceMeters } from "@/features/places/geo";
 import type { RankedCandidate } from "@/lib/openai/rank";
@@ -370,30 +371,16 @@ export function assignStartTimes(
   dayStart = assumedTimeWindow(state).startTime,
 ): DateCourseRow[] {
   const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
-  const anchors = mealAnchorMinutes(state, dayStart);
-  let cursor = clockMinutes(dayStart);
-  let meals = 0;
-  let lastDay = 0;
-  return rows.map((row, index) => {
-    const day = Number(row.day_index ?? 0);
-    if (index === 0 || day !== lastDay) {
-      cursor = clockMinutes(dayStart);
-      meals = 0;
-    }
-    lastDay = day;
+  const scheduled = fitSchedule(rows.map(row => {
     const candidate = byId.get(String(row.id ?? ""));
-    if (candidate && matchesActivity(candidate, "meal")) {
-      cursor = Math.max(cursor, anchors[Math.min(meals, anchors.length - 1)]);
-      meals += 1;
-    }
-    const duration = row.duration_minutes ?? (candidate ? defaultDuration(candidate, state.pace) : 70);
-    const previous = index > 0 && Number(rows[index - 1]?.day_index ?? 0) === day
-      ? byId.get(String(rows[index - 1]?.id ?? ""))
-      : undefined;
-    const start = formatClock(cursor);
-    cursor += duration + travelGapMinutes(previous?.coordinates, candidate?.coordinates);
-    return { ...row, start_time: start, duration_minutes: duration };
-  });
+    return {
+      row,
+      dayIndex: Math.max(0, Math.min(courseSize(state).days - 1, Math.floor(Number(row.day_index) || 0))),
+      coordinates: candidate?.coordinates,
+      durationMinutes: Number(row.duration_minutes) || (candidate ? defaultDuration(candidate, state.pace) : 70),
+    };
+  }), dayStart, assumedTimeWindow(state).endTime);
+  return scheduled?.map(stop => ({ ...stop.row, day_index: stop.dayIndex, start_time: stop.startTime, duration_minutes: stop.durationMinutes })) ?? [];
 }
 
 export function preferredHopScore(meters: number, trip = false) {

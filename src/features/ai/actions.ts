@@ -51,6 +51,8 @@ import { allowsHarshDateMeal, applyCourseDelta, bothWantNames, candidateActivity
 import { chatSituationFromMessage, composeDateChat, dateChatCard, cardToText } from "@/lib/openai/composeDateChat";
 import { hydrateDateCandidates } from "@/lib/places/detailCache";
 import { routeDateChat } from "@/lib/openai/routeDateChat";
+import { editCurrentCourse } from "./editCurrentCourse";
+import type { ChatRoute } from "./chatRoute";
 import { recommendPlacesWithOpenAi } from "@/lib/openai/recommendPlaces";
 import { answerDateQuestion, type QuestionContextStop } from "@/lib/openai/answerDateQuestion";
 import { PLACE_KIND_LABEL, isMoreRequest } from "@/features/ai/chatRoute";
@@ -358,7 +360,7 @@ async function recommendPlacesForChat(input: {
   }
   const ask: PlaceAsk = { ...input.ask, area };
   const continuing = Boolean(input.state.placeAsk && input.state.placeAsk.kind === ask.kind && input.state.placeAsk.area === area && isMoreRequest(input.message));
-  const alreadyShown = continuing ? (input.state.shownPlaces ?? []) : [];
+  const alreadyShown = continuing ? (input.state.seenPlaces ?? input.state.shownPlaces ?? []) : [];
   const baseState = withAreas(noteTurn(input.state, input.message), uniqueStrings([area, ...selectedAreas(input.state)], 3));
 
   const [{ places: saved }, insight, anchorSearch, ...planSearches] = await Promise.all([
@@ -452,12 +454,14 @@ async function recommendPlacesForChat(input: {
   const nextState: AIPlannerState = {
     ...baseState,
     placeAsk: ask,
-    shownPlaces: uniqueStrings([...alreadyShown, ...picked.shownPlaces], MAX_SHOWN_PLACES),
+    shownPlaces: picked.shownPlaces,
+    seenPlaces: uniqueStrings([...picked.shownPlaces, ...alreadyShown], MAX_SHOWN_PLACES),
   };
   return chatResult(picked.card, nextState);
 }
 
 export async function recommendDatePlan(input: {
+  currentPlan?: import("@/features/planning/types/plan").AIPlannerReply | null;
   message?: string;
   prompt?: string;
   previousPlaceNames?: string[];
@@ -493,6 +497,7 @@ export async function recommendDatePlan(input: {
   }
 
   let pickedPlaces: string[] = [];
+  let courseEdit: ChatRoute["edit"];
   if (message) {
     const currentCourse = previousStops.map(stop => stop.name);
     const route = await routeDateChat({
@@ -500,6 +505,7 @@ export async function recommendDatePlan(input: {
       state: filledPrevious,
       hasCourse: currentCourse.length > 0,
       currentCourse,
+      currentCategories: previousStops.map(stop => stop.category),
       conversation: input.conversation,
     });
     const state = filledPrevious ?? emptyDateBrief();
@@ -536,6 +542,7 @@ export async function recommendDatePlan(input: {
       });
     }
     pickedPlaces = route.pickedPlaces ?? [];
+    courseEdit = route.edit;
   }
 
   if (!message && missingSlot(filledPrevious)) {
@@ -561,6 +568,10 @@ export async function recommendDatePlan(input: {
       reply: "",
     };
 
+  if (courseEdit && input.currentPlan?.items.length && input.currentPlan.items.length === input.currentPlan.recommendations.length) {
+    return editCurrentCourse(input.currentPlan, courseEdit, interpretation.state);
+  }
+
   const interpretedRaw = applyCourseDelta({
     message,
     previousStops,
@@ -569,6 +580,7 @@ export async function recommendDatePlan(input: {
       // The interpreter rebuilds the brief from scratch; the place-list
       // memory lives outside the brief and must survive the turn.
       shownPlaces: filledPrevious?.shownPlaces,
+      seenPlaces: filledPrevious?.seenPlaces,
       placeAsk: filledPrevious?.placeAsk,
       dateLabel: interpretation.state.dateLabel || input.dateLabel || null,
       requiredPlaces: uniqueStrings([
@@ -603,7 +615,7 @@ export async function recommendDatePlan(input: {
     dateLabel: state.dateLabel || "날짜 미정",
     startTime: time.startTime,
     endTime: time.endTime,
-    budget: null,
+    budget: state.budgetWon ?? null,
     region: selectedRegions.join(" · "),
     timeSpecified: time.specified,
   };
@@ -807,7 +819,7 @@ export async function recommendDatePlan(input: {
       slot: "area",
     };
   }
-  return recommendDatePlanWithOpenAi({
+  const recommendation = await recommendDatePlanWithOpenAi({
     prompt: message || `${condition.region}에서 ${state.activities.join(", ") || "하루"} 데이트`,
     condition,
     candidates,
@@ -827,4 +839,9 @@ export async function recommendDatePlan(input: {
       avoidFoods,
     },
   });
+  if (!recommendation.items.length) {
+    const text = "이동과 관람 시간을 넣으면 요청한 시간 안에 코스를 만들기 어려워요. 시간을 늘리거나 원하는 장소를 줄여 볼까요?";
+    return chatResult({ headline: "", lines: [text] }, state);
+  }
+  return recommendation;
 }

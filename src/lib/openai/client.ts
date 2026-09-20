@@ -1,23 +1,85 @@
-import { getOpenAiApiKey, getOpenAiModel } from "./env";
+import { getOpenAiApiKey, getOpenAiModel, getOpenAiSearchModel } from "./env";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
-
 type VisionContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
-
 type VisionMessage = { role: "system" | "user"; content: string | VisionContentPart[] };
 
 function usesReasoning(model: string) {
-  return /^gpt-5/i.test(model);
+  return /^(?:gpt-[5-9]|o[134](?:-|$))/i.test(model);
 }
 
-/**
- * Reasoning models regularly take longer than a dozen seconds to answer a
- * large JSON request. A short abort silently degrades every reply to the
- * heuristic fallback, which reads as "the bot is not really an LLM".
- */
 const DEFAULT_JSON_TIMEOUT_MS = 25000;
+
+// The limit includes hidden reasoning, not just the requested JSON text.
+function completionBudget(model: string, outputTokens: number) {
+  return usesReasoning(model) ? outputTokens + 2048 : outputTokens;
+}
+
+async function requestJson<T>(input: {
+  messages: Array<ChatMessage | VisionMessage>;
+  temperature?: number;
+  maxTokens?: number;
+  reasoningEffort?: "none" | "low" | "medium" | "high";
+  timeoutMs?: number;
+}): Promise<T | null> {
+  const key = getOpenAiApiKey();
+  if (!key) return null;
+  const model = getOpenAiModel();
+  const reasoning = usesReasoning(model);
+  const signal = AbortSignal.timeout(input.timeoutMs ?? DEFAULT_JSON_TIMEOUT_MS);
+  const body: Record<string, unknown> = {
+    model,
+    response_format: { type: "json_object" },
+    messages: input.messages,
+    ...(reasoning ? {
+      max_completion_tokens: completionBudget(model, input.maxTokens ?? 2000),
+      reasoning_effort: input.reasoningEffort ?? "low",
+    } : { temperature: input.temperature ?? 0.2, max_tokens: input.maxTokens ?? 2000 }),
+  };
+  try {
+    // At most one targeted retry, sharing the original deadline.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null) as { error?: { code?: string; param?: string } } | null;
+        console.error("OpenAI completion failed", { model, status: response.status, code: error?.error?.code, param: error?.error?.param });
+        if (attempt === 0 && response.status === 400 && error?.error?.param === "reasoning_effort") {
+          delete body.reasoning_effort;
+          continue;
+        }
+        return null;
+      }
+      const payload = await response.json() as {
+        choices?: Array<{ finish_reason?: string; message?: { content?: string | null; refusal?: string | null } }>;
+      };
+      const choice = payload.choices?.[0];
+      if (choice?.message?.refusal || choice?.finish_reason === "content_filter") return null;
+      if (choice?.finish_reason === "length") {
+        console.error("OpenAI completion truncated", { model, attempt });
+        if (attempt === 0) {
+          const field = reasoning ? "max_completion_tokens" : "max_tokens";
+          body[field] = Number(body[field]) * 2;
+          continue;
+        }
+        return null;
+      }
+      const parsed = parseJsonObject<T>(choice?.message?.content ?? "");
+      if (!parsed) console.error("OpenAI completion returned invalid JSON", { model });
+      return parsed;
+    }
+  } catch (error) {
+    // Never log request payloads, credentials, or raw provider error messages.
+    console.error("OpenAI completion unavailable", { model, reason: signal.aborted ? "timeout" : error instanceof Error ? error.name : "unknown" });
+  }
+  return null;
+}
 
 export async function completeJsonFromImage<T>(input: {
   instructions: string;
@@ -25,70 +87,18 @@ export async function completeJsonFromImage<T>(input: {
   maxTokens?: number;
   timeoutMs?: number;
 }): Promise<T | null> {
-  const model = getOpenAiModel();
-  const timeoutMs = input.timeoutMs ?? 45000;
-  const reasoning = usesReasoning(model);
-  const messages: VisionMessage[] = [
-    { role: "system", content: input.instructions },
-    {
-      role: "user",
-      content: [
+  return requestJson<T>({
+    temperature: 0.1,
+    maxTokens: input.maxTokens ?? 2500,
+    timeoutMs: input.timeoutMs ?? 45000,
+    messages: [
+      { role: "system", content: input.instructions },
+      { role: "user", content: [
         { type: "text", text: "Read this reservation screenshot and reply with JSON only." },
         { type: "image_url", image_url: { url: input.imageDataUrl, detail: "high" } },
-      ],
-    },
-  ];
-  const bodyBase = {
-    model,
-    response_format: { type: "json_object" as const },
-    messages,
-  };
-  const reasoningBody = {
-    ...bodyBase,
-    max_completion_tokens: input.maxTokens ?? 4000,
-    reasoning_effort: "low" as const,
-  };
-  const classicBody = {
-    ...bodyBase,
-    temperature: 0.1,
-    max_tokens: input.maxTokens ?? 2500,
-  };
-
-  const parse = async (response: Response) => {
-    if (!response.ok) {
-      console.error("OpenAI vision completion failed", response.status, (await response.text()).slice(0, 300));
-      return null;
-    }
-    const body = await response.json() as { choices?: Array<{ message?: { content?: string | null } }> };
-    const content = body.choices?.[0]?.message?.content;
-    if (!content) return null;
-    try {
-      return JSON.parse(content) as T;
-    } catch {
-      return null;
-    }
-  };
-
-  try {
-    const first = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${getOpenAiApiKey()}`, "Content-Type": "application/json" },
-      body: JSON.stringify(reasoning ? reasoningBody : classicBody),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    const parsed = await parse(first);
-    if (parsed) return parsed;
-    if (!reasoning) return null;
-    const retry = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${getOpenAiApiKey()}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ ...bodyBase, max_completion_tokens: input.maxTokens ?? 4000 }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return parse(retry);
-  } catch {
-    return null;
-  }
+      ] },
+    ],
+  });
 }
 
 export async function completeJson<T>(input: {
@@ -98,63 +108,7 @@ export async function completeJson<T>(input: {
   reasoningEffort?: "none" | "low" | "medium" | "high";
   timeoutMs?: number;
 }): Promise<T | null> {
-  const model = getOpenAiModel();
-  const timeoutMs = input.timeoutMs ?? DEFAULT_JSON_TIMEOUT_MS;
-  const reasoning = usesReasoning(model);
-  const bodyBase = {
-    model,
-    response_format: { type: "json_object" as const },
-    messages: input.messages,
-  };
-  const reasoningBody = {
-    ...bodyBase,
-    max_completion_tokens: input.maxTokens ?? 4000,
-    reasoning_effort: input.reasoningEffort ?? "low",
-  };
-  const classicBody = {
-    ...bodyBase,
-    temperature: input.temperature ?? 0.2,
-    max_tokens: input.maxTokens ?? 2000,
-  };
-
-  const parse = async (response: Response) => {
-    if (!response.ok) {
-      // A wrong model name or an expired key would otherwise degrade every
-      // reply into the heuristic fallback without a trace.
-      console.error("OpenAI chat completion failed", response.status, (await response.text()).slice(0, 300));
-      return null;
-    }
-    const body = await response.json() as { choices?: Array<{ message?: { content?: string | null } }> };
-    const content = body.choices?.[0]?.message?.content;
-    if (!content) return null;
-    try {
-      return JSON.parse(content) as T;
-    } catch {
-      return null;
-    }
-  };
-
-  try {
-    const first = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${getOpenAiApiKey()}`, "Content-Type": "application/json" },
-      body: JSON.stringify(reasoning ? reasoningBody : classicBody),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    const parsed = await parse(first);
-    if (parsed) return parsed;
-    if (!reasoning) return null;
-
-    const retry = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${getOpenAiApiKey()}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ ...bodyBase, max_completion_tokens: input.maxTokens ?? 4000 }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return parse(retry);
-  } catch {
-    return null;
-  }
+  return requestJson<T>(input);
 }
 
 function extractOutputText(body: {
@@ -162,21 +116,17 @@ function extractOutputText(body: {
   output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
 }) {
   if (body.output_text?.trim()) return body.output_text.trim();
-  for (const item of body.output ?? []) {
-    for (const part of item.content ?? []) {
-      if (part.text?.trim()) return part.text.trim();
-    }
-  }
-  return "";
+  return (body.output ?? []).filter(item => item.type === "message")
+    .flatMap(item => item.content ?? [])
+    .filter(part => part.type === "output_text" && typeof part.text === "string")
+    .map(part => part.text).join("\n").trim();
 }
 
 function parseJsonObject<T>(content: string): T | null {
-  const trimmed = content.trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
+  const trimmed = content.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i, "$1").trim();
   try {
-    return JSON.parse(trimmed.slice(start, end + 1)) as T;
+    const value: unknown = JSON.parse(trimmed);
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value as T : null;
   } catch {
     return null;
   }
@@ -190,7 +140,8 @@ export async function completeJsonWithWebSearch<T>(input: {
   requireSearch?: boolean;
   searchContextSize?: "low" | "medium" | "high";
 }): Promise<T | null> {
-  const model = getOpenAiModel();
+  if (!getOpenAiApiKey()) return null;
+  const model = getOpenAiSearchModel();
   const body = {
     model,
     tools: [{
@@ -202,10 +153,11 @@ export async function completeJsonWithWebSearch<T>(input: {
     include: ["web_search_call.action.sources"],
     instructions: `${input.instructions} After searching, reply with one raw JSON object only. No markdown, no headings, no fences. Web search cannot use JSON mode, so wrap the answer yourself.`,
     input: JSON.stringify(input.payload),
-    max_output_tokens: input.maxTokens ?? 4000,
+    max_output_tokens: completionBudget(model, input.maxTokens ?? 4000),
     ...(usesReasoning(model) ? { reasoning: { effort: "low" } } : {}),
   };
 
+  const deadline = Date.now() + (input.timeoutMs ?? 55000);
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -214,27 +166,31 @@ export async function completeJsonWithWebSearch<T>(input: {
       signal: AbortSignal.timeout(input.timeoutMs ?? 55000),
     });
     if (!response.ok) {
-      console.error("OpenAI web search response failed", response.status, (await response.text()).slice(0, 300));
+      console.error("OpenAI web search response failed", { model, status: response.status });
       return null;
     }
     const payload = await response.json() as {
+      status?: string;
       output_text?: string;
       output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
     };
+    if (payload.status === "incomplete" || payload.status === "failed") return null;
     const text = extractOutputText(payload);
     const direct = parseJsonObject<T>(text);
     if (direct) return direct;
-    if (!text.trim()) return null;
+    const remainingMs = deadline - Date.now();
+    if (!text.trim() || remainingMs <= 0) return null;
     return completeJson<T>({
+      timeoutMs: remainingMs,
       temperature: 0,
       maxTokens: input.maxTokens ?? 4000,
       reasoningEffort: "low",
       messages: [
         {
           role: "system",
-          content: "Extract one JSON object from the notes. Copy rating, ratingCount, food, and sourceUrl only when that exact value appears in the notes next to that shop. Never invent a 4.x score, a review count, a menu, or a URL. If a field is not in the notes, omit it. Schema: {\"facts\":[{\"id\":string,\"rating\":number,\"ratingCount\":number,\"food\":string,\"sourceUrl\":string}]} Reply JSON only.",
+          content: `Convert the search notes to the JSON schema in the original instructions below. Only copy facts present in the notes. Do not search, add facts, or invent missing values. Preserve the requested top-level shape. Original instructions: ${input.instructions}`,
         },
-        { role: "user", content: text.slice(0, 12000) },
+        { role: "user", content: JSON.stringify({ request: input.payload, notes: text.slice(0, 12000) }) },
       ],
     });
   } catch {

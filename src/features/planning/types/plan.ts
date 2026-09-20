@@ -154,6 +154,8 @@ export type AIPlannerChat = {
 export type AIPlannerResult = AIPlannerReply | AIPlannerClarification | AIPlannerChat;
 
 export type AIPlannerState = {
+  budgetWon?: number | null;
+  walkingPreference?: "short" | null;
   activities: DateActivityId[];
   areas: string[];
   region: string;
@@ -178,6 +180,8 @@ export type AIPlannerState = {
   conversationNotes: string[];
   /** Names the assistant listed in the last place-recommendation turn. */
   shownPlaces?: string[];
+  /** Prior search results used to avoid repeats; shownPlaces preserves visible numbering. */
+  seenPlaces?: string[];
   /** The last standalone place request, so "다른 곳 더" can continue it. */
   placeAsk?: PlaceAsk | null;
 };

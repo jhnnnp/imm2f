@@ -353,8 +353,7 @@ export function groundedAreas(message: string, previous: AIPlannerState | undefi
   const switching = /(?:다른|말고|대신)\s*(?:곳|도시|동네|지역)|처음부터|새로|전부\s*바꿔/.test(message);
   if (switching) return found;
   if (found.length && previousAreas.length) {
-    const sameCluster = found.every(area => previousAreas.some(prev => areaCluster(area) === areaCluster(prev)));
-    if (isAdditiveRequest(message) || sameCluster) return uniqueStrings([...previousAreas, ...found], 3);
+    if (isAdditiveRequest(message)) return uniqueStrings([...previousAreas, ...found], 3);
     return found;
   }
   if (found.length) return found;
@@ -864,6 +863,9 @@ export function courseSize(state: AIPlannerState) {
 }
 
 export function assumedTimeWindow(state: AIPlannerState) {
+  if (state.startTime) {
+    return { startTime: state.startTime, endTime: state.endTime || "21:00", specified: true, window: state.timeWindow };
+  }
   if (state.stayKind === "overnight" || (state.nights || 0) > 0) {
     return { startTime: "11:00", endTime: "21:00", specified: true, window: state.timeWindow };
   }
@@ -874,9 +876,7 @@ export function assumedTimeWindow(state: AIPlannerState) {
   if (chosen?.startTime) {
     return { startTime: chosen.startTime, endTime: chosen.endTime || "21:00", specified: true, window: chosen.id };
   }
-  if (state.startTime) {
-    return { startTime: state.startTime, endTime: state.endTime || "21:00", specified: true, window: state.timeWindow };
-  }
+
   if (state.activities.includes("nightview") || state.timeWindow === "night") {
     return { startTime: "17:30", endTime: "22:00", specified: false, window: "night" as DateTimeWindow };
   }

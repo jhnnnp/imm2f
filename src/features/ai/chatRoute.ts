@@ -10,6 +10,7 @@ import { isCourseQuickAction, isRedoRequest, isSoftReroll, isSwapRequest } from 
 export type ChatMode = "course" | "places" | "question" | "chat";
 
 export type ChatRoute = {
+  edit?: { kind: "retime" | "remove" | "reorder"; indices: number[] };
   mode: ChatMode;
   /** True when the local rules alone are sure; the LLM router is skipped. */
   confident: boolean;
@@ -127,6 +128,21 @@ export function routeDateChatLocally(input: {
   const shown = input.state?.shownPlaces ?? [];
   if (!message) return { mode: "course", confident: true };
   if (input.chatSituation) return { mode: "chat", confident: true };
+  // A typed area answer must resume the same search, just like an area chip.
+  const pendingAsk = input.state?.placeAsk;
+  const writtenAreas = extractAreasFromText(message);
+  if (pendingAsk && !pendingAsk.area && writtenAreas.length && !COURSE_WORD.test(message)) {
+    const kind = detectPlaceKind(message) ?? pendingAsk.kind;
+    return {
+      mode: "places",
+      confident: true,
+      placeAsk: {
+        kind,
+        query: detectPlaceKind(message) ? placeQueryFromMessage(message, kind) : pendingAsk.query,
+        area: writtenAreas[0],
+      },
+    };
+  }
   if (isCourseQuickAction(message)) return { mode: "course", confident: true };
   if (input.hasCourse && (isSwapRequest(message) || isRedoRequest(message) || isSoftReroll(message) || /빼\s*줘|제외|한\s*곳\s*더|추가해/.test(message))) {
     return { mode: "course", confident: true };
@@ -135,7 +151,7 @@ export function routeDateChatLocally(input: {
     return { mode: "course", confident: true, pickedPlaces: pickedShownPlaces(message, shown) };
   }
   if (shown.length && input.state?.placeAsk && isMoreRequest(message) && !detectPlaceKind(message)) {
-    return { mode: "places", confident: true, placeAsk: input.state.placeAsk };
+    return { mode: "places", confident: true, placeAsk: { ...input.state.placeAsk, area: writtenAreas[0] || input.state.placeAsk.area } };
   }
   if (isPlaceRequest(message)) {
     const kind = detectPlaceKind(message) ?? "spot";

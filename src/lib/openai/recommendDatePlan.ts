@@ -120,8 +120,8 @@ function buildReply(
     if (!candidate || seen.has(id) || recommendations.length >= maxStops) continue;
     seen.add(id);
     const durationMinutes = clamp(row.duration_minutes, 30, 180, defaultDuration(candidate, state.pace));
-    const previousItem = items.at(-1);
-    const previousRec = recommendations.at(-1);
+    const previousItem = items.at(-1)?.dayIndex === Number(row.day_index ?? 0) ? items.at(-1) : undefined;
+    const previousRec = previousItem ? recommendations.at(-1) : undefined;
     const gap = travelGapMinutes(previousRec?.coordinates, candidate.coordinates);
     const earliest = previousItem ? addMinutes(previousItem.startTime, previousItem.durationMinutes + gap) : null;
     const suggested = parseClock(row.start_time);
@@ -186,9 +186,10 @@ function buildReply(
       ? `${region} · ${festivalRec.name}`
       : `${region} ${recommendations.length}곳`;
   const talk = pickCourseMessage(message, recommendations, region);
-  const line = festivalMeta?.openingHours
+  const courseLine = festivalMeta?.openingHours
     ? `${talk} · ${festivalMeta.openingHours}`
     : talk;
+  const line = [courseLine, state.budgetWon ? `두 분 합계 ${state.budgetWon.toLocaleString("ko-KR")}원 예산을 기준으로 골랐어요. 메뉴·입장료가 모두 확인된 것은 아니라 예산 안이라고 확정할 수는 없어요.` : ""].filter(Boolean).join(" ");
 
   return {
     status: "plan",
@@ -393,7 +394,7 @@ export async function recommendDatePlanWithOpenAi(input: {
   });
 
   const curatorPayload = {
-    task: "Judge this table with web_search. Fill missing rating/food for shops you might pick, then select one course. Couple flags and Kakao rows are first-class, not footnotes.",
+    task: "Select a course from the verified table. You cannot search or create new facts. Follow the user's constraints and current course edits.",
     targetStops: courseSize(input.state),
     stay: { kind: input.state.stayKind, nights: input.state.nights, trip: isTravelPlan(input.state) },
     latestMessage: input.prompt.slice(0, 800),
@@ -419,6 +420,8 @@ export async function recommendDatePlanWithOpenAi(input: {
       nights: input.state.nights,
       timeWindow: input.state.timeWindow,
       pace: input.state.pace,
+      budgetWon: input.state.budgetWon ?? null,
+      walkingPreference: input.state.walkingPreference ?? null,
       notes: input.state.conversationNotes.slice(-6),
     },
     timeWindow: {
@@ -452,10 +455,8 @@ export async function recommendDatePlanWithOpenAi(input: {
       ],
     });
     if (!parsed) return fallback();
-    const copied = sanitizePlaceWebFacts(parsed.facts, allowedIds);
-    const mergedFacts = copied.length ? copied : facts;
-    const grounded = applyPlaceWebFacts(groundedPool, mergedFacts);
-    if (mergedFacts.length) void writePlaceDetailCache(grounded.filter(candidate => allowedIds.has(dateCandidateKey(candidate))));
+    // The curator has no search tool. It must not overwrite verified facts.
+    const grounded = groundedPool;
     const rows = validateModelRows(parsed.selected ?? [], grounded, input.state);
     const reply = buildReply(rows, grounded, input.condition, parsed.message ?? "", "openai", input.state, input.saved);
     return reply.items.length >= Math.min(2, courseSize(input.state).min) ? reply : fallback();

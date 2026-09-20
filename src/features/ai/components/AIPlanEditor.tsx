@@ -552,49 +552,56 @@ export function AIPlanEditor({
       ...conversation,
       ...(displayText || request ? [{ role: "user" as const, text: displayText || request }] : []),
     ].slice(-8);
-    const result = await recommendDatePlan({
-      message: request,
-      previousPlaceNames: recommendation?.recommendations.map(place => place.name),
-      previousStops: recommendation?.recommendations.map(place => ({ name: place.name, category: place.category })),
-      courseStops: recommendation?.card.stops,
-      shownStops,
-      previousState: nextState,
-      dateLabel: startDate || undefined,
-      conversation: nextTurns.map(turn => ({ role: turn.role, text: turn.text })),
-    });
-    if (ticket !== requestIdRef.current) return;
-    if ("error" in result) {
-      const safeError = /^false\b/i.test(result.error)
-        ? "조건에 맞는 장소를 충분히 찾지 못했습니다. 가고 싶은 동네를 다시 말해 주세요."
-        : result.error;
-      setConversation(current => [...current, { role: "assistant", text: safeError, card: { headline: "장소를 찾지 못했습니다", lines: [safeError] } }]);
-      setPlannerState(nextState);
-      setPhase("idle");
-      return;
-    }
-    setPlannerState(result.state);
-    if (result.status === "clarification") {
-      setConversation(current => [...current, { role: "assistant", text: result.message, card: result.card }]);
-      setChoicePrompt({ options: result.options, multiple: result.multiple, kind: result.slot });
-      setPhase("idle");
-      return;
-    }
-    if (result.status === "chat") {
-      setConversation(current => [...current, { role: "assistant", text: result.message, card: result.card }]);
-      if (result.card.stops?.length) setShownStops(result.card.stops);
-      if (result.slot && result.options?.length) {
-        setChoicePrompt({ options: result.options, multiple: Boolean(result.multiple), kind: result.slot });
+    try {
+      const result = await recommendDatePlan({
+        currentPlan: recommendation,
+        message: request,
+        previousPlaceNames: recommendation?.recommendations.map(place => place.name),
+        previousStops: recommendation?.recommendations.map(place => ({ name: place.name, category: place.category })),
+        courseStops: recommendation?.card.stops,
+        shownStops,
+        previousState: nextState,
+        dateLabel: startDate || undefined,
+        conversation: nextTurns.map(turn => ({ role: turn.role, text: turn.text })),
+      });
+      if (ticket !== requestIdRef.current) return;
+      if ("error" in result) {
+        const safeError = /^false\b/i.test(result.error)
+          ? "조건에 맞는 장소를 충분히 찾지 못했습니다. 가고 싶은 동네를 다시 말해 주세요."
+          : result.error;
+        setConversation(current => [...current, { role: "assistant", text: safeError, card: { headline: "장소를 찾지 못했습니다", lines: [safeError] } }]);
+        setPlannerState(nextState);
+        return;
       }
-      setPhase("idle");
-      return;
+      setPlannerState(result.state);
+      if (result.status === "clarification") {
+        setConversation(current => [...current, { role: "assistant", text: result.message, card: result.card }]);
+        setChoicePrompt({ options: result.options, multiple: result.multiple, kind: result.slot });
+        return;
+      }
+      if (result.status === "chat") {
+        setConversation(current => [...current, { role: "assistant", text: result.message, card: result.card }]);
+        if (result.card.stops?.length) setShownStops(result.card.stops);
+        if (result.slot && result.options?.length) {
+          setChoicePrompt({ options: result.options, multiple: Boolean(result.multiple), kind: result.slot });
+        }
+        return;
+      }
+      setRecommendation(result);
+      resetKeep();
+      setConversation(current => [
+        ...current,
+        { role: "assistant", text: result.message, card: { ...result.card, followUp: undefined } },
+      ]);
+    } catch {
+      if (ticket !== requestIdRef.current) return;
+      const text = "답변을 가져오지 못했어요. 잠시 후 다시 보내 주세요.";
+      setConversation(current => [...current, { role: "assistant", text, card: { headline: "", lines: [text] } }]);
+      setPlannerState(nextState);
+      setGeneratePrompt(request || displayText || "");
+    } finally {
+      if (ticket === requestIdRef.current) setPhase("idle");
     }
-    setRecommendation(result);
-    resetKeep();
-    setConversation(current => [
-      ...current,
-      { role: "assistant", text: result.message, card: { ...result.card, followUp: undefined } },
-    ]);
-    setPhase("idle");
   }
 
   function pickQuick(label: string) {

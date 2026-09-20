@@ -18,6 +18,18 @@ const route = (message: string, extra: Partial<Parameters<typeof routeDateChatLo
 });
 
 describe("chatRoute", () => {
+  it("resumes a pending restaurant search when the user types its area", () => {
+    const state = { ...emptyDateBrief(), placeAsk: { kind: "restaurant" as const, query: "파스타", area: "" } };
+    expect(route("성수", { state })).toMatchObject({ mode: "places", placeAsk: { kind: "restaurant", query: "파스타", area: "성수" } });
+    expect(route("성수 코스 짜줘", { state }).mode).toBe("course");
+    expect(route("홍대 카페", { state })).toMatchObject({ mode: "places", placeAsk: { kind: "cafe", area: "홍대" } });
+  });
+
+  it("honors a new area when asking for more places", () => {
+    const state = { ...withAreas(emptyDateBrief(), ["성수"]), shownPlaces: ["식당 A"], placeAsk: { kind: "restaurant" as const, query: "파스타", area: "성수" } };
+    expect(route("홍대에서 다른 곳 더 보여줘", { state })).toMatchObject({ mode: "places", placeAsk: { area: "홍대", query: "파스타" } });
+  });
+
   it("sends restaurant and cafe asks to place mode instead of the course form", () => {
     expect(route("성수 파스타 맛집 추천해줘")).toMatchObject({
       mode: "places",
