@@ -1,6 +1,6 @@
 "use server";
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getAppSession } from "@/features/auth/session";
 import { listPlaces } from "@/features/places/actions";
 import { analyzePreferencesWithOpenAi, type PreferenceInsight } from "@/lib/openai/analyzePreferences";
@@ -36,6 +36,7 @@ import {
   planDayYmd,
   activitySearchIntents,
   searchIntents,
+  type DateSearchIntent,
   selectedAreas,
   slotQuestion,
   uniqueStrings,
@@ -46,12 +47,17 @@ import {
   missingWantedSlots,
   fitsWantedActivities,
   isExclusiveCrawl,
+  isSimpleLocalRequest,
+  extractActivitiesFromText,
 } from "@/features/ai/dateBrief";
-import { allowsHarshDateMeal, applyCourseDelta, bothWantNames, candidateActivitySlot, diversifyDateCatalog, isOffDateVenue, preferredSavedNames, recentPlaceNames, toDateRanking } from "@/features/ai/dateCourse";
+import { allowsHarshDateMeal, applyCourseDelta, bothWantNames, candidateActivitySlot, isOffDateVenue, preferredSavedNames, recentPlaceNames, toDateRanking } from "@/features/ai/dateCourse";
 import { chatSituationFromMessage, composeDateChat, dateChatCard, cardToText } from "@/lib/openai/composeDateChat";
 import { hydrateDateCandidates } from "@/lib/places/detailCache";
 import { routeDateChat } from "@/lib/openai/routeDateChat";
 import { editCurrentCourse } from "./editCurrentCourse";
+import { designDateDiscovery } from "@/lib/openai/designDateDiscovery";
+import { discoveryCatalog } from "./courseDesign";
+import { courseMutationProblems } from "./courseMutation";
 import type { ChatRoute } from "./chatRoute";
 import { recommendPlacesWithOpenAi } from "@/lib/openai/recommendPlaces";
 import { answerDateQuestion, type QuestionContextStop } from "@/lib/openai/answerDateQuestion";
@@ -282,7 +288,8 @@ const PLACE_RESULTS_PER_SEARCH = 15;
 
 function noteTurn(state: AIPlannerState, message: string): AIPlannerState {
   if (!message) return state;
-  return { ...state, conversationNotes: [...state.conversationNotes, message].slice(-MAX_CONVERSATION_NOTES) };
+  return { ...state, conversationNotes: [...state.conversationNotes, message].slice(-MAX_CONVERSATION_NOTES),
+    userRequests: [...(state.userRequests ?? []), message].slice(-MAX_CONVERSATION_NOTES) };
 }
 
 function chatResult(card: AIChatCard, state: AIPlannerState): AIPlannerResult {
@@ -474,6 +481,8 @@ export async function recommendDatePlan(input: {
   dateLabel?: string;
   conversation?: DateChatTurn[];
 }): Promise<AIPlannerResult | { error: string }> {
+  const traceId = randomUUID();
+  const traceStarted = performance.now();
   const message = (input.message ?? input.prompt ?? "").trim().slice(0, 800);
   const previousState = input.previousState;
   const previousStops = input.previousStops?.length
@@ -567,9 +576,13 @@ export async function recommendDatePlan(input: {
       slot: missingSlot(filledPrevious),
       reply: "",
     };
+  const intentDone = performance.now();
 
   if (courseEdit && input.currentPlan?.items.length && input.currentPlan.items.length === input.currentPlan.recommendations.length) {
-    return editCurrentCourse(input.currentPlan, courseEdit, interpretation.state);
+    return editCurrentCourse(input.currentPlan, courseEdit, {
+      ...interpretation.state,
+      userRequests: [...(filledPrevious?.userRequests ?? []), message].filter(Boolean).slice(-MAX_CONVERSATION_NOTES),
+    });
   }
 
   const interpretedRaw = applyCourseDelta({
@@ -582,6 +595,14 @@ export async function recommendDatePlan(input: {
       shownPlaces: filledPrevious?.shownPlaces,
       seenPlaces: filledPrevious?.seenPlaces,
       placeAsk: filledPrevious?.placeAsk,
+      conversationNotes: message
+        ? [...interpretation.state.conversationNotes.filter(note => note !== message), message].slice(-MAX_CONVERSATION_NOTES)
+        : interpretation.state.conversationNotes,
+      userRequests: (interpretation.state.intent === "reset" || !interpretation.state.preserveExistingPlaces
+        ? [message]
+        : [...(filledPrevious?.userRequests?.length ? filledPrevious.userRequests
+          : (input.conversation ?? []).filter(turn => turn.role === "user").map(turn => turn.text).slice(0, -1)), message])
+        .filter(Boolean).slice(-MAX_CONVERSATION_NOTES),
       dateLabel: interpretation.state.dateLabel || input.dateLabel || null,
       requiredPlaces: uniqueStrings([
         ...pickedPlaces,
@@ -591,12 +612,6 @@ export async function recommendDatePlan(input: {
   });
   const interpreted = tasteSeed ? applyTasteFallback(interpretedRaw, tasteSeed) : interpretedRaw;
   const slot = missingSlot(interpreted);
-  const situation = message ? chatSituationFromMessage(message) : null;
-  if (situation) {
-    const card = dateChatCard({ situation, userMessage: message, state: interpreted });
-    if (slot) return clarificationReply(slot, interpreted, card);
-    return { status: "chat", message: cardToText(card), card, state: interpreted, options: card.suggestions, multiple: false };
-  }
   if (slot) {
     const question = slotQuestion(slot, interpreted);
     const card = slot === "area"
@@ -605,7 +620,23 @@ export async function recommendDatePlan(input: {
     return clarificationReply(slot, interpreted, card);
   }
 
+  if (message && !filledPrevious?.intakeFocusDone && !pickedPlaces.length
+    && (input.conversation ?? []).filter(turn => turn.role === "user").length <= 1
+    && !extractActivitiesFromText(message).length && isSimpleLocalRequest(message)) {
+    const focus = slotQuestion("activity", interpreted);
+    return clarificationReply("activity", { ...interpreted, intakeFocusDone: true }, {
+      headline: "데이트 취향 먼저 고르기",
+      lines: [focus.message],
+      suggestions: focus.options,
+    });
+  }
+
   const state = applyDateDefaults(interpreted);
+  state.discovery = await designDateDiscovery({
+    message, state, conversation: input.conversation,
+    taste: tasteBoard.compare?.overlaps ?? [],
+  });
+  const discoveryDone = performance.now();
 
   const selectedRegions = selectedAreas(state);
   const searchRegions = expandedSearchRegions(state);
@@ -629,9 +660,11 @@ export async function recommendDatePlan(input: {
     listArchivedDatePlans(),
   ]);
   const recentlyVisited = [...recentPlaceNames(archives.dates)];
-  const retainedPlaces = state.preserveExistingPlaces ? previousStops.map(stop => stop.name.trim()).filter(Boolean).slice(0, 5) : [];
+  const retainedPlaces = state.preserveExistingPlaces ? previousStops.map(stop => stop.name.trim()).filter(Boolean).slice(0, 12) : [];
   const directQueries = uniqueStrings([...state.requiredPlaces, ...retainedPlaces]).filter(name => !state.excludedPlaces.includes(name));
-  const keywordIntents = searchIntents(state);
+  const keywordIntents: DateSearchIntent[] = [...state.discovery.queries, ...searchIntents(state)]
+    .filter((intent, index, all) => all.findIndex(other => other.region === intent.region && other.query === intent.query && ("category" in other ? other.category : undefined) === ("category" in intent ? intent.category : undefined)) === index)
+    .slice(0, 20);
   const geoIntents = activitySearchIntents(state);
   const allowHarsh = applyTasteHarshAllow(allowsHarshDateMeal(message, state.cuisine), message, avoidFoods);
   const searchKeyword = (page: number) => Promise.all(keywordIntents.map(intent => searchKakaoPlacesRemote({
@@ -651,19 +684,54 @@ export async function recommendDatePlan(input: {
     Promise.all(shortlist.map(query => searchKakaoPlacesRemote({ query, region: searchRegions.at(-1), page: 1 }))),
   ]);
 
-  const unique = new Map<string, Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number]>();
-  const slotIngest = new Map<string, number>();
-  const remember = (candidate: Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number], searchRegion?: string, required = false) => {
+  const unique = new Map<string, DiscoverCandidate>();
+  const remember = (candidate: DiscoverCandidate, searchRegion?: string, required = false) => {
     const key = `${candidate.externalSource}:${candidate.externalPlaceId}`;
     if (unique.has(key)) return;
     if (!required && isOffDateVenue(candidate, { allowHarsh, allowKaraoke: state.activities.includes("indoor") })) return;
-    const slot = candidateActivitySlot(candidate);
-    const cap = slot === "cafe" ? 8 : 12;
-    const count = slotIngest.get(slot) ?? 0;
-    if (!required && count >= cap) return;
-    slotIngest.set(slot, count + 1);
     unique.set(key, searchRegion ? { ...candidate, searchRegion } : candidate);
   };
+  // Keep the exact entities already shown on screen available during edits.
+  // Provider search can omit a venue on a later request even though it is a
+  // required stop, which previously made add/swap operations collapse.
+  for (const place of input.currentPlan?.recommendations ?? []) {
+    if (!place.coordinates) continue;
+    const [sourcePart, ...externalParts] = place.id.split(":");
+    const externalSource = sourcePart === "tourapi" ? "tourapi" : "kakao";
+    const externalPlaceId = externalParts.join(":") || place.placeId.replace(/^(?:kakao|tourapi):/, "");
+    const label = `${place.category} ${place.reasons.join(" ")}`;
+    const category: DiscoverCandidate["category"] = place.activitySlot === "cafe" ? "cafe"
+      : place.activitySlot === "meal" ? "restaurant"
+      : place.activitySlot === "walk" || place.activitySlot === "nightview" ? "nature"
+      : place.activitySlot === "performance" || place.activitySlot === "movie" || place.activitySlot === "exhibit" || place.activitySlot === "indoor" ? "photo"
+      : /카페|커피|디저트|베이커리/.test(place.category)
+      ? "cafe"
+      : /식당|음식|한식|일식|중식|양식|맛집|해물|고기/.test(place.category)
+        ? "restaurant"
+        : /보드|방탈출|오락|볼링|공연|영화|전시|미술|박물/.test(label)
+          ? "photo"
+          : /공원|숲|산책|자연/.test(label) ? "nature" : "tourist";
+    remember({
+      externalSource,
+      externalPlaceId,
+      name: place.name,
+      category,
+      categoryLabel: place.category,
+      district: place.district,
+      address: place.address,
+      roadAddress: place.address,
+      phone: place.phone,
+      mapUrl: place.mapUrl,
+      coordinates: place.coordinates,
+      detailedCategory: place.category,
+      kakaoCategoryGroupCode: category === "restaurant" ? "FD6" : category === "cafe" ? "CE7" : category === "photo" ? "CT1" : undefined,
+      rating: place.rating,
+      ratingCount: place.ratingCount,
+      dishes: place.dishes,
+      factSourceUrl: place.factSourceUrl,
+      factNote: place.reasons[0],
+    }, searchRegions[0], true);
+  }
   const ingestKeyword = (results: typeof intentSearches) => {
     for (const [index, result] of results.entries()) {
       if (!result.ok) continue;
@@ -688,7 +756,7 @@ export async function recommendDatePlan(input: {
   const preferredSaved = preferredSavedNames(saved);
   const discovery = discoveryActivities(state);
   for (const place of saved) {
-    if (["dislike", "not_interested"].includes(place.userStatus) && ["dislike", "not_interested"].includes(place.partnerStatus)) continue;
+    if (["dislike", "not_interested"].includes(place.userStatus) || ["dislike", "not_interested"].includes(place.partnerStatus)) continue;
     const candidate = placeToCandidate(place);
     if (!candidate) continue;
     const preferred = preferredSaved.has(place.name);
@@ -733,7 +801,7 @@ export async function recommendDatePlan(input: {
     }
   };
   await Promise.all([ingestGeo(1, true), ingestGeo(2, false)]);
-  const decorate = (candidate: Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number]) => {
+  const decorate = (candidate: DiscoverCandidate) => {
     const nearestAnchor = locatedAnchors
       .map(anchor => ({ ...anchor, meters: distanceMeters(anchor.candidate.coordinates, candidate.coordinates) }))
       .sort((a, b) => a.meters - b.meters)[0];
@@ -744,24 +812,24 @@ export async function recommendDatePlan(input: {
       distanceMeters: nearestAnchor ? Math.round(nearestAnchor.meters) : candidate.distanceMeters,
     };
   };
-  const admit = (candidate: Extract<(typeof explicitSearches)[number], { ok: true }>["places"][number]) => {
-    const required = state.requiredPlaces.some(name => candidate.name.includes(name) || name.includes(candidate.name));
+  const admit = (candidate: DiscoverCandidate) => {
+    const required = state.requiredPlaces.some(name => matchesTerm(candidate, name));
     return isDateCourseCandidate(candidate, state.requiredPlaces)
-      && !state.excludedPlaces.some(name => candidate.name.includes(name) || name.includes(candidate.name))
+      && !state.excludedPlaces.some(name => matchesTerm(candidate, name))
       && !violatesTasteAvoid(`${candidate.name} ${candidate.categoryLabel} ${candidate.detailedCategory ?? ""}`, avoidFoods)
       && (candidate.category !== "festival" || festivalPeriodCoversYmd(candidate.openingHours, planDayYmd(state)))
       && (required || !isOffDateVenue(candidate, { allowHarsh, allowKaraoke: state.activities.includes("indoor") }));
   };
   const currentPool = () => {
     const scoped = (anchors.length
-      ? [...unique.values()].filter(candidate => anchors.some(anchor => {
+      ? [...unique.values()].filter(candidate => state.requiredPlaces.some(name => matchesTerm(candidate, name)) || anchors.some(anchor => {
         const hop = distanceMeters(anchor.coordinates, candidate.coordinates);
         return hop <= (candidate.category === "festival" ? Math.max(radius, 4000) : radius);
       }))
       : [...unique.values()])
       .filter(admit)
       .map(decorate);
-    return scoped.length >= 2 ? scoped : [...unique.values()].filter(admit).map(decorate);
+    return scoped;
   };
   let pool = currentPool();
   const wantedSlots = discovery;
@@ -791,7 +859,7 @@ export async function recommendDatePlan(input: {
     savedBoth: bothWantNames(saved),
     recentlyVisited: new Set(recentlyVisited),
     commonTastes: [...(tasteBoard.compare?.overlaps ?? []), ...(insight?.commonTastes ?? []).map(item => item.label)].filter(Boolean),
-    activities: dateSpine(state),
+    activities: state.discovery.requiredActivities,
     allowHarsh,
     trip: isTravelPlan(state),
   };
@@ -799,9 +867,13 @@ export async function recommendDatePlan(input: {
   const onMix = isExclusiveCrawl(state) && state.activities.length
     ? ranked.filter(candidate => fitsWantedActivities(candidate, state.activities))
     : ranked;
-  const catalog = diversifyDateCatalog(onMix.length >= 8 ? onMix : ranked, 40);
+  const catalog = discoveryCatalog(onMix, state, rankContext.savedPositive, 72);
   const candidates = await hydrateDateCandidates(catalog, saved);
+  const searchDone = performance.now();
   if (candidates.length < 2) {
+    console.info("date_course_pipeline", JSON.stringify({ traceId, outcome: "insufficient_candidates", candidateCount: candidates.length,
+      intentMs: Math.round(intentDone - traceStarted), briefMs: Math.round(discoveryDone - intentDone),
+      discoveryMs: Math.round(discoveryDone - traceStarted), searchMs: Math.round(searchDone - discoveryDone) }));
     const suggestions = nearbyAreaSuggestions(state);
     const card = dateChatCard({
       situation: "no_places",
@@ -813,13 +885,14 @@ export async function recommendDatePlan(input: {
       status: "chat",
       message: cardToText(card),
       card,
-      state,
+      state: state.preserveExistingPlaces && input.currentPlan ? input.currentPlan.state : state,
       options: suggestions,
       multiple: false,
       slot: "area",
     };
   }
   const recommendation = await recommendDatePlanWithOpenAi({
+    traceId,
     prompt: message || `${condition.region}에서 ${state.activities.join(", ") || "하루"} 데이트`,
     condition,
     candidates,
@@ -839,9 +912,33 @@ export async function recommendDatePlan(input: {
       avoidFoods,
     },
   });
-  if (!recommendation.items.length) {
-    const text = "이동과 관람 시간을 넣으면 요청한 시간 안에 코스를 만들기 어려워요. 시간을 늘리거나 원하는 장소를 줄여 볼까요?";
-    return chatResult({ headline: "", lines: [text] }, state);
+  const designDone = performance.now();
+  // Commit an edit only when the complete replacement satisfies the mutation.
+  // A failed search must not leak exclusions or missing stops into the next turn.
+  const editingExisting = state.preserveExistingPlaces && Boolean(input.currentPlan?.items.length);
+  const mutationProblems = editingExisting && input.currentPlan
+    ? courseMutationProblems(input.currentPlan, recommendation, state)
+    : [];
+  console.info("date_course_pipeline", JSON.stringify({ traceId,
+    outcome: !recommendation.items.length ? "no_course" : mutationProblems.length ? "mutation_rejected" : recommendation.source,
+    candidateCount: candidates.length, stopCount: recommendation.items.length,
+    roleCounts: recommendation.recommendations.reduce<Record<string, number>>((counts, place) => {
+      const slot = place.activitySlot ?? "unknown";
+      counts[slot] = (counts[slot] ?? 0) + 1;
+      return counts;
+    }, {}),
+    addStop: state.addStop, userRequestCount: state.userRequests?.length ?? 0,
+    intentMs: Math.round(intentDone - traceStarted), briefMs: Math.round(discoveryDone - intentDone),
+    discoveryMs: Math.round(discoveryDone - traceStarted), searchMs: Math.round(searchDone - discoveryDone),
+    designMs: Math.round(designDone - searchDone), mutationProblemCount: mutationProblems.length,
+    modelRejectedCount: recommendation.design?.rejectionReasons?.length ?? 0 }));
+  if (!recommendation.items.length || mutationProblems.length) {
+    const text = editingExisting
+      ? mutationProblems.includes("교체로 동선이 크게 늘어남")
+        ? "기존 코스는 그대로 두었어요. 찾은 대체 장소는 이동 거리가 크게 늘어나서 넣지 않았어요. 다른 분위기나 조금 더 넓은 지역을 알려 주시면 다시 찾아볼게요."
+        : "기존 코스는 그대로 유지했어요. 요청한 변경을 만족하는 새 장소와 동선을 아직 확보하지 못했어요. 원하는 음식이나 활동을 알려 주시면 그 조건으로 다시 찾아볼게요."
+      : "원하신 장소 구성과 동선을 함께 만족하는 코스를 충분히 확인하지 못했어요. 꼭 가고 싶은 곳 한 곳을 정하거나 탐색할 동네를 조금 넓혀 볼까요?";
+    return chatResult({ headline: "", lines: [text] }, editingExisting ? input.currentPlan!.state : state);
   }
   return recommendation;
 }

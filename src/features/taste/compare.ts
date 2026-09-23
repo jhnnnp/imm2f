@@ -245,7 +245,7 @@ export function applyTasteFallback(state: AIPlannerState, seed: TasteDateSeed): 
     areas: state.areas.length ? state.areas : seed.areas,
     regions: state.regions.length ? state.regions : seed.areas,
     region: state.region || seed.areas.join(" · "),
-    activities: state.activities.length ? state.activities : seed.activities,
+    activities: state.intakeFocusDone ? state.activities : state.activities.length ? state.activities : seed.activities,
     cuisine: state.cuisine ?? seed.cuisine,
     timeWindow: state.timeWindow ?? seed.timeWindow,
     areaScope: state.areaScope ?? seed.areaScope,

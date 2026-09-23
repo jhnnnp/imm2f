@@ -133,6 +133,7 @@ function parseJsonObject<T>(content: string): T | null {
 }
 
 export async function completeJsonWithWebSearch<T>(input: {
+  onSources?: (urls: string[]) => void;
   instructions: string;
   payload: unknown;
   maxTokens?: number;
@@ -172,9 +173,13 @@ export async function completeJsonWithWebSearch<T>(input: {
     const payload = await response.json() as {
       status?: string;
       output_text?: string;
-      output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
+      output?: Array<{ type?: string; action?: { sources?: Array<{ url?: string }> }; content?: Array<{ type?: string; text?: string; annotations?: Array<{ url?: string }> }> }>;
     };
     if (payload.status === "incomplete" || payload.status === "failed") return null;
+    input.onSources?.([...new Set((payload.output ?? []).flatMap(item => [
+      ...(item.action?.sources ?? []).map(source => source.url),
+      ...(item.content ?? []).flatMap(part => (part.annotations ?? []).map(annotation => annotation.url)),
+    ]).filter((url): url is string => typeof url === "string" && /^https?:\/\//.test(url)))]);
     const text = extractOutputText(payload);
     const direct = parseJsonObject<T>(text);
     if (direct) return direct;

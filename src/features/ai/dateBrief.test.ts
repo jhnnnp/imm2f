@@ -19,6 +19,8 @@ import {
   rescueSearchQueries,
   isTravelPlan,
   matchesIndoorType,
+  matchesActivity,
+  matchesTerm,
   missingSlot,
   expandedSearchRegions,
   searchIntents,
@@ -45,6 +47,15 @@ function candidate(overrides: Partial<DiscoverCandidate> = {}): DiscoverCandidat
 }
 
 describe("dateBrief", () => {
+
+  it("keeps a theater distinct from a cafe named after the theater", () => {
+    const theater = candidate({ name: "소월아트홀", category: "photo", categoryLabel: "공연장", detailedCategory: "문화시설 > 공연장" });
+    const cafe = candidate({ name: "할리스 소월아트홀", category: "cafe", categoryLabel: "카페", kakaoCategoryGroupCode: "CE7", detailedCategory: "카페 > 커피전문점" });
+    expect(matchesActivity(theater, "performance")).toBe(true);
+    expect(matchesActivity(cafe, "performance")).toBe(false);
+    expect(matchesTerm(cafe, "소월아트홀")).toBe(false);
+    expect(matchesTerm(theater, "소월아트홀")).toBe(true);
+  });
   it("does not force cafe+meal+walk onto an empty brief", () => {
     const next = applyDateDefaults(emptyDateBrief());
     expect(next.activities).toEqual([]);

@@ -16,6 +16,7 @@ export function looksLikeNonVenue(candidate: KakaoPlaceCandidate) {
   if (TRANSIT_GROUP_CODES.has(candidate.kakaoCategoryGroupCode ?? "")) return true;
   if (ACCESS_NAME.test(name)) return true;
   if (STATION_ONLY_NAME.test(name)) return true;
+  if (/도보관광코스|관광코스|투어코스|여행코스/.test(name)) return true;
   return false;
 }
 
@@ -23,7 +24,7 @@ function isRequiredNamedPlace(candidate: KakaoPlaceCandidate, requiredPlaces: st
   const candidateName = normalizedName(candidate.name);
   return requiredPlaces.some(place => {
     const requiredName = normalizedName(place);
-    return requiredName.length >= 2 && (candidateName.includes(requiredName) || requiredName.includes(candidateName));
+    return requiredName.length >= 2 && candidateName === requiredName;
   });
 }
 

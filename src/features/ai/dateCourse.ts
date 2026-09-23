@@ -16,6 +16,7 @@ import {
   matchesTerm,
   assumedTimeWindow,
   selectedAreas,
+  uniqueActivities,
   uniqueStrings,
   withAreas,
 } from "@/features/ai/dateBrief";
@@ -32,6 +33,7 @@ export type DateCourseRow = {
 export type DatePreviousStop = {
   name: string;
   category: string;
+  activitySlot?: DateActivityId | "other";
 };
 
 export type HarshMealAllow = {
@@ -57,7 +59,9 @@ const HARSH_OTHER = /편의점|마트|슈퍼마켓|PC방|피시방|모텔|여관
 const DATE_JUNK = /분식|패스트푸드|패스트\s*푸드|도시락|김밥|컵밥|맥도날드|롯데리아|버거킹|맘스터치|서브웨이|노브랜드버거|\bKFC\b|테마카페|룸카페/;
 const TAKEOUT_COFFEE = /메가\s*MGC|메가MGC|메가커피|컴포즈\s*커피|컴포즈커피|\bCompose\s*Coffee\b|빽다방|Paik'?s\s*Coffee|더\s*벤티|더벤티|The\s*Venti/i;
 const STRONG_DATE = /베이커리|브런치|파스타|이탈리|양식|한식|일식|중식|레스토랑|다이닝|와인|디저트|티룸|갤러리|전시|공원|루프탑|북카페|한옥|전망|미술관|박물관|수목원|계곡|호수|시장|관광|고깃집/;
-const ACTIVITY_SLOT_ORDER: Array<DateActivityId | "other"> = ["meal", "walk", "exhibit", "indoor", "nightview", "other", "cafe"];
+// Provider category wins over incidental words in a shop name: 케이크숲 is a
+// cafe, not a park; a board-game cafe is excluded from the plain cafe role.
+const ACTIVITY_SLOT_ORDER: Array<DateActivityId | "other"> = ["meal", "cafe", "movie", "performance", "exhibit", "indoor", "nightview", "walk", "other"];
 
 export function venueBlob(candidate: DiscoverCandidate) {
   return `${candidate.name} ${candidate.categoryLabel} ${candidate.detailedCategory ?? ""}`;
@@ -204,7 +208,12 @@ export function groundedStopReason(input: {
   const leaf = dateCategoryLabel(input.candidate);
   if (input.bothWant) return leaf ? `둘이 가고 싶다고 한 곳 · ${leaf}` : "둘이 가고 싶다고 한 곳";
   if (input.saved) return leaf ? `저장한 곳 · ${leaf}` : "저장한 곳";
-  if (leaf) return leaf;
+  if (leaf) {
+    const menu = input.candidate.dishes?.split(/[,·]/).map(part => part.trim()).filter(Boolean).slice(0, 2).join("·");
+    const route = input.previous && input.meters != null && input.meters < 1000
+      ? ` · 이전 장소에서 직선 ${input.meters}m` : "";
+    return `${leaf}${menu && matchesActivity(input.candidate, "meal") ? ` · ${menu}` : ""}${route}`;
+  }
   if (input.previous && input.meters != null) {
     if (input.meters < 80) return `${input.previous.name} 바로 옆`;
     if (input.meters < 1000) return `앞에서 ${input.meters}m`;
@@ -225,11 +234,14 @@ function festivalCapPerDay() {
 }
 
 export function stopMatchesActivity(stop: DatePreviousStop, activity: DateActivityId) {
+  if (stop.activitySlot && stop.activitySlot !== "other") return stop.activitySlot === activity;
   const blob = `${stop.name} ${stop.category}`;
-  if (activity === "cafe") return /카페|디저트|커피/.test(blob);
-  if (activity === "meal") return /맛집|식당|음식|한식|일식|중식|양식/.test(blob);
+  if (activity === "cafe") return /카페|디저트|커피/.test(blob) && !/보드|만화|키즈|방탈출|게임/.test(blob);
+  if (activity === "meal") return /맛집|식당|음식|레스토랑|한식|일식|중식|양식|해물|생선|횟집|회집|고기|국수|분식|피자|파스타|초밥|라멘|구이|족발|보쌈/.test(blob);
   if (activity === "walk") return /공원|산책|한강|숲|청계천|자연/.test(blob);
   if (activity === "exhibit") return /전시|미술관|박물관|갤러리|문화/.test(blob);
+  if (activity === "movie") return /영화관|씨네마|시네마|CGV|메가박스/.test(blob);
+  if (activity === "performance") return !/카페|커피|음식|식당|맛집/.test(stop.category) && /공연|연극|뮤지컬|소극장|아트홀/.test(blob);
   if (activity === "indoor") return /볼링|방탈출|보드|오락|만화|VR|노래방/.test(blob);
   return /야경|전망|루프탑/.test(blob);
 }
@@ -242,6 +254,62 @@ export function applyCourseDelta(input: {
   const { message, previousStops } = input;
   if (!previousStops.length) return input.state;
   const names = previousStops.map(stop => stop.name);
+  if (isSwapRequest(message) && !isRedoRequest(message)) {
+    const activities = ["cafe", "meal", "walk", "exhibit", "movie", "performance", "indoor", "nightview"] as const;
+    const slotsIn = (text: string) => activities.filter(activity => stopMatchesActivity({ name: text, category: text }, activity) || (
+        activity === "cafe" && /카페/.test(text)
+      ) || (
+        activity === "meal" && /식당|맛집|식사|밥집/.test(text)
+      ));
+    const directional = message.match(/(.+?)(?:을|를)\s*(.+?)(?:으로|로)\s*(?:바꿔|변경|교체)/);
+    const fromSlots = directional ? slotsIn(directional[1]) : slotsIn(message);
+    const targets = directional ? slotsIn(directional[2]) : fromSlots;
+    const ordinal = message.match(/(\d+)\s*번/);
+    const explicitStop = ordinal ? previousStops[Number(ordinal[1]) - 1] : previousStops.find(stop => message.includes(stop.name));
+    const matchingStops = previousStops.filter(stop => fromSlots.some(activity => stopMatchesActivity(stop, activity)));
+    const toExclude = (explicitStop ? [explicitStop] : /전부|모두|전체/.test(message) ? matchingStops : matchingStops.slice(0, 1))
+      .map(stop => stop.name);
+    const keep = names.filter(name => !toExclude.includes(name));
+    const oldNonCourseExclusions = input.state.excludedPlaces.filter(name => !names.includes(name));
+    return {
+      ...input.state,
+      intent: "modify",
+      activities: uniqueActivities([...input.state.activities.filter(activity => !fromSlots.includes(activity as typeof fromSlots[number]) || targets.includes(activity as typeof targets[number])), ...targets]),
+      discovery: input.state.discovery ? {
+        ...input.state.discovery,
+        requiredActivities: uniqueActivities([
+          ...input.state.discovery.requiredActivities.filter(activity => !fromSlots.includes(activity as typeof fromSlots[number]) || targets.includes(activity as typeof targets[number])),
+          ...targets,
+        ]),
+      } : undefined,
+      pinOrder: names,
+      preserveExistingPlaces: true,
+      // If the requested kind does not exist, this behaves as an addition.
+      addStop: toExclude.length === 0,
+      excludedPlaces: uniqueStrings([...oldNonCourseExclusions, ...toExclude], 12),
+      requiredPlaces: uniqueStrings([...keep, ...input.state.requiredPlaces.filter(place => !names.includes(place) && !toExclude.includes(place))], 12),
+    };
+  }
+  if (isAdditiveRequest(message)) {
+    return {
+      ...input.state,
+      intent: "modify",
+      pinOrder: names,
+      preserveExistingPlaces: true,
+      addStop: true,
+      excludedPlaces: input.state.excludedPlaces.filter(name => !names.includes(name)),
+      requiredPlaces: uniqueStrings([...names, ...input.state.requiredPlaces], 12),
+    };
+  }
+  if (!input.state.preserveExistingPlaces || input.state.intent === "reset") return input.state;
+  const resolvedExclusions = names.filter(name => input.state.excludedPlaces.includes(name));
+  if (resolvedExclusions.length && input.state.preserveExistingPlaces && (input.state.intent === "modify" || input.state.intent === "remove")) {
+    return {
+      ...input.state,
+      pinOrder: names,
+      requiredPlaces: uniqueStrings([...names.filter(name => !resolvedExclusions.includes(name)), ...input.state.requiredPlaces.filter(name => !resolvedExclusions.includes(name))], 12),
+    };
+  }
   const instead = message.match(/(.+?)\s*대신\s+(.+)/);
   if (instead) {
     const from = names.find(name => instead[1].includes(name) || name.includes(instead[1].trim()));
@@ -256,28 +324,6 @@ export function applyCourseDelta(input: {
         requiredPlaces: uniqueStrings([...names.filter(name => name !== from), to, ...input.state.requiredPlaces], 8),
       };
     }
-  }
-
-  if (isSwapRequest(message)) {
-    const targets = (["cafe", "meal", "walk", "exhibit", "indoor", "nightview"] as const)
-      .filter(activity => stopMatchesActivity({ name: message, category: message }, activity) || (
-        activity === "cafe" && /카페/.test(message)
-      ) || (
-        activity === "meal" && /식당|맛집|식사/.test(message)
-      ));
-    const toExclude = previousStops
-      .filter(stop => (targets.length ? targets.some(activity => stopMatchesActivity(stop, activity)) : false))
-      .map(stop => stop.name);
-    const exclude = toExclude.length ? toExclude : names.slice(0, 1);
-    const keep = names.filter(name => !exclude.includes(name));
-    return {
-      ...input.state,
-      intent: "modify",
-      pinOrder: names,
-      preserveExistingPlaces: true,
-      excludedPlaces: uniqueStrings([...input.state.excludedPlaces, ...exclude], 8),
-      requiredPlaces: uniqueStrings([...keep, ...input.state.requiredPlaces.filter(place => !exclude.includes(place))], 8),
-    };
   }
 
   if (/빼|제외|삭제|빼줘|말고/.test(message) && names.length) {
@@ -315,7 +361,7 @@ export function applyCourseDelta(input: {
   const keepCourse = input.state.addStop
     || isAdditiveRequest(message)
     || /여유|천천히|알차게|짧게/.test(message);
-  if (keepCourse && input.state.intent !== "reset") {
+  if (keepCourse) {
     return {
       ...input.state,
       pinOrder: names,
@@ -379,8 +425,27 @@ export function assignStartTimes(
       coordinates: candidate?.coordinates,
       durationMinutes: Number(row.duration_minutes) || (candidate ? defaultDuration(candidate, state.pace) : 70),
     };
-  }), dayStart, assumedTimeWindow(state).endTime);
-  return scheduled?.map(stop => ({ ...stop.row, day_index: stop.dayIndex, start_time: stop.startTime, duration_minutes: stop.durationMinutes })) ?? [];
+  }), dayStart, assumedTimeWindow(state).specified ? assumedTimeWindow(state).endTime : "23:59", state.discovery?.transport ?? (isTravelPlan(state) ? "transit" : "walk"));
+  if (!scheduled) return [];
+  // Keep dinner in the evening when an afternoon course has room to wait.
+  // This only delays the meal and following stops, and never exceeds the window.
+  const end = clockMinutes(assumedTimeWindow(state).specified ? assumedTimeWindow(state).endTime : "23:59");
+  for (const day of new Set(scheduled.map(stop => stop.dayIndex))) {
+    const group = scheduled.filter(stop => stop.dayIndex === day);
+    const mealIndex = group.findIndex(stop => {
+      const candidate = byId.get(String(stop.row.id ?? ""));
+      return candidate && matchesActivity(candidate, "meal");
+    });
+    if (mealIndex < 0) continue;
+    const meal = group[mealIndex];
+    const anchor = mealAnchorMinutes(state, dayStart).find(value => value >= clockMinutes(meal.startTime));
+    if (anchor == null || clockMinutes(meal.startTime) >= anchor) continue;
+    const delay = anchor - clockMinutes(meal.startTime);
+    const last = group.at(-1)!;
+    if (clockMinutes(last.startTime) + last.durationMinutes + delay > end) continue;
+    group.slice(mealIndex).forEach(stop => { stop.startTime = formatClock(clockMinutes(stop.startTime) + delay); });
+  }
+  return scheduled.map(stop => ({ ...stop.row, day_index: stop.dayIndex, start_time: stop.startTime, duration_minutes: stop.durationMinutes }));
 }
 
 export function preferredHopScore(meters: number, trip = false) {

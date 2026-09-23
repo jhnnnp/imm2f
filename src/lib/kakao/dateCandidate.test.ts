@@ -38,4 +38,9 @@ describe("dateCourseCandidate", () => {
     });
     expect(isDateCourseCandidate(festival, [])).toBe(true);
   });
+
+  it("does not treat a longer name as the exact requested venue", () => {
+    const other = candidate({ name: "소월아트홀 주차장", category: "tourist", categoryLabel: "주차장", kakaoCategoryGroupCode: undefined });
+    expect(isDateCourseCandidate(other, ["소월아트홀"])).toBe(false);
+  });
 });

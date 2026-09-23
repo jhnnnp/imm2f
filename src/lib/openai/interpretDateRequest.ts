@@ -123,6 +123,8 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
   const areaScope = asAreaScope(patch.areaScope) ?? (reset ? null : base.areaScope);
   const located = withAreas({ ...base, areaScope }, areas);
   return {
+    intakeFocusDone: base.intakeFocusDone,
+    discovery: reset ? undefined : base.discovery,
     budgetWon: base.budgetWon,
     walkingPreference: base.walkingPreference,
     activities,
@@ -159,6 +161,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
       startTime: patch.startTime === undefined ? timed.startTime : asTime(patch.startTime) ?? timed.startTime,
     }),
     conversationNotes: [...(reset ? [] : base.conversationNotes), String(patch.conversationNote ?? "").trim()].filter(Boolean).slice(-12),
+    userRequests: reset ? [] : base.userRequests,
   };
 }
 
@@ -183,7 +186,7 @@ export function applyInterpretPatch(input: {
 }
 
 export function shouldSkipDateNlu(message: string) {
-  return Boolean(chatSituationFromMessage(message));
+  return Boolean(chatSituationFromMessage(message)) && !/추천|코스|일정|추가|바꿔|변경|빼|제외|대신|짜줘|가고|갈래|먹고|카페|식당/.test(message);
 }
 
 export function shouldUseLocalInterpret(message: string, _previous?: AIPlannerState) {
@@ -238,6 +241,7 @@ export async function interpretDateRequest(input: {
             "If they want a stop dropped (일정제외, 빼줘): intent remove, preserveExistingPlaces true, addStop false, removePlaces that stop or the last currentPlaces item.",
             "If they want a slower/fuller pace without a new venue: preserveExistingPlaces true, addStop false, set pace.",
             "If they want a different course without keeping the shops (조금 다르게, 다른 코스, 다시 추천): preserveExistingPlaces false, addStop false, intent create.",
+            "If they replace the destination, removeAreas must contain prior areas being replaced and preserveExistingPlaces false. If they explicitly ask to combine both areas, preserve them. Never carry old venue pins into a different destination.",
             "If they want the course rebuilt from scratch: preserveExistingPlaces false, addStop false, intent reset or create.",
             "conversationNote restates their meaning in short Korean. Do not rewrite it into a canned command.",
             "areaScope only if the user mentioned range. Time only if they mentioned when, not because they said 저녁 먹고 싶어. Cuisine only if they mentioned food type.",

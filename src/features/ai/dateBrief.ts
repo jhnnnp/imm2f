@@ -16,6 +16,8 @@ export const DATE_ACTIVITY_OPTIONS: ReadonlyArray<{ id: DateActivityId; label: s
   { id: "meal", label: "식사" },
   { id: "walk", label: "산책" },
   { id: "exhibit", label: "전시" },
+  { id: "movie", label: "영화" },
+  { id: "performance", label: "공연" },
   { id: "indoor", label: "실내" },
   { id: "nightview", label: "야경" },
 ];
@@ -36,7 +38,7 @@ export const DATE_SPAN_OPTIONS: ReadonlyArray<{ id: DateStayKind; nights: number
 ];
 
 export const DATE_TIME_OPTIONS: ReadonlyArray<{ id: DateTimeWindow; label: string; startTime: string | null; endTime: string | null }> = [
-  { id: "afternoon", label: "오후부터", startTime: "14:00", endTime: "19:00" },
+  { id: "afternoon", label: "오후부터", startTime: "14:00", endTime: "21:00" },
   { id: "evening", label: "저녁부터", startTime: "17:00", endTime: "22:00" },
   { id: "night", label: "밤부터", startTime: "18:30", endTime: "23:00" },
   { id: "any", label: "상관없음", startTime: null, endTime: null },
@@ -221,6 +223,7 @@ export const emptyDateBrief = (): AIPlannerState => ({
   intent: "create",
   pendingSlot: null,
   conversationNotes: [],
+  userRequests: [],
 });
 
 export function planDayYmd(state: Pick<AIPlannerState, "dateLabel">, now = new Date()) {
@@ -340,8 +343,8 @@ export function isAdditiveRequest(message: string) {
   return /추가|넣어|들러|경유|포함|갈\s*수|있나|도\s*가|더함|한 곳 더/.test(message);
 }
 
-export function isExclusiveCrawl(state: Pick<AIPlannerState, "conversationNotes"> | string) {
-  const blob = typeof state === "string" ? state : state.conversationNotes.join(" ");
+export function isExclusiveCrawl(state: Pick<AIPlannerState, "conversationNotes" | "userRequests"> | string) {
+  const blob = typeof state === "string" ? state : (state.userRequests?.length ? state.userRequests : state.conversationNotes).join(" ");
   return /(?:카페|커피|디저트|맛집|식당|전시|갤러리)\s*(?:투어|위주)|커피만\s|밥만\s|(?:카페|전시)만\s*(?:가자|갈게|돌|보)/.test(blob);
 }
 
@@ -481,6 +484,8 @@ export function rescueSearchQueries(region: string, wanted: DateActivityId[]) {
   if (slots.includes("meal")) queries.push(`${region} 식당`);
   if (slots.includes("walk")) queries.push(`${region} 공원`);
   if (slots.includes("exhibit")) queries.push(`${region} 전시`);
+  if (slots.includes("movie")) queries.push(`${region} 영화관`);
+  if (slots.includes("performance")) queries.push(`${region} 공연장`);
   if (slots.includes("indoor")) queries.push(`${region} 방탈출`);
   if (slots.includes("nightview")) queries.push(`${region} 야경`);
   return queries;
@@ -618,6 +623,7 @@ export function extractActivitiesFromText(message: string): DateActivityId[] {
   }
   if (/카페|커피|디저트|베이커리/.test(message)) found.push("cafe");
   if (/(?:저녁|점심|아침)\s*(?:먹|식사)|식사|밥|맛집|음식|파스타|라멘|브런치/.test(message)) found.push("meal");
+  if (/공연|연극|뮤지컬|콘서트/.test(message)) found.push("performance");
   if (/산책|공원|숲길|청계천|남산|걷/.test(message)) found.push("walk");
   if (/전시|미술관|갤러리|박물관|미디어아트/.test(message)) found.push("exhibit");
   if (/놀거리|방탈출|보드게임|볼링|오락실|만화카페|VR|노래방/.test(message)) found.push("indoor");
@@ -733,6 +739,8 @@ export function activitySearchIntents(state: AIPlannerState): Array<{ category?:
       intents.push({ category: "photo" });
       if (!trip) intents.push({ category: "photo", query: "전시" });
     }
+    else if (activity === "movie") intents.push({ query: "영화관" });
+    else if (activity === "performance") intents.push({ query: "공연장" }, { query: "소극장" });
     else if (activity === "indoor") {
       for (const query of indoorSearchQueries(state.indoorPlay)) intents.push({ query });
     } else if (activity === "nightview") {
@@ -751,7 +759,7 @@ export function searchIntents(state: AIPlannerState): DateSearchIntent[] {
 export function matchesTerm(candidate: DiscoverCandidate, term: string) {
   const candidateName = candidate.name.replace(/\s/g, "");
   const normalized = term.replace(/\s/g, "");
-  return normalized.length >= 2 && (candidateName.includes(normalized) || normalized.includes(candidateName));
+  return normalized.length >= 2 && candidateName === normalized;
 }
 
 const INDOOR_TYPE_REGEX: Record<string, RegExp> = {
@@ -772,12 +780,16 @@ export function matchesIndoorType(candidate: DiscoverCandidate, indoorPlay: stri
   return (INDOOR_TYPE_REGEX[indoorPlay] ?? new RegExp(indoorPlay.replace(/\s/g, ""))).test(candidateDetails(candidate));
 }
 
-export function matchesActivity(candidate: DiscoverCandidate, activity: DateActivityId) {
+export function matchesActivity(candidate: DiscoverCandidate, activity: DateActivityId): boolean {
   const details = candidateDetails(candidate);
-  if (activity === "cafe") return candidate.category === "cafe" || candidate.kakaoCategoryGroupCode === "CE7";
+  if (activity === "cafe") return !/보드|방탈출|만화|키즈|게임|스터디/.test(details) && (candidate.category === "cafe" || candidate.kakaoCategoryGroupCode === "CE7");
   if (activity === "meal") return candidate.category === "restaurant" || candidate.kakaoCategoryGroupCode === "FD6";
-  if (activity === "walk") return candidate.category === "nature" || candidate.category === "tourist" || /공원|한강|숲|수목원|산책|청계천|남산|계곡|호수|해변|관광/.test(details);
-  if (activity === "exhibit") return candidate.category === "festival" || candidate.kakaoCategoryGroupCode === "CT1" || /전시|미술관|박물관|갤러리|축제/.test(details);
+  if (activity === "walk") return candidate.category !== "cafe" && candidate.category !== "restaurant"
+    && candidate.kakaoCategoryGroupCode !== "CE7" && candidate.kakaoCategoryGroupCode !== "FD6"
+    && (candidate.category === "nature" || candidate.category === "tourist" || /공원|한강|숲|수목원|산책|청계천|남산|계곡|호수|해변|관광/.test(details));
+  if (activity === "exhibit") return /전시|미술관|박물관|갤러리|미디어아트|기념관/.test(details);
+  if (activity === "movie") return /영화관|씨네마|시네마|CGV|메가박스|롯데시네마/.test(details);
+  if (activity === "performance") return candidate.category !== "cafe" && candidate.category !== "restaurant" && candidate.kakaoCategoryGroupCode !== "CE7" && candidate.kakaoCategoryGroupCode !== "FD6" && !/카페|커피전문점|음식점|식당|레스토랑/.test(`${candidate.categoryLabel} ${candidate.detailedCategory ?? ""}`) && /공연장|소극장|연극|콘서트홀|뮤지컬|아트홀|극장/.test(details) && !matchesActivity(candidate, "movie");
   if (activity === "indoor") return /볼링장|방탈출|보드게임|보드카페|오락실|만화카페|노래방|VR카페|VR/.test(details);
   return /야경|전망대|루프탑/.test(details) || (/한강공원/.test(details) && candidate.category === "nature");
 }
@@ -791,8 +803,8 @@ export function matchesCuisine(candidate: DiscoverCandidate, cuisine: DateCuisin
 export function slotQuestion(slot: DateIntakeSlot, state?: AIPlannerState) {
   if (slot === "activity") {
     return {
-      message: "어떤 데이트를 할까요? 고른 활동에 맞춰 동선을 짭니다.",
-      options: DATE_ACTIVITY_OPTIONS.map(item => item.label),
+      message: "어떤 데이트를 원하세요? 하고 싶은 것을 고르면 그 경험을 중심으로 가까운 장소를 엮어 볼게요. 아직 정하지 않았다면 추천에 맡겨도 됩니다.",
+      options: [...DATE_ACTIVITY_OPTIONS.map(item => item.label), "추천에 맡기기"],
       multiple: true,
     };
   }
@@ -866,15 +878,15 @@ export function assumedTimeWindow(state: AIPlannerState) {
   if (state.startTime) {
     return { startTime: state.startTime, endTime: state.endTime || "21:00", specified: true, window: state.timeWindow };
   }
-  if (state.stayKind === "overnight" || (state.nights || 0) > 0) {
-    return { startTime: "11:00", endTime: "21:00", specified: true, window: state.timeWindow };
-  }
-  if (state.stayKind === "daytrip") {
-    return { startTime: "11:00", endTime: "20:00", specified: true, window: state.timeWindow ?? "any" };
-  }
   const chosen = DATE_TIME_OPTIONS.find(item => item.id === state.timeWindow);
   if (chosen?.startTime) {
     return { startTime: chosen.startTime, endTime: chosen.endTime || "21:00", specified: true, window: chosen.id };
+  }
+  if (state.stayKind === "overnight" || (state.nights || 0) > 0) {
+    return { startTime: "11:00", endTime: "21:00", specified: false, window: state.timeWindow };
+  }
+  if (state.stayKind === "daytrip") {
+    return { startTime: "11:00", endTime: "20:00", specified: false, window: state.timeWindow ?? "any" };
   }
 
   if (state.activities.includes("nightview") || state.timeWindow === "night") {

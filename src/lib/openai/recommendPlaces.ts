@@ -38,9 +38,9 @@ const SINGLE_PLACE_FACTS_PROMPT = [
 const PLACE_WRITER_PROMPT = [
   "You are a warm local friend inside a couple's date app, helping them pick where to go. Write Korean 해요체 (~해요, ~드릴게요). Never 반말. No emoji, no markdown.",
   "candidates[] are real shops from Kakao Local with the public facts we verified (rating, ratingCount, food, note, sourceUrl). You may only pick ids from candidates[]. Never invent a shop, dish, price, or rating; use only what is in the row.",
-  `Pick ${PLACE_PICK_MIN} to ${PLACE_PICK_MAX} that best match the ask (dish, cuisine, vibe words) and the couple's tastes. Prefer rows with a verified rating and more reviews, then variety. Skip rows that clearly miss the ask (a pizzeria for 초밥).`,
+  `Pick ${PLACE_PICK_MIN} to ${PLACE_PICK_MAX} that best match the ask (dish, cuisine, vibe words) and the couple's tastes. Prefer direct query matches and distinctive venues. Skip rows that clearly miss the ask (a pizzeria for 초밥).`,
   "intro: 1-2 sentences that answer the ask directly and say how you chose (e.g. 후기 많은 순으로, 파스타로 알려진 곳 위주로). Mention the area.",
-  "why: one concrete sentence per pick using the row: what to order (food), the rating and review count if present (e.g. 후기 51개에 4.5점), the note, or the leaf category and the walk from the area anchor (distanceMeters). Do not repeat the shop name. Do not restate the street address. Never write filler like 위치해 있어 접근성이 좋습니다 or ~에 있습니다.",
+  "why: one concise sentence per pick (at most 70 Korean characters). Use the known food, note or precise category that makes it fit. Never repeat a rating, review count, address or anchor distance. Do not claim popularity, reservation, parking or opening hours unless directly verified. Do not write filler like 위치해 있어 접근성이 좋습니다.",
   "Return JSON only: {\"intro\":string,\"picks\":[{\"id\":string,\"why\":string}]}",
 ].join(" ");
 
@@ -67,7 +67,8 @@ async function lookupPlaceFacts(candidates: DiscoverCandidate[], allowedIds: Set
   if (!targets.length) return [];
   const rows = await Promise.all(targets.map(async candidate => {
     try {
-      return await completeJsonWithWebSearch<Record<string, unknown>>({
+      let sourceUrls: string[] = [];
+      const result = await completeJsonWithWebSearch<Record<string, unknown>>({
         instructions: SINGLE_PLACE_FACTS_PROMPT,
         payload: {
           id: dateCandidateKey(candidate),
@@ -80,7 +81,19 @@ async function lookupPlaceFacts(candidates: DiscoverCandidate[], allowedIds: Set
         timeoutMs: FACT_LOOKUP_TIMEOUT_MS,
         requireSearch: true,
         searchContextSize: "low",
+        onSources: urls => { sourceUrls = urls; },
       });
+      if (!result || typeof result.sourceUrl !== "string") return null;
+      const canonical = (raw: string) => {
+        try {
+          const url = new URL(raw);
+          for (const key of [...url.searchParams.keys()]) if (/^utm_|^(fbclid|gclid)$/i.test(key)) url.searchParams.delete(key);
+          url.searchParams.sort();
+          return `${url.hostname.replace(/^www\./, "")}${url.pathname.replace(/\/$/, "")}${url.search}`;
+        } catch { return ""; }
+      };
+      if (!sourceUrls.some(url => canonical(url) === canonical(result.sourceUrl as string))) return null;
+      return result;
     } catch {
       return null;
     }

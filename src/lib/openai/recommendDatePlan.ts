@@ -1,30 +1,15 @@
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
 import type { AIPlanCondition, AIPlaceRecommendation, AIPlannerReply, AIPlannerState, DateChatTurn, DatePreviousStop, PlanItem } from "@/features/planning/types/plan";
 import { discoverPlaceId } from "@/features/places/discover";
-import { courseSize, dateSpine, isExclusiveCrawl, isTravelPlan } from "@/features/ai/dateBrief";
+import { courseSize, matchesActivity } from "@/features/ai/dateBrief";
 import {
-  allowsHarshDateMeal,
-  bothWantNames,
-  candidateActivitySlot,
-  courseSuggestions,
-  dateCandidateKey,
-  dateCategoryLabel,
-  defaultDuration,
-  diversifyDateCatalog,
-  groundedStopReason,
-  heuristicRows,
-  pickCourseMessage,
-  preferredSavedNames,
-  rankDateCandidates,
-  scoreDateCandidate,
-  travelGapMinutes,
-  validateModelRows,
-  type DateCourseRow,
-  type DateRankContext,
+  assignStartTimes, bothWantNames, candidateActivitySlot, courseSuggestions, dateCandidateKey,
+  dateCategoryLabel, defaultDuration, pickCourseMessage,
+  preferredSavedNames, travelGapMinutes, type DateCourseRow,
 } from "@/features/ai/dateCourse";
-import { completeJson, completeJsonWithWebSearch } from "./client";
-import { applyPlaceWebFacts, publicPlaceFactLine, sanitizePlaceWebFacts } from "./placeWebFacts";
-import { writePlaceDetailCache } from "@/lib/places/detailCache";
+import { completeJson } from "./client";
+import { enrichDateVenues } from "./enrichDateVenues";
+import { discoveryCatalog, evaluateCourse, feasibleCourseSeeds, hasCafeSpaceEvidence, parseCourseProposals, usefulVenueEvidence, wantsCafeAtmosphere, type CourseEvaluation } from "@/features/ai/courseDesign";
 import { isOpenAiConfigured } from "./env";
 import { distanceMeters } from "@/features/places/geo";
 
@@ -56,11 +41,6 @@ function parseTime(value: unknown, fallback: string) {
   return parseClock(value) ?? fallback;
 }
 
-function minutesOf(time: string) {
-  const [hour, minute] = time.split(":").map(Number);
-  return hour * 60 + minute;
-}
-
 function addMinutes(time: string, minutes: number) {
   const [hour, minute] = time.split(":").map(Number);
   const total = (hour * 60 + minute + minutes) % (24 * 60);
@@ -70,31 +50,6 @@ function addMinutes(time: string, minutes: number) {
 function clamp(value: unknown, min: number, max: number, fallback: number) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(min, Math.min(max, Math.round(number))) : fallback;
-}
-
-function preferenceSummary(saved: Place[]) {
-  const category = new Map<string, { positive: number; negative: number }>();
-  for (const place of saved) {
-    const row = category.get(place.categoryLabel) ?? { positive: 0, negative: 0 };
-    const statuses = [place.userStatus, place.partnerStatus];
-    row.positive += statuses.filter(status => ["want", "must_visit", "revisit", "visited"].includes(status)).length;
-    row.negative += statuses.filter(status => ["dislike", "not_interested"].includes(status)).length;
-    category.set(place.categoryLabel, row);
-  }
-  return [...category.entries()]
-    .sort((a, b) => (b[1].positive - b[1].negative) - (a[1].positive - a[1].negative))
-    .map(([name, score]) => `${name}: 선호 ${score.positive}, 비선호 ${score.negative}`)
-    .join(" / ") || "아직 충분한 취향 기록이 없음";
-}
-
-function savedHistory(saved: Place[]) {
-  return saved.slice(0, 40).map(place => ({
-    name: place.name,
-    category: place.categoryLabel,
-    district: place.district,
-    userStatus: place.userStatus,
-    partnerStatus: place.partnerStatus,
-  }));
 }
 
 function buildReply(
@@ -112,7 +67,7 @@ function buildReply(
   const seen = new Set<string>();
   const preferred = preferredSavedNames(saved);
   const bothWant = bothWantNames(saved);
-  const maxStops = courseSize(state).max;
+  const maxStops = Math.max(courseSize(state).max, state.discovery?.maxStops ?? 0, state.requiredPlaces.length);
 
   for (const row of rows) {
     const id = String(row.id ?? "");
@@ -124,27 +79,23 @@ function buildReply(
     const previousRec = previousItem ? recommendations.at(-1) : undefined;
     const gap = travelGapMinutes(previousRec?.coordinates, candidate.coordinates);
     const earliest = previousItem ? addMinutes(previousItem.startTime, previousItem.durationMinutes + gap) : null;
-    const suggested = parseClock(row.start_time);
-    const startTime = !earliest
-      ? parseTime(row.start_time, condition.startTime)
-      : suggested && minutesOf(suggested) >= minutesOf(earliest)
-        ? suggested
-        : earliest;
+    const startTime = parseTime(row.start_time, earliest ?? condition.startTime);
     const placeId = discoverPlaceId(candidate.externalSource, candidate.externalPlaceId);
     const meters = previousRec?.coordinates && candidate.coordinates
       ? Math.round(distanceMeters(previousRec.coordinates, candidate.coordinates))
       : null;
-    const reason = groundedStopReason({
-      candidate,
-      previous: previousRec ? byId.get(previousRec.id) ?? null : null,
-      meters,
-      saved: preferred.has(candidate.name),
-      bothWant: bothWant.has(candidate.name),
-    });
+    const evidence = usefulVenueEvidence(candidate, state);
+    // A category or a short distance is already visible elsewhere on the card.
+    // Do not recycle it as a supposed venue-specific recommendation reason.
+    const reason = evidence ? `${evidence.verification === "search_report" ? "온라인 자료 참고: " : ""}${evidence.text}`
+      : (bothWant.has(candidate.name) ? "두 분이 가고 싶다고 저장한 장소예요."
+        : preferred.has(candidate.name) ? "저장해 둔 장소예요."
+          : wantsCafeAtmosphere(state) && candidate.category === "cafe" ? "공간 분위기는 아직 확인하지 못했어요." : "");
     recommendations.push({
       id,
       placeId,
       name: candidate.name,
+      activitySlot: candidateActivitySlot(candidate),
       category: dateCategoryLabel(candidate),
       district: candidate.district,
       address: candidate.roadAddress || candidate.address,
@@ -159,7 +110,7 @@ function buildReply(
       rating: candidate.rating,
       ratingCount: candidate.ratingCount,
       dishes: candidate.dishes,
-      factSourceUrl: candidate.factSourceUrl,
+      factSourceUrl: evidence?.url || candidate.factSourceUrl,
     });
     items.push({
       id: `ai-recommend-${candidate.externalSource}-${candidate.externalPlaceId}`,
@@ -200,7 +151,7 @@ function buildReply(
       stops: recommendations.map((place, index) => ({
         name: place.name,
         meta: `${place.category} · ${place.district}`,
-        reason: publicPlaceFactLine(place) || place.reasons[0],
+        reason: place.reasons[0],
         mapUrl: place.mapUrl,
         isSaved: place.isSaved,
         phone: place.phone,
@@ -229,56 +180,21 @@ function buildReply(
   };
 }
 
-const PLACE_FACTS_PROMPT = [
-  "You look up public facts for Korean shops. You have web_search. Korea location is set.",
-  "For each candidate, search separately: '{name} {address or district} 네이버지도' or 카카오맵.",
-  "Copy only from a result that is clearly the same shop: star rating as shown, review count as shown, a short menu/food noun for restaurants and cafes.",
-  "Never invent a rating. Never round a missing count to 50 or 100. If there is no number, omit rating.",
-  "Never copy shop A's food onto shop B. Never use 전시/산책로/자연경관/분위기/식사 as food.",
-  "sourceUrl must be the page you used (place.map.kakao.com/ID or map.naver.com/...). Not https://map.kakao.com/ with no place path.",
-  "After searching, return JSON only: {facts:[{id,rating,ratingCount,food,sourceUrl}]}",
-].join(" ");
-
-const DATE_CURATOR_PROMPT = [
-  "You are the date-course judge in a live Korean chat with a couple.",
-  "Read latestMessage as their turn and recentTurns as the conversation. currentCourse is what you already proposed. You pick shops from candidates[]. You do not invent shops.",
-  "",
-  "TABLE",
-  "- Every selected.id must be a candidate.id.",
-  "- Columns: leaf, address, slot, hops, saved, bothWant, recentlyVisited, coupleScore, rating, ratingCount, food, factSourceUrl.",
-  "- coupleScore is a saved/distance/taste hint. It is not stars.",
-  "- rating/food/factSourceUrl are search copies. Missing facts ≠ bad and ≠ 0점. Do not invent them. Put used facts in facts[] (copy from the row).",
-  "",
-  "HOW TO CHOOSE (in this order)",
-  "1. The user's latest turn. Follow its meaning, including paraphrases and chips like 일정추가/카페변경. Do not wait for a keyword list.",
-  "2. Hard constraints: requiredPlaces, excludedPlaces, cuisine if set, brief.spine as the day's skeleton, brief.anchorActivities as must-include, brief.exclusiveCrawl, brief.addStop. brief.shortlist are shops the user just saw and liked in this chat: include at least one of them when it fits the slot.",
-  "3. Couple data: bothWant > saved > not recentlyVisited.",
-  "4. Public facts: when two shops share a slot, prefer a sourced rating and more reviews.",
-  "5. Walk: consecutive hops.walk (250-900m) on a neighborhood date. Do not stack sameBlock. No 남산/롯데타워 on an 을지로 date.",
-  "6. Mix: follow brief.spine. That is eat, linger, then one more nearby thing when the situation has a third slot. Named activities are anchors inside the spine, not the whole day. 카페 in the brief means include a cafe, not four cafes. Do not apply meal+walk+tourism to every date. Do not fill the day with one slot.",
-  "7. Only if exclusiveCrawl is true (카페 투어 / 맛집 투어) may you stay inside brief.anchorActivities. Even then, two cafes is a tour. Never four of the same slot.",
-  "",
-  "HARD RULES",
-  "- Never invent ids, travel times, prices, hours, photos, menus, or ratings.",
-  "- A reason may only restate Kakao leaf, saved=true, bothWant, or copied facts. Never 맛집. No vibe.",
-  "- Do not call a pizzeria 한식. Do not call a gallery a cafe.",
-  "- Trip: real attractions/nature/markets plus meals when they fit. Hops 2-8km allowed. Not a cafe crawl.",
-  "- At most two cafes and two sit-down meals per day. At most two galleries unless they asked for an exhibit tour (then three). Prefer brief.spine over repeating one slot.",
-  "- Never pick 사주/타로/점집/분식/패스트푸드/테마카페. Never pick takeout coffee chains 메가MGC/메가커피/컴포즈/빽다방/더벤티. Independent cafes, bakeries, dessert shops, tearooms, and sit-down chains (스타벅스/투썸/커피빈/이디야) are allowed. Do not force 스타벅스 or 투썸 when a neighborhood cafe exists.",
-  "- Unless latestMessage asks for 회/포차/술, skip hoe houses, pocha, hof.",
-  "- Prefer a sit-down meal near 12:00 or 18:00 when the day includes one. A second meal may sit later. Do not invent a 15:00 lunch if a noon slot exists.",
-  "- Keep currentCourse / keepPlaces in relative order only when addStop, a swap, or a drop asked for it. If latestMessage asks to reshape (조금 다르게, 다른 코스, 다시 추천), pick a new set from candidates.",
-  "- If they want another stop (addStop true, or the turn means add/also eat/longer day/일정추가): keep every keepPlaces stop and append one new id. Returning the same set is wrong.",
-  "- Never claim a budget.",
-  "",
-  "SIZE: targetStops.min..max is a range. Evening/night is 2-3. Afternoon neighborhood is 2-4. First dates stay closer to 3.",
-  "Set start_time and duration_minutes. Reset start_time on each new day_index.",
-  "MESSAGE: 2-3 warm Korean 해요체 sentences, under 280 characters, like a friend who knows the neighborhood. Name EVERY chosen stop in walking order and give each one concrete hook from its row (leaf category, copied food or rating, saved/bothWant, the walk between). If brief.shortlist is non-empty and you used one, say so. No emoji. Never add facts that are not in the row.",
-  "reasons[0] per stop: one short Korean phrase from the row (e.g. 파스타 · 4.4점, 둘이 저장한 곳, 앞에서 300m). Not 맛집, not vibe.",
-  "Return JSON: {message,facts:[{id,rating,ratingCount,food,sourceUrl,note}],selected:[{id,start_time:'HH:MM',duration_minutes:30-180,day_index:0,expected_cost:0,reasons:[1 concise Korean string]}]}",
+const DESIGN_PROMPT = [
+  "You are an expert Korean date curator. Design coherent, enjoyable courses from the supplied real venues. Return JSON only.",
+  "The research brief contains the user's taste, possible concepts, travel mode and explicit requirements. Do not force meal-cafe-walk. Every stop must contribute a different worthwhile experience unless this is an explicit themed tour.",
+  "Produce three meaningfully different complete courses, not the same course reordered. Prefer one memorable anchor with complementary nearby venues. A restaurant should fit the requested dish/cuisine; a cafe needs a sourced reason to visit; a landmark should offer a real experience, not just fill a slot.",
+  "Use venue-specific observations for food, architecture, atmosphere and highlights only when they distinguish the exact branch. Missing observations mean unknown, not bad. Never invent facts, ratings, popularity, beauty, opening hours or prices. Provider IDs bind candidate identities; source URLs alone do not prove every statement. User-saved venues are useful preferences, not mandatory winners.",
+  "Read the CURRENT message and conversation. For a swap keep every keepPlace, exclude the old venue, and replace only that experience. For an addition preserve existing stops and add one. Follow requested activity order and do not reintroduce rejected venues. An area change starts a new geographic course unless the user explicitly connects both areas.",
+  "Evaluate full-route cohesion: avoid backtracking, unnecessary detours, repeating the same experience, and geographically disconnected picks. Coordinates and straight-line neighbor distances are provided. They are not actual walking routes. Prefer compact clusters for walking; driving trips can cover a wider area.",
+  "Dates are about the quality of venues, not filling every hour. Select two to four meaningful stops for a local date, typically three to four per travel day. Respect explicit keepPlaces and target bounds. Cover every travel day. Do not add or remove stops merely to pad time.",
+  "All selected IDs must exist in candidates. Each day_index must be 0..days-1. Include every requiredActivity and keepPlace. Never include excludedPlaces. Theme is a short Korean statement of the concept, not an unsupported claim about a venue.",
+  "feasibleAlternatives are already checked against venue and straight-line distance constraints. You may select one using seedId instead of selected, and supply a thoughtful Korean theme based on its sourced observations. Search-linked observations have not been independently fact-checked. Prefer the alternative that best matches the couple, not merely the shortest route.",
+  'Schema: {"courses":[{"theme":"short Korean course concept","selected":[{"id":"candidate ID","day_index":0,"duration_minutes":60}]}]}. No prose outside JSON.',
 ].join(" ");
 
 export async function recommendDatePlanWithOpenAi(input: {
+  traceId?: string;
   prompt: string;
   condition: AIPlanCondition;
   candidates: DiscoverCandidate[];
@@ -289,178 +205,110 @@ export async function recommendDatePlanWithOpenAi(input: {
   conversation?: DateChatTurn[];
   currentCourse?: DatePreviousStop[];
 }): Promise<AIPlannerReply> {
-  const rankContext: DateRankContext = {
-    savedPositive: preferredSavedNames(input.saved),
-    savedBoth: bothWantNames(input.saved),
-    recentlyVisited: new Set(input.recentlyVisited ?? []),
-    commonTastes: (input.coupleTaste?.commonTastes ?? []).map(item => item.label).filter(Boolean),
-    activities: dateSpine(input.state),
-    allowHarsh: allowsHarshDateMeal(input.prompt, input.state.cuisine),
-    trip: isTravelPlan(input.state),
+  const startedAt = performance.now();
+  const saved = preferredSavedNames(input.saved);
+  const pool = discoveryCatalog(input.candidates, input.state, saved, 54);
+  const grounded = await enrichDateVenues(pool, input.state);
+  const researchDoneAt = performance.now();
+  const days = courseSize(input.state).days;
+  const catalog = grounded.map(candidate => ({
+    id: dateCandidateKey(candidate), name: candidate.name,
+    category: candidate.detailedCategory || dateCategoryLabel(candidate),
+    address: candidate.roadAddress || candidate.address, coordinates: candidate.coordinates,
+    saved: saved.has(candidate.name), bothWant: bothWantNames(input.saved).has(candidate.name),
+    visitedRecently: input.recentlyVisited?.includes(candidate.name) ?? false,
+    observations: candidate.evidence ?? [],
+    knownMenu: candidate.factSourceUrl ? candidate.dishes : undefined,
+    sourceUrl: candidate.factSourceUrl,
+    neighbors: hopBands(candidate, grounded),
+  }));
+  const seeds = feasibleCourseSeeds(grounded, input.state, saved);
+  const seedDoneAt = performance.now();
+  const payload = {
+    latestMessage: input.prompt.slice(0, 800), recentTurns: (input.conversation ?? []).slice(-10),
+    brief: input.state.discovery, areas: input.state.areas,
+    days, target: input.state.discovery ? { min: input.state.discovery.minStops, max: input.state.discovery.maxStops } : courseSize(input.state),
+    keepPlaces: input.state.requiredPlaces, excludedPlaces: input.state.excludedPlaces,
+    currentCourse: input.currentCourse, pinOrder: input.state.pinOrder,
+    cuisine: input.state.cuisine, addStop: input.state.addStop,
+    budgetWon: input.state.budgetWon, walkingPreference: input.state.walkingPreference,
+    couple: input.coupleTaste, candidates: catalog,
+    feasibleAlternatives: seeds.map((course, index) => ({ seedId: index, selected: course.rows, straightLineMeters: Math.round(course.meters) })),
   };
-  const fallback = () => buildReply(
-    heuristicRows(input.candidates, input.condition.startTime, input.state, input.saved),
-    input.candidates,
-    input.condition,
-    "",
-    "fallback",
-    input.state,
-    input.saved,
-  );
-  if (!isOpenAiConfigured()) return fallback();
-
-  const savedNames = preferredSavedNames(input.saved);
-  const bothWant = bothWantNames(input.saved);
-  const locked = input.state.activities;
-  const ranked = rankDateCandidates(input.candidates, rankContext);
-  const savedFirst: DiscoverCandidate[] = [];
-  const used = new Set<string>();
-  for (const candidate of ranked) {
-    if (!savedNames.has(candidate.name)) continue;
-    used.add(dateCandidateKey(candidate));
-    savedFirst.push(candidate);
-  }
-  const rest = ranked.filter(candidate => !used.has(dateCandidateKey(candidate)));
-  const catalog = [...savedFirst, ...diversifyDateCatalog(rest, Math.max(0, 32 - savedFirst.length))].slice(0, 36);
-  const candidateCatalog = catalog.map(candidate => {
-    const id = dateCandidateKey(candidate);
-    return {
-      id,
-      name: candidate.name,
-      leaf: candidate.detailedCategory || dateCategoryLabel(candidate),
-      category: dateCategoryLabel(candidate),
-      district: candidate.district,
-      address: candidate.roadAddress || candidate.address,
-      mapUrl: candidate.mapUrl,
-      saved: savedNames.has(candidate.name),
-      bothWant: bothWant.has(candidate.name),
-      recentlyVisited: rankContext.recentlyVisited.has(candidate.name),
-      slot: candidateActivitySlot(candidate),
-      coupleScore: scoreDateCandidate(candidate, rankContext),
-      hops: hopBands(candidate, catalog),
-      rating: candidate.rating ?? null,
-      ratingCount: candidate.ratingCount ?? null,
-      food: candidate.dishes || null,
-      factSourceUrl: candidate.factSourceUrl || null,
-    };
-  });
-  const allowedIds = new Set(candidateCatalog.map(candidate => candidate.id));
-  // Restaurants and cafes are where the couple compares options, so those
-  // rows get the public-fact lookup first; saved shops always qualify.
-  const lookup = candidateCatalog
-    .filter(row => row.saved || row.bothWant || row.rating == null)
-    .sort((a, b) => (
-      Number(b.saved) - Number(a.saved)
-      || Number(b.slot === "meal" || b.slot === "cafe") - Number(a.slot === "meal" || a.slot === "cafe")
-      || b.coupleScore - a.coupleScore
-    ))
-    .slice(0, 12);
-  let facts = sanitizePlaceWebFacts([], allowedIds);
-  try {
-    const searched = lookup.length
-      ? await completeJsonWithWebSearch<{ facts?: unknown }>({
-        instructions: PLACE_FACTS_PROMPT,
-        payload: {
-          candidates: lookup.map(row => ({
-            id: row.id,
-            name: row.name,
-            district: row.district,
-            address: row.address,
-            slot: row.slot,
-          })),
-        },
-        maxTokens: 1600,
-        timeoutMs: 40000,
-        requireSearch: true,
-      })
-      : null;
-    facts = sanitizePlaceWebFacts(searched?.facts, allowedIds);
-  } catch {
-    facts = [];
-  }
-  const groundedPool = applyPlaceWebFacts(input.candidates, facts);
-  const groundedCatalog = applyPlaceWebFacts(catalog, facts);
-  if (facts.length) void writePlaceDetailCache(groundedCatalog);
-  const factById = new Map(groundedCatalog.map(candidate => [dateCandidateKey(candidate), candidate]));
-  const judged = candidateCatalog.map(row => {
-    const live = factById.get(row.id);
-    return {
-      ...row,
-      rating: live?.rating ?? row.rating,
-      ratingCount: live?.ratingCount ?? row.ratingCount,
-      food: live?.dishes || row.food,
-      factSourceUrl: live?.factSourceUrl || row.factSourceUrl,
-    };
-  });
-
-  const curatorPayload = {
-    task: "Select a course from the verified table. You cannot search or create new facts. Follow the user's constraints and current course edits.",
-    targetStops: courseSize(input.state),
-    stay: { kind: input.state.stayKind, nights: input.state.nights, trip: isTravelPlan(input.state) },
-    latestMessage: input.prompt.slice(0, 800),
-    recentTurns: (input.conversation ?? []).slice(-8),
-    currentCourse: (input.currentCourse ?? []).slice(0, 8),
-    brief: {
-      activitiesLocked: false,
-      exclusiveCrawl: isExclusiveCrawl(input.state),
-      spine: dateSpine(input.state),
-      anchorActivities: locked,
-      addStop: input.state.addStop,
-      areas: input.state.areas,
-      areaScope: input.state.areaScope,
-      requiredPlaces: input.state.requiredPlaces,
-      shortlist: (input.state.shownPlaces ?? []).slice(0, 6),
-      keepPlaces: input.state.preserveExistingPlaces
-        ? (input.state.pinOrder.length ? input.state.pinOrder : input.state.requiredPlaces)
-        : [],
-      excludedPlaces: input.state.excludedPlaces,
-      cuisine: input.state.cuisine,
-      indoorPlay: input.state.indoorPlay,
-      stayKind: input.state.stayKind,
-      nights: input.state.nights,
-      timeWindow: input.state.timeWindow,
-      pace: input.state.pace,
-      budgetWon: input.state.budgetWon ?? null,
-      walkingPreference: input.state.walkingPreference ?? null,
-      notes: input.state.conversationNotes.slice(-6),
-    },
-    timeWindow: {
-      id: input.state.timeWindow,
-      start: input.condition.startTime,
-      end: input.condition.endTime,
-      specified: input.condition.timeSpecified,
-      dateLabel: input.condition.dateLabel,
-    },
-    couple: {
-      summary: input.coupleTaste?.summary || preferenceSummary(input.saved),
-      commonTastes: (input.coupleTaste?.commonTastes ?? []).map(item => item.label).filter(Boolean),
-      youHighlights: input.coupleTaste?.youHighlights ?? [],
-      partnerHighlights: input.coupleTaste?.partnerHighlights ?? [],
-      avoidFoods: input.coupleTaste?.avoidFoods ?? [],
-      recentlyVisited: input.recentlyVisited ?? [],
-      savedHistory: savedHistory(input.saved),
-    },
-    candidates: judged,
+  const rejectionReasons = new Set<string>();
+  let considered = 0;
+  let winner: CourseEvaluation | undefined;
+  const rank = (raw: unknown) => {
+    const resolved = Array.isArray(raw) ? raw.map(value => {
+      if (!value || typeof value !== "object") return value;
+      const seed = Number.isInteger(value.seedId) ? seeds[value.seedId] : undefined;
+      return seed ? { ...value, selected: seed.rows } : value;
+    }) : raw;
+    const proposals = parseCourseProposals(resolved, days);
+    considered += proposals.length;
+    if (!proposals.length) rejectionReasons.add("모델이 유효한 코스 구조를 반환하지 않음");
+    return proposals.map(proposal => {
+      const evaluated = evaluateCourse(proposal, grounded, input.state, saved);
+      evaluated.problems.forEach(problem => rejectionReasons.add(problem));
+      return evaluated;
+    }).sort((a, b) => a.problems.length - b.problems.length || b.score - a.score);
   };
-
-  try {
-    const parsed = await completeJson<{ message?: string; selected?: DateCourseRow[]; facts?: unknown }>({
-      temperature: 0.3,
-      maxTokens: 2500,
-      reasoningEffort: "low",
-      timeoutMs: 45000,
-      messages: [
-        { role: "system", content: DATE_CURATOR_PROMPT },
-        { role: "user", content: JSON.stringify(curatorPayload) },
-      ],
+  if (isOpenAiConfigured() && grounded.length >= 2) {
+    const result = await completeJson<{ courses?: unknown }>({
+      messages: [{ role: "system", content: DESIGN_PROMPT }, { role: "user", content: JSON.stringify(payload) }],
+      reasoningEffort: "medium", temperature: 0.4, maxTokens: 3200, timeoutMs: 40000,
     });
-    if (!parsed) return fallback();
-    // The curator has no search tool. It must not overwrite verified facts.
-    const grounded = groundedPool;
-    const rows = validateModelRows(parsed.selected ?? [], grounded, input.state);
-    const reply = buildReply(rows, grounded, input.condition, parsed.message ?? "", "openai", input.state, input.saved);
-    return reply.items.length >= Math.min(2, courseSize(input.state).min) ? reply : fallback();
-  } catch {
-    return fallback();
+    let evaluated = rank(result?.courses);
+    winner = evaluated.find(course => course.problems.length === 0);
+    if (!winner) {
+      // One bounded repair based on concrete failures; never silently replace selected venues.
+      const repaired = await completeJson<{ courses?: unknown }>({
+        messages: [{ role: "system", content: DESIGN_PROMPT }, { role: "user", content: JSON.stringify({ ...payload, rejected: evaluated.map(course => ({ selected: course.rows, problems: course.problems })), instruction: "Repair these exact constraint failures. Return two feasible complete courses." }) }],
+        reasoningEffort: "low", temperature: 0.2, maxTokens: 2400, timeoutMs: 20000,
+      });
+      evaluated = rank(repaired?.courses);
+      winner = evaluated.find(course => course.problems.length === 0);
+    }
   }
+  const degraded = !winner;
+  const selectionDoneAt = performance.now();
+  if (!winner) {
+    winner = seeds[0];
+  }
+  const rows = winner ? assignStartTimes(winner.rows, grounded, input.state, input.condition.startTime) : [];
+  const reply = buildReply(rows, grounded, input.condition, "", degraded ? "fallback" : "openai", input.state, input.saved);
+  const requested = input.state.discovery?.requiredActivities ?? input.state.activities;
+  const activityNames: Record<string, string> = { meal: "식사", cafe: "카페", performance: "공연장", movie: "영화", exhibit: "전시", walk: "산책", indoor: "실내 활동", nightview: "야경" };
+  const focus = [...new Set([...(input.state.discovery?.activityOrder ?? []), ...requested])]
+    .slice(0, 3).map(activity => activityNames[activity] ?? activity).join("·");
+  const opening = focus
+    ? input.state.discovery?.activityOrder?.length && input.state.discovery.activityOrder.length >= 2
+      ? `${focus} 순서로 ${reply.items.length}곳을 골랐어요.`
+      : `${focus} 경험을 담은 ${reply.items.length}곳을 골랐어요.`
+    : `${input.condition.region}에서 이어갈 ${reply.items.length}곳을 골랐어요.`;
+  const qualifiers = [
+    degraded && winner ? "AI가 제안한 코스는 조건 검증을 통과하지 못해, 검색된 장소로 구성한 대안을 보여드려요." : "",
+    wantsCafeAtmosphere(input.state) && winner?.rows.some(row => {
+      const candidate = grounded.find(item => dateCandidateKey(item) === row.id);
+      return candidate && candidateActivitySlot(candidate) === "cafe" && !hasCafeSpaceEvidence(candidate);
+    }) ? "요청하신 카페의 공간 분위기는 확인하지 못했어요. 가까운 카페를 임시로 넣었으니 상세 사진을 확인해 주세요." : "",
+    winner?.rows.some(row => grounded.some(candidate => dateCandidateKey(candidate) === row.id && matchesActivity(candidate, "performance")))
+      ? "공연장은 장소만 확인했어요. 방문일의 공연·좌석·예매 가능 여부는 장소 정보에서 확인해 주세요." : "",
+    input.state.budgetWon ? `두 분 합계 ${input.state.budgetWon.toLocaleString("ko-KR")}원 예산은 메뉴와 입장료 확인이 더 필요해요.` : "",
+  ].filter(Boolean);
+  reply.message = [opening, ...qualifiers].join(" ");
+  reply.card.lines = [opening, ...qualifiers];
+  reply.card.headline = input.condition.region + (days > 1 ? ` ${days - 1}박${days}일` : ` ${reply.items.length}곳`);
+  if (!input.condition.timeSpecified) reply.card.stops = reply.card.stops?.map(stop => ({ ...stop, startTime: undefined, durationMinutes: undefined }));
+  reply.design = {
+    theme: winner?.theme ?? "", alternativesConsidered: considered, routeBasis: "straight_line",
+    totalDistanceMeters: Math.round(winner?.meters ?? 0), evidenceCount: winner?.evidenceCount ?? 0, degraded,
+    rejectionReasons: [...rejectionReasons],
+  };
+  console.info("date_course_design", JSON.stringify({ traceId: input.traceId,
+    researchedCandidates: grounded.filter(candidate => candidate.evidence?.length).length,
+    catalogCount: grounded.length, seedCount: seeds.length, modelProposalCount: considered, degraded,
+    researchMs: Math.round(researchDoneAt - startedAt), seedMs: Math.round(seedDoneAt - researchDoneAt),
+    selectionMs: Math.round(selectionDoneAt - seedDoneAt) }));
+  return reply;
 }

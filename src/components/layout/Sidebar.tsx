@@ -14,12 +14,15 @@ export function Sidebar() {
   const pathname = usePathname();
   const session = useAppSession();
   const [ready, setReady] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => setReady(true), []);
+  useEffect(() => setMenuOpen(false), [pathname]);
   useEffect(() => {
-    if (!ready || !window.matchMedia("(max-width: 900px)").matches) return;
-    const active = document.querySelector<HTMLElement>(".sidebar .nav-item.is-active");
-    active?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
-  }, [pathname, ready]);
+    if (!menuOpen) return;
+    const onEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenuOpen(false); };
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [menuOpen]);
   const hasIdentity = session.mode === "authenticated" || session.mode === "setup_error";
   const youName = hasIdentity ? session.displayName : "나";
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? null : null;
@@ -32,7 +35,7 @@ export function Sidebar() {
         <span className="brand-mark"><BrandMark /></span>
         <span className="brand-copy"><strong>ONLY US</strong><small>PRIVATE SPACE FOR TWO</small></span>
       </AppLink>
-      <nav className="nav-list">
+      <nav className="nav-list" aria-label="전체 메뉴">
         {NAVIGATION.map((item, index) => {
           if ("section" in item) return <p key={`${item.section}-${index}`}>{item.section}</p>;
           const active = ready && (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href));
@@ -43,6 +46,27 @@ export function Sidebar() {
           );
         })}
       </nav>
+      <nav className="mobile-bottom-nav" aria-label="빠른 메뉴">
+        {NAVIGATION.filter((item): item is Extract<(typeof NAVIGATION)[number], { href: string }> => "href" in item && ["/", "/date", "/trip", "/places"].includes(item.href)).map(item => (
+          <AppLink className={`mobile-nav-item ${pathname === item.href ? "is-active" : ""}`} href={item.href} key={item.href}>
+            <SidebarIcon name={item.iconName} /><span>{item.label}</span>
+          </AppLink>
+        ))}
+        <button className={`mobile-nav-item ${menuOpen || !["/", "/date", "/trip", "/places"].includes(pathname) ? "is-active" : ""}`} type="button" aria-expanded={menuOpen} aria-controls="mobile-all-menu" onClick={() => setMenuOpen(value => !value)}>
+          <span className="mobile-menu-glyph" aria-hidden="true">☷</span><span>전체</span>
+        </button>
+      </nav>
+      {menuOpen && <div className="mobile-menu-layer">
+        <button className="mobile-menu-scrim" type="button" aria-label="전체 메뉴 닫기" onClick={() => setMenuOpen(false)} />
+        <div className="mobile-menu-sheet" id="mobile-all-menu" role="dialog" aria-label="전체 메뉴">
+          <div className="mobile-menu-head"><strong>전체 메뉴</strong><button type="button" onClick={() => setMenuOpen(false)} aria-label="닫기">×</button></div>
+          <div className="mobile-menu-grid">
+            {NAVIGATION.filter((item): item is Extract<(typeof NAVIGATION)[number], { href: string }> => "href" in item).map(item => <AppLink href={item.href} key={item.href} className={pathname === item.href ? "is-active" : ""} onClick={() => setMenuOpen(false)}>
+              <SidebarIcon name={item.iconName} /><span>{item.label}</span>
+            </AppLink>)}
+          </div>
+        </div>
+      </div>}
       <div className={`couple-card is-${session.mode} ${partnerName ? "has-partner" : ""}`}>
         <div className="couple-card-main">
           <div className="paired-avatars" aria-hidden="true"><span className="avatar you">{youInitial}</span><span className="avatar partner">{partnerInitial}</span></div>

@@ -41,7 +41,7 @@ export type PlanOption = {
   placeCount: number;
 };
 
-export type DateActivityId = "cafe" | "meal" | "walk" | "exhibit" | "indoor" | "nightview";
+export type DateActivityId = "cafe" | "meal" | "walk" | "exhibit" | "movie" | "performance" | "indoor" | "nightview";
 export type DateCuisine = "한식" | "일식" | "중식" | "양식";
 export type DateCuisineChoice = DateCuisine | "any";
 export type DateTimeWindow = "afternoon" | "evening" | "night" | "any";
@@ -62,6 +62,8 @@ export type AIPlaceRecommendation = {
   id: string;
   placeId: string;
   name: string;
+  /** Stable experience role for follow-up edits; presentation labels are not a classifier. */
+  activitySlot?: DateActivityId | "other";
   category: string;
   district: string;
   address: string;
@@ -109,6 +111,7 @@ export type DateChatTurn = {
 export type DatePreviousStop = {
   name: string;
   category: string;
+  activitySlot?: DateActivityId | "other";
 };
 
 export type AIChatCard = {
@@ -120,6 +123,15 @@ export type AIChatCard = {
 };
 
 export type AIPlannerReply = {
+  design?: {
+    theme: string;
+    alternativesConsidered: number;
+    routeBasis: "straight_line";
+    totalDistanceMeters: number;
+    evidenceCount: number;
+    degraded: boolean;
+    rejectionReasons?: string[];
+  };
   status: "plan";
   message: string;
   card: AIChatCard;
@@ -154,6 +166,18 @@ export type AIPlannerChat = {
 export type AIPlannerResult = AIPlannerReply | AIPlannerClarification | AIPlannerChat;
 
 export type AIPlannerState = {
+  /** A broad first request has already passed the optional date-focus question. */
+  intakeFocusDone?: boolean;
+  discovery?: {
+    themes: string[];
+    priorities: string[];
+    queries: Array<{ region: string; query: string }>;
+    transport: "walk" | "drive" | "transit";
+    requiredActivities: DateActivityId[];
+    activityOrder: DateActivityId[];
+    minStops: number;
+    maxStops: number;
+  };
   budgetWon?: number | null;
   walkingPreference?: "short" | null;
   activities: DateActivityId[];
@@ -178,6 +202,8 @@ export type AIPlannerState = {
   intent: "create" | "modify" | "remove" | "reset" | "clarify";
   pendingSlot: DateIntakeSlot | null;
   conversationNotes: string[];
+  /** Exact user-authored turns; never use model summaries to grant exceptions to hard constraints. */
+  userRequests?: string[];
   /** Names the assistant listed in the last place-recommendation turn. */
   shownPlaces?: string[];
   /** Prior search results used to avoid repeats; shownPlaces preserves visible numbering. */

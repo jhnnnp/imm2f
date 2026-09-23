@@ -21,6 +21,7 @@ import {
   capLongHops,
   scoreDateCandidate,
   spreadConsecutiveStops,
+  stopMatchesActivity,
   validateModelRows,
 } from "./dateCourse";
 
@@ -215,6 +216,54 @@ describe("dateCourse", () => {
     expect(state.excludedPlaces).toContain("성수 카페");
     expect(state.requiredPlaces).toContain("성수 식당");
     expect(state.requiredPlaces).not.toContain("성수 카페");
+  });
+
+  it("treats a board-game cafe as an activity, not a cafe replacement target", () => {
+    expect(stopMatchesActivity({ name: "할리스 소월아트홀점", category: "공연장 주변 카페", activitySlot: "cafe" }, "performance")).toBe(false);
+    expect(stopMatchesActivity({ name: "소월아트홀", category: "공연장", activitySlot: "performance" }, "performance")).toBe(true);
+    expect(stopMatchesActivity({ name: "꼬꼬지보드게임", category: "여가시설 · 보드카페" }, "cafe")).toBe(false);
+    expect(stopMatchesActivity({ name: "꼬꼬지보드게임", category: "여가시설 · 보드카페" }, "indoor")).toBe(true);
+    const state = applyCourseDelta({
+      message: "카페변경",
+      state: withAreas(emptyDateBrief(), ["왕십리"]),
+      previousStops: [
+        { name: "꼬꼬지보드게임", category: "여가시설 · 보드카페" },
+        { name: "동대문역사문화공원", category: "문화시설" },
+      ],
+    });
+    expect(state.excludedPlaces).toEqual([]);
+    expect(state.requiredPlaces).toEqual(["꼬꼬지보드게임", "동대문역사문화공원"]);
+    expect(state.activities).toContain("cafe");
+    expect(state.addStop).toBe(true);
+  });
+
+  it("adds a restaurant without deleting a stop when the course has no meal", () => {
+    const state = applyCourseDelta({
+      message: "식당변경",
+      state: withAreas(emptyDateBrief(), ["왕십리"]),
+      previousStops: [
+        { name: "전시 공간", category: "전시관" },
+        { name: "근린공원", category: "공원" },
+      ],
+    });
+    expect(state.excludedPlaces).toEqual([]);
+    expect(state.requiredPlaces).toEqual(["전시 공간", "근린공원"]);
+    expect(state.activities).toContain("meal");
+    expect(state.addStop).toBe(true);
+  });
+
+  it("keeps every current stop for an explicit add action", () => {
+    const state = applyCourseDelta({
+      message: "일정추가",
+      state: { ...withAreas(emptyDateBrief(), ["왕십리"]), preserveExistingPlaces: false },
+      previousStops: [
+        { name: "첫 장소", category: "전시관" },
+        { name: "둘째 장소", category: "공원" },
+      ],
+    });
+    expect(state.preserveExistingPlaces).toBe(true);
+    expect(state.requiredPlaces).toEqual(["첫 장소", "둘째 장소"]);
+    expect(state.addStop).toBe(true);
   });
 
   it("penalizes recently visited places in ranking", () => {
@@ -531,6 +580,27 @@ describe("dateCourse", () => {
     );
     expect(swapped.pinOrder).toEqual(["KF XR 갤러리", "성수 카페", "성수 식당"]);
     expect(rows.map(row => row.id)).toEqual(["kakao:g1", "kakao:c1", "kakao:m2"]);
+  });
+
+  it("replaces the source activity when swapping a cafe for a performance venue", () => {
+    const initial = withAreas(emptyDateBrief(), ["성수"]);
+    const state = applyCourseDelta({
+      message: "카페를 공연장으로 바꿔줘",
+      state: { ...initial, activities: ["cafe", "meal"], discovery: {
+        themes: [], priorities: [], queries: [], transport: "transit",
+        requiredActivities: ["cafe", "meal"], activityOrder: [], minStops: 3, maxStops: 3,
+      } },
+      previousStops: [
+        { name: "성수 식당", category: "음식점" },
+        { name: "성수 카페", category: "카페" },
+        { name: "소월아트홀", category: "공연장" },
+      ],
+    });
+    expect(state.excludedPlaces).toContain("성수 카페");
+    expect(state.requiredPlaces).toContain("소월아트홀");
+    expect(state.activities).toContain("performance");
+    expect(state.activities).not.toContain("cafe");
+    expect(state.discovery?.requiredActivities).not.toContain("cafe");
   });
 
   it("uses festival dates as the stop reason", () => {

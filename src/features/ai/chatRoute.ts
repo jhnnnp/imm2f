@@ -127,6 +127,9 @@ export function routeDateChatLocally(input: {
   const message = input.message.trim();
   const shown = input.state?.shownPlaces ?? [];
   if (!message) return { mode: "course", confident: true };
+  if (/(?:데이트|여행).*(?:하고\s*싶|가고\s*싶|코스|일정|짜\s*줘|추천)/.test(message)) {
+    return { mode: "course", confident: true };
+  }
   if (input.chatSituation) return { mode: "chat", confident: true };
   // A typed area answer must resume the same search, just like an area chip.
   const pendingAsk = input.state?.placeAsk;

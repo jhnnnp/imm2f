@@ -46,7 +46,21 @@ export type Place = {
   tourDetailLoaded?: boolean;
 };
 
+export type VenueObservation = {
+  id: string;
+  text: string;
+  url: string;
+  checkedAt: string;
+  /** The exact provider place to which the observation was attributed. */
+  venueId?: string;
+  branchName?: string;
+  attribute?: "space" | "menu" | "experience";
+  /** A search citation is a lead, not independent verification of the claim. */
+  verification?: "search_report" | "source_checked";
+};
+
 export type DiscoverCandidate = {
+  evidence?: VenueObservation[];
   externalSource: "kakao" | "tourapi";
   externalPlaceId: string;
   name: string;

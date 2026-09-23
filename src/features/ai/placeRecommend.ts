@@ -17,7 +17,7 @@ import { publicPlaceFactLine } from "@/lib/openai/placeWebFacts";
 export const PLACE_PICK_MIN = 3;
 export const PLACE_PICK_MAX = 5;
 export const PLACE_CATALOG_SIZE = 14;
-const WHY_MAX_CHARS = 140;
+const WHY_MAX_CHARS = 90;
 const INTRO_MAX_CHARS = 260;
 
 export type PlaceSearchPlan = {

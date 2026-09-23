@@ -52,6 +52,12 @@ export async function routeDateChat(input: {
     hasCourse: input.hasCourse,
     chatSituation: chatSituationFromMessage(input.message),
   });
+  // Deterministic quick actions and clear requests must not be reclassified by
+  // the router model. This is especially important for add/swap/remove chips.
+  const needsEditResolution = input.hasCourse && local.mode === "course"
+    && /삭제|제외|빼|제거|순서|먼저|마지막|시간|시작|늦춰|앞당/.test(input.message)
+    && !/변경|교체|바꿔|추가/.test(input.message);
+  if (local.confident && !needsEditResolution) return local;
   if (!isOpenAiConfigured()) return local;
   try {
     const parsed = await completeJson<RouterPayload>({

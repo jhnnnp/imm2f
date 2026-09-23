@@ -106,7 +106,7 @@ export function PlaceDetailPanel({
   const memoText = place.description.trim();
   const canEditMemo = !preview && Boolean(onDescriptionSave);
 
-  return <div className="place-detail-panel">
+  return <div className="place-detail-panel" data-place-id={place.id}>
     <div className={`detail-photo tone-${place.visualTone} ${place.image ? "" : "is-empty"}`}>{place.image ? <img src={place.image} alt={place.name} /> : <PlaceGraphicCover place={place} />}<span>{place.categoryLabel.toUpperCase()} · {preview ? "CANDIDATE" : "PLACE"}</span></div>
     <div className="place-detail-head"><div><span className="eyebrow">{preview ? "PLACE PREVIEW" : "PLACE NOTE"}</span><h2 className="place-detail-title">{place.name}{!preview && tripScheduleStops.length > 0 ? <PlaceTripStamp compact /> : null}</h2>
       {!editing && (

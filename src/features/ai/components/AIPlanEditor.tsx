@@ -46,12 +46,12 @@ function sourceHost(url: string) {
 }
 
 const EDIT_PROMPT = "일정이 조금 빡센 것 같아. 한곳 빼고 남는 곳은 더 여유롭게 해줘.";
-const GENERATE_PLACEHOLDER = "예: 성수 파스타 맛집 추천해줘";
+const GENERATE_PLACEHOLDER = "동네와 하고 싶은 일을 말해 주세요";
 const COURSE_PLACEHOLDER = "예: 식당 변경 해줘 · 1번 주차 돼?";
 const WELCOME_CARD: AIChatCard = {
-  headline: "어디로 갈까요?",
-  lines: ["동네를 말하면 하루 코스를 짜고, 식당이나 카페만 골라 달라고 해도 돼요. 만든 뒤에는 주차나 예약 같은 질문도 이어서 할 수 있어요."],
-  suggestions: ["성수 파스타 맛집 추천해줘", "을지로 저녁 데이트 코스 짜줘", "비 오는 날 홍대 실내 데이트"],
+  headline: "어떤 데이트를 원하세요?",
+  lines: ["동네와 하고 싶은 일을 알려 주세요. 동네만 정했다면 취향을 함께 고를 수 있어요."],
+  suggestions: ["왕십리 데이트 코스", "성수 영화·카페 코스", "을지로 공연·저녁 코스"],
 };
 
 type KeepStep = "idle" | "destination" | "trip-dates";
@@ -64,10 +64,9 @@ function stopKakaoUrl(stop: AIChatStop) {
 
 function formatHop(meters: number | null | undefined) {
   if (meters == null) return "";
-  if (meters < 80) return "바로 옆";
-  const walk = Math.max(1, Math.round(meters / 80));
-  if (meters < 1000) return `직선 ${meters}m · 도보 약 ${walk}분`;
-  return `직선 ${(meters / 1000).toFixed(1)}km · 도보 약 ${walk}분`;
+  if (meters < 80) return `직선 ${meters}m`;
+  if (meters < 1000) return `직선 ${meters}m`;
+  return `직선 ${(meters / 1000).toFixed(1)}km`;
 }
 
 function formatRouteLength(meters: number) {
@@ -90,7 +89,7 @@ function slotPrompt(slot: DateIntakeSlot, state?: AIPlannerState): ChoicePrompt 
 }
 
 function applySlot(kind: DateIntakeSlot, choices: string[], state: AIPlannerState): AIPlannerState {
-  if (kind === "activity") return withActivities(state, choices);
+  if (kind === "activity") return { ...withActivities(state, choices.filter(choice => choice !== "추천에 맡기기")), intakeFocusDone: true };
   if (kind === "area") return withAreas(state, choices);
   if (kind === "scope") return withAreaScope(state, choices[0] ?? "");
   if (kind === "span") return withStayKind(state, choices[0] ?? "");
@@ -100,7 +99,7 @@ function applySlot(kind: DateIntakeSlot, choices: string[], state: AIPlannerStat
 }
 
 function slotUserText(kind: DateIntakeSlot, choices: string[]) {
-  if (kind === "activity") return `${choices.join(", ")} 하고 싶어`;
+  if (kind === "activity") return choices.includes("추천에 맡기기") ? "데이트 취향은 추천에 맡길게" : `${choices.join(", ")} 중심으로 데이트하고 싶어`;
   if (kind === "area") return `${choices.join(", ")} 쪽이 좋아`;
   if (kind === "scope") return choices[0] ?? "주변 범위를 정했어";
   if (kind === "span") return `${choices[0] ?? "데이트"}로 짜줘`;
@@ -189,13 +188,14 @@ function AssistantCard({
   onToggle?: (label: string) => void;
   onSubmit?: () => void;
 }) {
-  const lines = card?.lines?.length ? card.lines : text ? [text] : [];
+  const lines = (card?.lines?.length ? card.lines : text ? [text] : [])
+    .flatMap(line => line.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean));
   const chips = options?.options?.length ? options.options : (card?.suggestions ?? []);
   const courseActions = chips.length > 0 && chips.every(chip => isCourseQuickAction(chip));
   return (
     <article className="ai-bubble is-assistant">
       {card?.headline ? <b>{card.headline}</b> : null}
-      {lines.map(line => <p key={line}>{line}</p>)}
+      {lines.map((line, index) => <p key={`${index}-${line}`} className="ai-bubble-paragraph">{line}</p>)}
       {card?.stops?.length ? (
         <ol className="ai-bubble-stops">
           {card.stops.map((stop, index) => {
@@ -226,14 +226,10 @@ function AssistantCard({
                         {stop.name}
                         {stop.isSaved ? <span className="ai-stop-saved">저장한 곳</span> : null}
                       </strong>
-                      <small>
-                        {stop.startTime ? `${stop.startTime} · ${stop.durationMinutes ?? 0}분 · ${stop.meta}` : stop.meta}
-                        {stop.rating != null ? ` · ${stop.rating}점${stop.ratingCount ? ` · 후기 ${stop.ratingCount}` : ""}` : ""}
-                        {stop.dishes ? ` · ${stop.dishes}` : ""}
-                        {stop.openingHours && !stop.meta.includes(stop.openingHours) ? ` · ${stop.openingHours}` : ""}
-                      </small>
+                      <small className="ai-stop-meta">{stop.meta}</small>
+                      {stop.startTime ? <small className="ai-stop-time">{stop.startTime}{stop.durationMinutes ? ` · 약 ${stop.durationMinutes}분` : ""}</small> : null}
                       {stop.reason && stop.reason !== stop.meta ? <small className="ai-stop-reason">{stop.reason}</small> : null}
-                      <small className="ai-stop-cue">{open ? "미리보기 닫기" : "위치 보기"}</small>
+                      <small className="ai-stop-cue">{open ? "장소 정보 닫기" : "장소 정보 보기"}</small>
                     </span>
                   </button>
                   <button
@@ -242,7 +238,7 @@ function AssistantCard({
                     onClick={() => openPlaceMiniWindow(kakaoUrl, "kakao")}
                     aria-label={`${stop.name} 카카오맵에서 보기`}
                   >
-                    보기
+                    지도 ↗
                   </button>
                 </div>
               </li>
@@ -557,7 +553,7 @@ export function AIPlanEditor({
         currentPlan: recommendation,
         message: request,
         previousPlaceNames: recommendation?.recommendations.map(place => place.name),
-        previousStops: recommendation?.recommendations.map(place => ({ name: place.name, category: place.category })),
+        previousStops: recommendation?.recommendations.map(place => ({ name: place.name, category: place.category, activitySlot: place.activitySlot })),
         courseStops: recommendation?.card.stops,
         shownStops,
         previousState: nextState,
@@ -570,7 +566,7 @@ export function AIPlanEditor({
           ? "조건에 맞는 장소를 충분히 찾지 못했습니다. 가고 싶은 동네를 다시 말해 주세요."
           : result.error;
         setConversation(current => [...current, { role: "assistant", text: safeError, card: { headline: "장소를 찾지 못했습니다", lines: [safeError] } }]);
-        setPlannerState(nextState);
+        setPlannerState(plannerState);
         return;
       }
       setPlannerState(result.state);
@@ -597,7 +593,7 @@ export function AIPlanEditor({
       if (ticket !== requestIdRef.current) return;
       const text = "답변을 가져오지 못했어요. 잠시 후 다시 보내 주세요.";
       setConversation(current => [...current, { role: "assistant", text, card: { headline: "", lines: [text] } }]);
-      setPlannerState(nextState);
+      setPlannerState(plannerState);
       setGeneratePrompt(request || displayText || "");
     } finally {
       if (ticket === requestIdRef.current) setPhase("idle");
@@ -711,7 +707,7 @@ export function AIPlanEditor({
                   openStopKey={peek?.key}
                   onOpenStop={(key, stop) => setPeek(current => current?.key === key ? null : { key, stop })}
                   onPick={pickQuick}
-                  onToggle={label => setSelectedChoices(current => current.includes(label) ? current.filter(item => item !== label) : [...current, label])}
+                  onToggle={label => setSelectedChoices(current => label === "추천에 맡기기" ? [label] : current.includes(label) ? current.filter(item => item !== label) : [...current.filter(item => item !== "추천에 맡기기"), label])}
                   onSubmit={submitChoices}
                 />
               );

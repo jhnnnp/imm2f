@@ -4,14 +4,17 @@ type Stop = { durationMinutes: number; coordinates?: [number, number] | null; da
 export const clockMinutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
 export const formatClock = (minutes: number) => `${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 
-export function scheduleGapMinutes(from?: [number, number] | null, to?: [number, number] | null) {
+export function scheduleGapMinutes(from?: [number, number] | null, to?: [number, number] | null, mode: "walk" | "drive" | "transit" = "walk") {
   if (!from || !to) return 0;
   const meters = distanceMeters(from, to);
-  return meters < 120 ? 0 : Math.max(8, Math.ceil(meters / 80));
+  if (meters < 120) return 0;
+  if (mode === "drive") return Math.max(10, Math.ceil(meters / 500) + 10);
+  if (mode === "transit") return Math.max(12, Math.ceil(meters / 250) + 12);
+  return Math.max(8, Math.ceil(meters / 80));
 }
 
 /** Schedule each day independently. Never publish a course outside the agreed window. */
-export function fitSchedule<T extends Stop>(stops: T[], start: string, end: string): Array<T & { startTime: string }> | null {
+export function fitSchedule<T extends Stop>(stops: T[], start: string, end: string, mode: "walk" | "drive" | "transit" = "walk"): Array<T & { startTime: string }> | null {
   if (![start, end].every(time => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))) return null;
   const begin = clockMinutes(start);
   let finish = clockMinutes(end);
@@ -20,7 +23,7 @@ export function fitSchedule<T extends Stop>(stops: T[], start: string, end: stri
   const days = [...new Set(stops.map(stop => Math.max(0, Math.floor(stop.dayIndex ?? 0))))].sort((a, b) => a - b);
   for (const day of days) {
     const group = stops.filter(stop => Math.max(0, Math.floor(stop.dayIndex ?? 0)) === day);
-    const gaps = group.map((stop, index) => index ? scheduleGapMinutes(group[index - 1].coordinates, stop.coordinates) : 0);
+    const gaps = group.map((stop, index) => index ? scheduleGapMinutes(group[index - 1].coordinates, stop.coordinates, mode) : 0);
     const available = finish - begin - gaps.reduce((a, b) => a + b, 0);
     const minimum = 30;
     if (available < minimum * group.length) return null;
