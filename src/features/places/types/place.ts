@@ -55,12 +55,30 @@ export type VenueObservation = {
   venueId?: string;
   branchName?: string;
   attribute?: "space" | "menu" | "experience";
+  /** Search-reported excerpt; not independently retrieved or verified. */
+  sourceExcerpt?: string;
+  sourceVenueName?: string;
+  sourceAddress?: string;
   /** A search citation is a lead, not independent verification of the claim. */
   verification?: "search_report" | "source_checked";
 };
 
 export type DiscoverCandidate = {
+  /** Known two-person cost only; null/undefined means unverified. */
+  expectedCostTwo?: number | null;
   evidence?: VenueObservation[];
+  /** A cited search lead that still requires exact provider identity and fact verification. */
+  discoveryLeadUrl?: string;
+  /** KOPIS performance and venue are separate identities. */
+  performanceEvent?: {
+    id: string;
+    title: string;
+    dateYmd: string;
+    showtimes: string[];
+    genre: string;
+    sourceUrl: string;
+    checkedAt: string;
+  };
   externalSource: "kakao" | "tourapi";
   externalPlaceId: string;
   name: string;

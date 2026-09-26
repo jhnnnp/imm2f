@@ -10,6 +10,7 @@ import type {
   DateTimeWindow,
 } from "@/features/planning/types/plan";
 import { koreaTodayYmd } from "@/lib/tourapi/festivalSchedule";
+import { explicitlyDislikedActivities } from "./dateIntent";
 
 export const DATE_ACTIVITY_OPTIONS: ReadonlyArray<{ id: DateActivityId; label: string }> = [
   { id: "cafe", label: "카페" },
@@ -55,7 +56,7 @@ export const DATE_CUISINE_OPTIONS: ReadonlyArray<{ id: DateCuisineChoice; label:
 export const DATE_INDOOR_OPTIONS = ["방탈출", "보드게임", "볼링", "오락실", "만화카페", "VR 체험", "상관없음"] as const;
 
 export const KNOWN_AREAS = [
-  "성수", "서울숲", "건대입구", "건대", "왕십리", "한남", "잠실", "홍대", "연남",
+  "성수", "서울숲", "건대입구", "건대", "왕십리", "행당", "행당동", "한남", "잠실", "홍대", "연남",
   "합정", "망원", "이태원", "한강", "을지로", "익선동", "강남", "뚝섬", "여의도",
   "신촌", "혜화", "삼청", "북촌", "옥수", "금호", "성수동", "청계천",
   "문래", "서촌", "압구정", "청담", "신사", "삼성", "선릉", "판교", "송리단길",
@@ -79,6 +80,8 @@ const AREA_CANON: Record<string, string> = {
   건대: "건대입구",
   건대입구: "건대입구",
   왕십리: "왕십리",
+  행당: "행당",
+  행당동: "행당",
   옥수: "옥수",
   금호: "금호",
   홍대: "홍대",
@@ -116,6 +119,7 @@ const AREA_CLUSTER: Record<string, string> = {
   뚝섬: "seongsu",
   건대입구: "seongsu",
   왕십리: "seongsu",
+  행당: "seongsu",
   옥수: "seongsu",
   금호: "seongsu",
   홍대: "hongdae",
@@ -152,7 +156,7 @@ const AREA_CLUSTER: Record<string, string> = {
 };
 
 const CLUSTER_AREAS: Record<string, string[]> = {
-  seongsu: ["성수", "서울숲", "왕십리", "건대입구", "뚝섬"],
+  seongsu: ["성수", "서울숲", "왕십리", "행당", "건대입구", "뚝섬"],
   hongdae: ["홍대", "연남", "합정", "망원", "상수"],
   hannam: ["한남", "이태원", "해방촌"],
   jamsil: ["잠실", "송파", "석촌"],
@@ -230,6 +234,13 @@ export function planDayYmd(state: Pick<AIPlannerState, "dateLabel">, now = new D
   const digits = String(state.dateLabel ?? "").replace(/\D/g, "");
   if (digits.length >= 8) return digits.slice(0, 8);
   return koreaTodayYmd(now);
+}
+
+/** Calendar day assigned to one trip stop; UTC arithmetic avoids local DST shifts. */
+export function tripDayYmd(state: Pick<AIPlannerState, "dateLabel">, dayIndex: number, now = new Date()) {
+  const base = planDayYmd(state, now);
+  const date = new Date(Date.UTC(Number(base.slice(0, 4)), Number(base.slice(4, 6)) - 1, Number(base.slice(6, 8)) + dayIndex));
+  return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
 export function isDateActivityId(value: string): value is DateActivityId {
@@ -350,7 +361,8 @@ export function isExclusiveCrawl(state: Pick<AIPlannerState, "conversationNotes"
 
 export function groundedAreas(message: string, previous: AIPlannerState | undefined, proposed: string[]) {
   const extracted = extractAreasFromText(message);
-  const mentioned = proposed.filter(area => areaMentionedInText(area, message));
+  // A substring is not proof of a locality: "여행가려구" once became an area.
+  const mentioned = proposed.filter(area => extracted.includes(canonicalizeArea(area)));
   const found = uniqueStrings([...extracted, ...mentioned], 3);
   const previousAreas = previous ? selectedAreas(previous) : [];
   const switching = /(?:다른|말고|대신)\s*(?:곳|도시|동네|지역)|처음부터|새로|전부\s*바꿔/.test(message);
@@ -390,6 +402,12 @@ export function dateSpine(state: AIPlannerState): DateActivityId[] {
   if (isRainyRequest(blob)) return uniqueActivities(["indoor", "cafe", "meal", ...named]).slice(0, 3);
   if (isTravelPlan(state)) {
     return uniqueActivities(["walk", "meal", ...named]).slice(0, 4);
+  }
+  // Time of day shapes suggestions, not the explicit list of experiences.
+  // In particular, an evening meal + cafe + show must retain the show.
+  const explicitlyNamed = extractActivitiesFromText((state.userRequests ?? []).at(-1) ?? "");
+  if (explicitlyNamed.length >= 2 && (state.timeWindow === "evening" || state.timeWindow === "night")) {
+    return uniqueActivities([...explicitlyNamed, ...named.filter(activity => explicitlyNamed.includes(activity))]).slice(0, 4);
   }
   if (state.timeWindow === "night") {
     const extra = named.find(item => item !== "meal") ?? "nightview";
@@ -497,20 +515,23 @@ export function groundedActivities(
   proposed: DateActivityId[] = [],
   _context?: Pick<AIPlannerState, "areas" | "stayKind" | "timeWindow" | "conversationNotes">,
 ): DateActivityId[] {
-  const extracted = extractActivitiesFromText(message);
+  const rejected = explicitlyDislikedActivities(message);
+  const extracted = extractActivitiesFromText(message).filter(activity => !rejected.includes(activity));
   const previousActivities = previous?.activities ?? [];
   const switching = /처음부터|새로|전부\s*바꿔|리셋/.test(message);
   const editingCourse = /바꿔|교체|변경|빼줘|제외|한 곳/.test(message);
-  if (editingCourse && !switching) return previousActivities;
+  if (editingCourse && !switching && !rejected.length) return previousActivities;
   if (extracted.length) {
-    const named = uniqueActivities(proposed.filter(id => extracted.includes(id)));
-    const next = named.length ? named : extracted;
+    // A model may omit one of several explicit experiences. Its partial
+    // proposal must never erase a meal, cafe or performance named by the user.
+    const next = uniqueActivities(extracted);
     if (!switching && previousActivities.length && isAdditiveRequest(message)) {
       return uniqueActivities([...previousActivities, ...next]);
     }
     return next;
   }
   if (switching) return [];
+  if (rejected.length) return previousActivities.filter(activity => !rejected.includes(activity));
   if (previousActivities.length) return previousActivities;
   return [];
 }
@@ -638,9 +659,16 @@ export function extractAreasFromText(message: string) {
   const travel = [...message.matchAll(/([가-힣]{2,8})\s*(?:여행|에서|으로|쪽)/g)]
     .map(match => match[1])
     .filter(name => !AREA_STOPWORDS.has(name));
-  const suffixed = [...message.matchAll(/([가-힣]{2,12}?(?:역|동|구|시))(?=\s|에서|근처|주변|으로|가서|$)/g)]
-    .map(match => match[1].replace(/(?:역|시)$/, ""));
-  return uniqueStrings([...known, ...travel, ...suffixed].map(canonicalizeArea), 3);
+  const suffixed = [...message.matchAll(/(?:^|\s)([가-힣]{2,12}?(?:역|동|시))(?=\s|에서|근처|주변|으로|가서|$)/g),
+    ...message.matchAll(/(?:^|\s)([가-힣]{1,4}구)(?=\s|에서|근처|주변|으로|가서|$)/g)]
+    .map(match => match[1].replace(/(?:역|시)$/, ""))
+    .filter(name => !/(?:가려|갈라|하려|할라|먹|하|했|됐)구$/.test(name));
+  const going = known.length || travel.length || suffixed.length ? []
+    : [...message.matchAll(/(?:^|\s)([가-힣]{2,8})\s*(?:가려|갈래|가고|가자|가려고)/g)]
+      .map(match => match[1]).filter(name => !AREA_STOPWORDS.has(name));
+  const bare = message.trim().match(/^[가-힣]{2,6}$/)?.[0];
+  return uniqueStrings([...known, ...travel, ...suffixed, ...going,
+    ...(bare && !AREA_STOPWORDS.has(bare) && !/가려|갈래|여행|데이트|추천|코스/.test(bare) ? [bare] : [])].map(canonicalizeArea), 3);
 }
 
 export function extractAreaScope(message: string): DateAreaScope | null {
@@ -859,7 +887,7 @@ export function courseSize(state: AIPlannerState) {
   const nights = Math.max(0, Math.min(2, state.nights || 0));
   const days = state.stayKind === "overnight" || nights > 0 ? Math.max(2, nights + 1) : 1;
   const size = days > 1
-    ? { min: 2 * days, max: 4 * days, days }
+    ? { min: days === 2 ? 4 : 8, max: 4 * days, days }
     : state.stayKind === "daytrip"
       ? { min: 3, max: 5, days: 1 }
       : (state.timeWindow === "evening" || state.timeWindow === "night")

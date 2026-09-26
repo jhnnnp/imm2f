@@ -3,7 +3,14 @@ export function getOpenAiApiKey() {
 }
 
 export function getOpenAiModel() {
-  return process.env.OPENAI_MODEL?.trim() || "gpt-5.6-terra";
+  return normalizeOpenAiModel(process.env.OPENAI_MODEL) || "gpt-5.6-terra";
+}
+
+/** Accept the display labels used in local settings without changing model family. */
+export function normalizeOpenAiModel(value: string | undefined) {
+  const model = value?.trim() ?? "";
+  return /^gpt-\d+(?:\.\d+)?[ -](?:luna|terra|sol|astra)$/i.test(model)
+    ? model.toLowerCase().replace(/ /g, "-") : model;
 }
 
 export function isOpenAiConfigured() {
@@ -12,5 +19,5 @@ export function isOpenAiConfigured() {
 
 export function getOpenAiSearchModel() {
   // Chat-only models can still write replies while a supported model searches.
-  return process.env.OPENAI_SEARCH_MODEL?.trim() || getOpenAiModel();
+  return normalizeOpenAiModel(process.env.OPENAI_SEARCH_MODEL) || getOpenAiModel();
 }

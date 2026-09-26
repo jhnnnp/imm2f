@@ -666,9 +666,119 @@ export type Database = {
         };
         Relationships: [];
       };
+      date_planning_playbook: {
+        Row: {
+          id: string;
+          version: number;
+          title: string;
+          stage: "interpretation" | "discovery" | "selection" | "editing" | "response";
+          tags: string[];
+          required_tags: string[];
+          excluded_tags: string[];
+          guidance: string;
+          example: string;
+          priority: number;
+          active: boolean;
+          updated_at: string;
+          embedding: string | null;
+          embedding_model: string | null;
+        };
+        Insert: {
+          id: string;
+          version: number;
+          title: string;
+          stage: "interpretation" | "discovery" | "selection" | "editing" | "response";
+          tags: string[];
+          required_tags?: string[];
+          excluded_tags?: string[];
+          guidance: string;
+          example?: string;
+          priority?: number;
+          active?: boolean;
+          updated_at?: string;
+          embedding?: string | null;
+          embedding_model?: string | null;
+        };
+        Update: {
+          version?: number;
+          title?: string;
+          stage?: "interpretation" | "discovery" | "selection" | "editing" | "response";
+          tags?: string[];
+          required_tags?: string[];
+          excluded_tags?: string[];
+          guidance?: string;
+          example?: string;
+          priority?: number;
+          active?: boolean;
+          updated_at?: string;
+          embedding?: string | null;
+          embedding_model?: string | null;
+        };
+        Relationships: [];
+      };
+      venue_evidence: {
+        Row: {
+          id: string;
+          external_source: "kakao" | "tourapi";
+          external_place_id: string;
+          branch_name: string;
+          venue_address: string;
+          attribute: "space" | "menu" | "experience";
+          observation: string;
+          source_url: string;
+          source_excerpt: string;
+          source_venue_name: string;
+          source_address: string;
+          verification: "search_report" | "source_checked";
+          checked_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id: string;
+          external_source: "kakao" | "tourapi";
+          external_place_id: string;
+          branch_name: string;
+          venue_address: string;
+          attribute: "space" | "menu" | "experience";
+          observation: string;
+          source_url: string;
+          source_excerpt: string;
+          source_venue_name: string;
+          source_address: string;
+          verification: "search_report" | "source_checked";
+          checked_at: string;
+          created_at?: string;
+        };
+        Update: {
+          branch_name?: string;
+          venue_address?: string;
+          attribute?: "space" | "menu" | "experience";
+          observation?: string;
+          source_url?: string;
+          source_excerpt?: string;
+          source_venue_name?: string;
+          source_address?: string;
+          verification?: "search_report" | "source_checked";
+          checked_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
+      match_date_playbook: {
+        Args: { query_embedding: string; target_stage: string | null; match_count?: number };
+        Returns: { id: string; similarity: number }[];
+      };
+      app_session_snapshot: {
+        Args: Record<string, never>;
+        Returns: {
+          couple_id: string | null;
+          display_name: string | null;
+          partner_user_id: string | null;
+          partner_display_name: string | null;
+        }[];
+      };
       my_couple_id: { Args: Record<string, never>; Returns: string | null };
       ensure_own_couple: { Args: Record<string, never>; Returns: string };
       create_couple_invite: { Args: Record<string, never>; Returns: Json };

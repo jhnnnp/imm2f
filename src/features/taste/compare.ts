@@ -245,11 +245,7 @@ export function applyTasteFallback(state: AIPlannerState, seed: TasteDateSeed): 
     areas: state.areas.length ? state.areas : seed.areas,
     regions: state.regions.length ? state.regions : seed.areas,
     region: state.region || seed.areas.join(" · "),
-    activities: state.intakeFocusDone ? state.activities : state.activities.length ? state.activities : seed.activities,
-    cuisine: state.cuisine ?? seed.cuisine,
-    timeWindow: state.timeWindow ?? seed.timeWindow,
-    areaScope: state.areaScope ?? seed.areaScope,
-    indoorPlay: state.indoorPlay ?? seed.indoorPlay,
+    memorySuggestions: { activities: seed.activities, cuisine: seed.cuisine },
     pace: state.pace === "balanced" && seed.pace !== "balanced" ? seed.pace : state.pace,
   };
 }
@@ -257,6 +253,11 @@ export function applyTasteFallback(state: AIPlannerState, seed: TasteDateSeed): 
 export function plannerStateFromSeed(seed: TasteDateSeed): AIPlannerState {
   return applyTasteFallback({
     ...emptyDateBrief(),
+    activities: seed.activities,
+    cuisine: seed.cuisine,
+    timeWindow: seed.timeWindow,
+    areaScope: seed.areaScope,
+    indoorPlay: seed.indoorPlay,
     stayKind: seed.stayKind,
     nights: 0,
     conversationNotes: seed.avoidFoods.length ? [`피하기: ${seed.avoidFoods.join(", ")}`] : [],

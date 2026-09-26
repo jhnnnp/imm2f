@@ -1,8 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { emptyDateBrief, missingSlot } from "@/features/ai/dateBrief";
-import { applyInterpretPatch, fallbackPatch, mergeDateState, shouldSkipDateNlu, shouldUseLocalInterpret } from "./interpretDateRequest";
+import { applyInterpretPatch, fallbackPatch, mergeDateState, shouldSkipDateNlu, shouldUseLocalInterpret, validateIntentPayload } from "./interpretDateRequest";
 
 describe("interpretDateRequest local merge", () => {
+  it("rejects an area invented from the user's colloquial verb", () => {
+    const result = applyInterpretPatch({ message: "부산 여행가려구",
+      patch: { addAreas: ["부산", "여행가려구"], intent: "create" } });
+    expect(result.state.areas).toEqual(["부산"]);
+  });
+  it("does not let a model turn an unspecified trip into a day trip", () => {
+    const result = applyInterpretPatch({ message: "부산 여행가려구",
+      patch: { addAreas: ["부산"], stayKind: "daytrip", nights: 0, intent: "create" } });
+    expect(result.state.areas).toEqual(["부산"]);
+    expect(result.state.stayKind).toBeNull();
+    expect(result.slot).toBe("span");
+  });
+  it("retains preferences when replacing the course, but releases the old venue pins", () => {
+    const previous = { ...emptyDateBrief(), areas: ["왕십리"], cuisine: "일식" as const, activities: ["meal", "cafe"] as const, timeWindow: "evening" as const, requiredPlaces: ["식당 A"], pinOrder: ["식당 A"], budgetWon: 70000 };
+    const next = mergeDateState({ ...previous, activities: [...previous.activities] }, { intent: "create", preserveExistingPlaces: false });
+    expect(next.cuisine).toBe("일식");
+    expect(next.activities).toEqual(["meal", "cafe"]);
+    expect(next.timeWindow).toBe("evening");
+    expect(next.budgetWon).toBe(70000);
+    expect(next.requiredPlaces).toEqual([]);
+    expect(next.pinOrder).toEqual([]);
+  });
+
+  it.each([{ addAreas: "성수" }, { addPlaces: [null] }, { indoorPlay: {} }, { preserveExistingPlaces: "false" }, { nights: "2" }])("rejects malformed intent data %j", value => {
+    expect(validateIntentPayload(value)).toBeNull();
+  });
+
+  it("ignores null optional fields without erasing prior constraints", () => {
+    expect(validateIntentPayload({ addAreas: [" 성수 "], cuisine: null, preserveExistingPlaces: true })).toEqual({ addAreas: ["성수"], preserveExistingPlaces: true });
+  });
+  it("does not store the JSON schema's objective placeholder", () => {
+    expect(validateIntentPayload({ objective: "short Korean date goal" })).toEqual({});
+  });
   it("skips NLU only for greetings, not for named destinations", () => {
     expect(shouldSkipDateNlu("안녕하세요")).toBe(true);
     expect(shouldSkipDateNlu("성수에서 데이트하고 싶어")).toBe(false);
@@ -45,6 +78,15 @@ describe("interpretDateRequest local merge", () => {
       patch: { addAreas: ["성수"], addActivities: ["meal", "walk", "exhibit"], stayKind: "date", intent: "create" },
     });
     expect(tourismMix.state.activities).toEqual([]);
+  });
+
+  it("does not turn an open dinner request into a model-guessed cuisine", () => {
+    const result = applyInterpretPatch({
+      message: "왕십리에서 저녁 먹고 예쁜 카페와 공연을 보고 싶어",
+      patch: { addAreas: ["왕십리"], addActivities: ["meal", "cafe"], cuisine: "한식", intent: "create" },
+    });
+    expect(result.state.cuisine).toBeNull();
+    expect(result.state.activities).toEqual(expect.arrayContaining(["meal", "cafe", "performance"]));
   });
 
   it("keeps LLM activities instead of unioning regex false positives", () => {

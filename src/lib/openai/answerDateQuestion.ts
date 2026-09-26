@@ -2,6 +2,7 @@ import type { AIChatCard, AIChatStop, AIPlannerState, DateChatTurn } from "@/fea
 import { selectedAreas, uniqueStrings } from "@/features/ai/dateBrief";
 import { completeJson, completeJsonWithWebSearch } from "./client";
 import { isOpenAiConfigured } from "./env";
+import { looksPolite } from "./composeDateChat";
 
 export type QuestionContextStop = Pick<AIChatStop, "name" | "meta" | "address" | "phone" | "mapUrl" | "startTime" | "durationMinutes" | "distanceFromPreviousMeters" | "rating" | "ratingCount" | "dishes" | "openingHours" | "factSourceUrl" | "reason">;
 
@@ -27,7 +28,7 @@ const LOOKUP_PROMPT = [
 
 /** Web-search answers arrive with inline markdown citations; the card shows the source on its own line instead. */
 function cleanReply(value: unknown) {
-  return String(value ?? "")
+  return (typeof value === "string" ? value : "")
     .replace(/\(\s*\[[^\]]*\]\([^)]*\)\s*\)/g, "")
     .replace(/\[([^\]]+)\]\((?:https?:\/\/)[^)]*\)/g, "$1")
     .replace(/https?:\/\/\S+/g, "")
@@ -72,54 +73,81 @@ function sourceLabel(url: string) {
   }
 }
 
-function mentionedStops(message: string, stops: QuestionContextStop[]) {
-  const msg = message.replace(/\s/g, "").toLowerCase();
-  const byName = stops.filter(stop => {
-    const compact = stop.name.replace(/\s/g, "").toLowerCase();
-    return compact.length >= 2 && (msg.includes(compact) || (compact.length >= 5 && msg.includes(compact.slice(0, 4))));
-  });
-  const ordinal = /첫\s*(?:번째|째)|처음|1번/.test(message) ? stops[0]
-    : /두\s*(?:번째|째)|2번/.test(message) ? stops[1]
-      : /세\s*(?:번째|째)|3번/.test(message) ? stops[2]
-        : /네\s*(?:번째|째)|4번/.test(message) ? stops[3]
-          : /마지막/.test(message) ? stops.at(-1)
-            : undefined;
-  const byKind = /식당|밥집|레스토랑/.test(message) ? stops.find(stop => /음식|식당|한식|일식|중식|양식|맛집/.test(stop.meta))
-    : /카페/.test(message) ? stops.find(stop => /카페|디저트|커피/.test(stop.meta))
-      : undefined;
-  return uniqueStrings([...byName, ordinal, byKind].map(stop => stop?.name), 3)
-    .map(name => stops.find(stop => stop.name === name))
-    .filter((stop): stop is QuestionContextStop => Boolean(stop));
+function choiceExplanation(stop: QuestionContextStop, state: AIPlannerState) {
+  const reason = stop.reason?.trim() ?? "";
+  if (reason && !/^\d(?:\.\d)?점(?:\s*·.*)?$/.test(reason)) return reason;
+  const area = state.placeAsk?.area || selectedAreas(state)[0] || "해당 동네";
+  const role = /카페|커피|디저트/.test(stop.meta) ? "카페" : /식당|음식|한식|일식|중식|양식/.test(stop.meta) ? "식당" : "장소";
+  return `${area}에서 ${role} 후보로 찾았고, 현재 확인된 정보는 ${reason || stop.meta}예요. 이곳만의 경험을 뒷받침할 근거는 아직 충분하지 않아요.`;
 }
 
-export function fallbackQuestionCard(message: string, stops: QuestionContextStop[], state: AIPlannerState): AIChatCard {
-  const focus = mentionedStops(message, stops)[0] ?? stops[0];
+/** Reuse facts already attached to the exact venue without a slower, less reliable model call. */
+function knownQuestionCard(message: string, stop: QuestionContextStop, state: AIPlannerState): AIChatCard | null {
+  if (/비교|차이|둘\s*중|더\s*(?:좋|나)|바뀌|변경|주차|예약|웨이팅|가격|얼마|비싸|저렴|애견|반려|휠체어|콜키지/.test(message)) return null;
+  const asks = [
+    { pattern: /왜\s*(?:골랐|추천)|고른\s*이유|추천한\s*이유/, value: true, text: choiceExplanation(stop, state) },
+    { pattern: /주소|어디에\s*있|위치/, value: stop.address, text: stop.address ? `주소는 ${stop.address}예요.` : "" },
+    { pattern: /전화|연락처/, value: stop.phone, text: stop.phone ? `연락처는 ${stop.phone}예요.` : "" },
+    { pattern: /메뉴|시그니처|대표\s*음식/, value: stop.dishes, text: stop.dishes ? `확인된 메뉴는 ${stop.dishes}예요. 방문 전 메뉴판을 다시 확인해 주세요.` : "" },
+    { pattern: /영업|휴무|몇\s*시|브레이크\s*타임/, value: stop.openingHours, text: stop.openingHours ? `기록된 영업 정보는 ${stop.openingHours}예요. 방문 전 최신 정보를 확인해 주세요.` : "" },
+  ].filter(item => item.pattern.test(message));
+  return asks.length === 1 && asks[0].value && asks[0].text
+    ? { headline: stop.name, lines: [asks[0].text], suggestions: [] }
+    : null;
+}
+
+export function resolveQuestionFocus(message: string, stops: QuestionContextStop[]) {
+  const compact = (text: string) => text.replace(/\s/g, "").toLowerCase();
+  const msg = compact(message);
+  const numbers = [...message.matchAll(/(?<!\d)(\d{1,2})\s*번/g)].map(match => Number(match[1]) - 1);
+  const ordinals = [/첫\s*(?:번째|째)|처음/, /두\s*(?:번째|째)/, /세\s*(?:번째|째)/, /네\s*(?:번째|째)/, /다섯\s*번째/];
+  ordinals.forEach((pattern, index) => { if (pattern.test(message)) numbers.push(index); });
+  if (/마지막/.test(message)) numbers.push(stops.length - 1);
+  // An explicit number outranks a category: "2번 카페" is one stop.
+  if (numbers.length) return {
+    stops: [...new Set(numbers)].filter(index => index >= 0 && index < stops.length).map(index => stops[index]),
+    invalid: numbers.some(index => index < 0 || index >= stops.length),
+    explicit: true,
+  };
+  const named = stops.filter(stop => compact(stop.name).length >= 2 && msg.includes(compact(stop.name)));
+  // A branch name containing a landmark is not a second reference to that landmark.
+  const exact = named.filter(stop => !named.some(other => other !== stop && compact(other.name).includes(compact(stop.name)) && compact(other.name) !== compact(stop.name)));
+  if (exact.length) return { stops: exact, invalid: false, explicit: true };
+  const category = /식당|밥집|레스토랑/.test(message) ? /음식|식당|한식|일식|중식|양식|맛집/
+    : /카페/.test(message) ? /카페|디저트|커피/
+      : /공연장/.test(message) ? /공연|연극|뮤지컬/ : null;
+  const matching = category ? stops.filter(stop => category.test(stop.meta)
+    && (!/카페/.test(message) || !/보드|만화|방탈출/.test(stop.meta + stop.name))) : [];
+  return { stops: matching, invalid: false, explicit: Boolean(category) };
+}
+
+export function fallbackQuestionCard(message: string, stops: QuestionContextStop[], state: AIPlannerState, target?: QuestionContextStop): AIChatCard {
+  const resolved = resolveQuestionFocus(message, stops);
+  const focus = target ?? (resolved.stops.length === 1 ? resolved.stops[0] : !resolved.explicit && stops.length === 1 ? stops[0] : undefined);
   const area = selectedAreas(state).join(" · ");
-  if (focus) {
-    const bits = [
-      focus.address ? `주소는 ${focus.address}` : "",
-      focus.phone ? `전화는 ${focus.phone}` : "",
-      focus.openingHours ? `이용시간은 ${focus.openingHours}` : "",
-      focus.rating != null ? `평점은 ${focus.rating}점${focus.ratingCount ? ` (후기 ${focus.ratingCount}개)` : ""}` : "",
-    ].filter(Boolean);
+  if (!target && (resolved.invalid || (resolved.explicit && !focus) || (!resolved.explicit && !focus && NEEDS_LOOKUP.test(message)))) {
     return {
-      headline: focus.name,
-      lines: [
-        bits.length
-          ? `${bits.join(", ")}이에요. 주차나 영업시간처럼 지금 확인되지 않은 부분은 카드의 카카오맵 보기에서 바로 볼 수 있어요.`
-          : "이 부분은 아직 확인된 정보가 없어요. 카드의 카카오맵 보기에서 영업시간과 후기를 바로 확인할 수 있어요.",
-      ],
-      suggestions: ["카페 변경 해줘", "다른 곳 더 보여줘", "이 코스 담기"],
+      headline: "어느 장소가 궁금하세요?",
+      lines: [resolved.invalid ? "말씀하신 번호에 해당하는 장소가 없어요. 장소 이름이나 표시된 번호를 알려 주세요." : "장소 이름이나 번호를 알려 주시면 그곳에 대해 답해 드릴게요."],
+      suggestions: [],
     };
+  }
+  if (focus) {
+    let answer = "질문하신 내용은 아직 확인하지 못했어요. 장소 상세에서 확인하거나 다른 질문을 해 주세요.";
+    if (/왜|이유/.test(message)) answer = choiceExplanation(focus, state);
+    else if (/영업|휴무|몇\s*시|언제|브레이크/.test(message)) answer = focus.openingHours
+      ? `확보한 이용시간 정보는 ${focus.openingHours}예요. 방문 전 최신 영업 여부를 확인해 주세요.` : "영업시간과 휴무일은 아직 확인하지 못했어요. 방문 전에 장소 상세나 매장에 확인해 주세요.";
+    else if (/메뉴|시그니처|대표/.test(message)) answer = focus.dishes ? `확인된 메뉴는 ${focus.dishes}예요.` : "대표 메뉴는 아직 확인하지 못했어요.";
+    else if (/주소|어디에|위치/.test(message)) answer = focus.address ? `주소는 ${focus.address}예요.` : "정확한 주소는 아직 확인하지 못했어요.";
+    else if (/전화|연락처/.test(message)) answer = focus.phone ? `연락처는 ${focus.phone}예요.` : "매장 연락처는 아직 확인하지 못했어요.";
+    else if (/주차/.test(message)) answer = "주차 가능 여부는 아직 확인하지 못했어요. 매장에 주차장 위치와 이용 조건을 확인해 주세요.";
+    else if (/예약/.test(message)) answer = "예약 가능 여부는 아직 확인하지 못했어요. 매장 예약 안내를 확인해 주세요.";
+    return { headline: focus.name, lines: [answer], suggestions: [] };
   }
   return {
     headline: "",
-    lines: [
-      area
-        ? `${area} 기준으로 이어가고 있어요. 어느 곳이 궁금한지, 아니면 새로 찾아볼지 말해 주세요.`
-        : "아직 정해진 코스가 없어요. 동네를 말해 주면 식당이나 카페부터 찾아볼게요.",
-    ],
-    suggestions: area ? ["코스 짜줘", "식당 추천해줘", "카페 추천해줘"] : ["성수 파스타 맛집 추천해줘", "을지로 저녁 데이트 코스 짜줘"],
+    lines: [area ? `${area}에서 어떤 부분이 궁금하세요? 장소 이름이나 질문을 조금 더 구체적으로 알려 주세요.` : "가고 싶은 동네나 궁금한 데이트 상황을 말해 주세요."],
+    suggestions: [],
   };
 }
 
@@ -130,11 +158,48 @@ export async function answerDateQuestion(input: {
   shownStops?: QuestionContextStop[];
   coupleTaste: { summary: string; commonTastes: string[]; avoidFoods: string[] };
   conversation?: DateChatTurn[];
+  /** Optional tighter budget for a supplementary, failure-isolated lookup. */
+  lookupTimeoutMs?: number;
 }): Promise<AIChatCard> {
-  const allStops = [...input.stops, ...(input.shownStops ?? [])];
-  const fallback = () => fallbackQuestionCard(input.message, allStops, input.state);
+  const visible = input.shownStops?.length && !/코스|일정/.test(input.message) ? input.shownStops : input.stops;
+  let resolved = resolveQuestionFocus(input.message, visible);
+  if (!resolved.explicit) {
+    const named = resolveQuestionFocus(input.message, [...input.stops, ...(input.shownStops ?? [])]);
+    if (named.explicit) resolved = named;
+  }
+  if (!resolved.explicit && /거기|그곳|그\s*카페|그\s*식당/.test(input.message)) {
+    for (const turn of [...(input.conversation ?? [])].reverse()) {
+      if (turn.role !== "user" || turn.text === input.message) continue;
+      const previous = resolveQuestionFocus(turn.text, visible);
+      if (previous.explicit) { resolved = previous; break; }
+    }
+  }
+  const focus = resolved.stops.length ? resolved.stops : !resolved.explicit && visible.length === 1 ? visible : [];
+  const fallback = () => fallbackQuestionCard(input.message, visible, input.state, focus.length === 1 ? focus[0] : undefined);
+  const comparison = /비교|차이|둘|어느|어디가|뭐가/.test(input.message);
+  if (resolved.invalid || (resolved.explicit && !focus.length) || (NEEDS_LOOKUP.test(input.message) && focus.length !== 1 && !comparison)) {
+    return { headline: "어느 장소가 궁금하세요?", lines: [resolved.invalid ? "말씀하신 번호에 해당하는 장소가 없어요. 표시된 번호나 장소 이름을 알려 주세요." : "장소 이름이나 번호를 알려 주시면 그곳에 대해 확인할게요."], suggestions: [] };
+  }
+  if (comparison && focus.length > 1 && NEEDS_LOOKUP.test(input.message)) {
+    const menu = /메뉴|시그니처|대표/.test(input.message);
+    const hours = /영업|휴무|몇\s*시|언제|브레이크/.test(input.message);
+    const other = /주차|예약|웨이팅|가격|얼마|비싸|저렴|애견|반려|휠체어|콜키지/.test(input.message);
+    const facts = menu && !hours && !other ? focus.map(stop => stop.dishes)
+      : hours && !menu && !other ? focus.map(stop => stop.openingHours) : [];
+    if (facts.length === focus.length && facts.every(Boolean)) {
+      return {
+        headline: "장소 비교",
+        lines: focus.map((stop, index) => `${stop.name}: ${facts[index]}${hours ? " (방문 전 최신 정보 확인 필요)" : ""}`),
+        suggestions: [],
+      };
+    }
+    return { headline: "아직 비교하기 어려워요", lines: ["두 장소의 해당 정보를 모두 확인하지 못했어요. 각 장소의 상세 정보에서 최신 내용을 확인해 주세요."], suggestions: [] };
+  }
+  if (focus.length === 1) {
+    const known = knownQuestionCard(input.message, focus[0], input.state);
+    if (known) return known;
+  }
   if (!isOpenAiConfigured()) return fallback();
-  const focus = mentionedStops(input.message, allStops);
   const lookup = NEEDS_LOOKUP.test(input.message) && focus.length > 0;
   const payload = {
     latestMessage: input.message.slice(0, 500),
@@ -153,25 +218,30 @@ export async function answerDateQuestion(input: {
     lastShownPlaces: (input.shownStops ?? []).slice(0, 6),
     couple: input.coupleTaste,
   };
-  const defaultChips = input.stops.length ? ["카페 변경 해줘", "한 곳 더 추가해줘", "이 코스 담기"] : ["코스 짜줘", "다른 곳 더 보여줘"];
+  const defaultChips = input.stops.length ? ["카페 변경 해줘", "한 곳 더 추가해줘"] : ["코스 짜줘", "다른 곳 더 보여줘"];
   try {
     if (lookup) {
+      let searchedSources: string[] = [];
       const searched = await completeJsonWithWebSearch<{ reply?: unknown; suggestions?: unknown; sourceUrl?: unknown }>({
         instructions: LOOKUP_PROMPT,
         payload,
         maxTokens: 1200,
-        timeoutMs: 40000,
+        timeoutMs: input.lookupTimeoutMs ?? 40000,
         requireSearch: true,
+        onSources: urls => { searchedSources = urls; },
       });
       const reply = cleanReply(searched?.reply);
-      if (reply) {
-        const source = sourceLabel(cleanSourceUrl(searched?.sourceUrl));
+      const sourceUrl = cleanSourceUrl(searched?.sourceUrl);
+      const citedBySearch = searchedSources.some(url => cleanSourceUrl(url) === sourceUrl);
+      if (reply && looksPolite(reply) && sourceUrl && citedBySearch) {
         return {
           headline: focus[0]?.name ?? "",
-          lines: [reply, ...(source ? [`출처: ${source}`] : [])],
+          lines: [reply],
+          sources: [{ label: sourceLabel(sourceUrl), url: sourceUrl }],
           suggestions: cleanSuggestions(searched?.suggestions, defaultChips),
         };
       }
+      return fallback();
     }
     const parsed = await completeJson<{ reply?: unknown; suggestions?: unknown }>({
       temperature: 0.5,
@@ -184,7 +254,7 @@ export async function answerDateQuestion(input: {
       ],
     });
     const reply = cleanReply(parsed?.reply);
-    if (!reply) return fallback();
+    if (!reply || !looksPolite(reply)) return fallback();
     return {
       headline: focus.length === 1 ? focus[0].name : "",
       lines: [reply],

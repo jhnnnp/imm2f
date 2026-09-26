@@ -14,7 +14,11 @@ export function scheduleGapMinutes(from?: [number, number] | null, to?: [number,
 }
 
 /** Schedule each day independently. Never publish a course outside the agreed window. */
-export function fitSchedule<T extends Stop>(stops: T[], start: string, end: string, mode: "walk" | "drive" | "transit" = "walk"): Array<T & { startTime: string }> | null {
+export function fitSchedule<T extends Stop>(stops: T[], start: string, end: string, mode: "walk" | "drive" | "transit" = "walk",
+  dayWindows: Record<number, { start?: string; end?: string }> = {},
+  verifiedTravelMinutes?: number[]): Array<T & { startTime: string }> | null {
+  if (verifiedTravelMinutes && (verifiedTravelMinutes.length !== Math.max(0, stops.length - 1)
+    || verifiedTravelMinutes.some(minutes => !Number.isFinite(minutes) || minutes < 0))) return null;
   if (![start, end].every(time => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))) return null;
   const begin = clockMinutes(start);
   let finish = clockMinutes(end);
@@ -22,9 +26,16 @@ export function fitSchedule<T extends Stop>(stops: T[], start: string, end: stri
   const output: Array<T & { startTime: string }> = [];
   const days = [...new Set(stops.map(stop => Math.max(0, Math.floor(stop.dayIndex ?? 0))))].sort((a, b) => a - b);
   for (const day of days) {
+    const dayStart = dayWindows[day]?.start ?? start;
+    const dayEnd = dayWindows[day]?.end ?? end;
+    if (![dayStart, dayEnd].every(time => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))) return null;
+    const dayBegin = dayWindows[day]?.start ? clockMinutes(dayStart) : begin;
+    const dayFinish = dayWindows[day]?.end ? clockMinutes(dayEnd) : finish;
+    if (dayFinish <= dayBegin) return null;
     const group = stops.filter(stop => Math.max(0, Math.floor(stop.dayIndex ?? 0)) === day);
-    const gaps = group.map((stop, index) => index ? scheduleGapMinutes(group[index - 1].coordinates, stop.coordinates, mode) : 0);
-    const available = finish - begin - gaps.reduce((a, b) => a + b, 0);
+    const gaps = group.map((stop, index) => index
+      ? verifiedTravelMinutes?.[index - 1] ?? scheduleGapMinutes(group[index - 1].coordinates, stop.coordinates, mode) : 0);
+    const available = dayFinish - dayBegin - gaps.reduce((a, b) => a + b, 0);
     const minimum = 30;
     if (available < minimum * group.length) return null;
     const durations = group.map(stop => Math.max(minimum, Math.min(180, Math.round(stop.durationMinutes) || 60)));
@@ -34,7 +45,7 @@ export function fitSchedule<T extends Stop>(stops: T[], start: string, end: stri
       const allowance = available - minimum * group.length;
       durations.forEach((duration, index) => { durations[index] = minimum + Math.floor((duration - minimum) * allowance / flexible); });
     }
-    let cursor = begin;
+    let cursor = dayBegin;
     group.forEach((stop, index) => {
       cursor += gaps[index];
       output.push({ ...stop, dayIndex: day, startTime: formatClock(cursor), durationMinutes: durations[index] });

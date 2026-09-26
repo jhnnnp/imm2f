@@ -39,6 +39,9 @@ export function isDateCourseCandidate(candidate: KakaoPlaceCandidate, requiredPl
   if (isRequiredNamedPlace(candidate, requiredPlaces)) return true;
   if (looksLikeNonVenue(candidate) && !isExplicitParkAccess(candidate, requiredPlaces)) return false;
   if (candidate.externalSource === "tourapi" && candidate.category === "festival") return true;
+  if (candidate.externalSource === "tourapi"
+    && ["tourist", "nature"].includes(candidate.category)
+    && candidate.address && candidate.coordinates.every(Number.isFinite)) return true;
   const groupCode = candidate.kakaoCategoryGroupCode ?? "";
   if (DATE_GROUP_CODES.has(groupCode)) return true;
   if (isExplicitParkAccess(candidate, requiredPlaces)) return true;

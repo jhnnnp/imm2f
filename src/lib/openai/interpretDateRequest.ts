@@ -27,8 +27,13 @@ import { completeJson } from "./client";
 import { isOpenAiConfigured } from "./env";
 import { chatSituationFromMessage } from "./composeDateChat";
 import { explicitDateConstraints } from "@/features/ai/dateConstraints";
+import { retrieveDatePlaybook } from "./datePlaybook";
+import { deriveDateUnderstanding, explicitFoodExclusions, sanitizeDatePreferences, sanitizeInferredPreferences } from "@/features/ai/dateIntent";
 
 export type IntentPayload = {
+  objective?: string;
+  preferences?: Partial<NonNullable<AIPlannerState["preferences"]>>;
+  inferredPreferences?: NonNullable<AIPlannerState["inferredPreferences"]>;
   intent?: AIPlannerState["intent"];
   addActivities?: string[];
   removeActivities?: string[];
@@ -46,11 +51,52 @@ export type IntentPayload = {
   startTime?: string | null;
   endTime?: string | null;
   preserveExistingPlaces?: boolean;
-    conversationNote?: string;
+  conversationNote?: string;
   addStop?: boolean;
   askSlot?: DateIntakeSlot | null;
   reply?: string;
 };
+
+/** Reject malformed model fields before they can erase or corrupt conversation state. */
+export function validateIntentPayload(value: unknown): IntentPayload | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  if (raw.objective != null) {
+    if (typeof raw.objective !== "string") return null;
+    const objective = raw.objective.trim().slice(0, 160);
+    if (objective && !/^(?:short Korean date goal|데이트 목표|string)$/i.test(objective)) result.objective = objective;
+  }
+  if (raw.preferences != null) {
+    const preferences = sanitizeDatePreferences(raw.preferences);
+    if (!preferences) return null;
+    result.preferences = preferences;
+  }
+  if (raw.inferredPreferences != null) {
+    if (!Array.isArray(raw.inferredPreferences)) return null;
+    result.inferredPreferences = raw.inferredPreferences;
+  }
+  for (const key of ["addActivities", "removeActivities", "addAreas", "removeAreas", "addPlaces", "removePlaces"]) {
+    if (raw[key] == null) continue;
+    if (!Array.isArray(raw[key]) || !raw[key].every(item => typeof item === "string")) return null;
+    result[key] = raw[key].map(item => item.trim()).filter(Boolean).slice(0, 12);
+  }
+  for (const key of ["preserveExistingPlaces", "addStop"]) {
+    if (raw[key] == null) continue;
+    if (typeof raw[key] !== "boolean") return null;
+    result[key] = raw[key];
+  }
+  for (const key of ["intent", "cuisine", "indoorPlay", "areaScope", "timeWindow", "stayKind", "pace", "startTime", "endTime", "conversationNote", "askSlot", "reply"]) {
+    if (raw[key] == null) continue;
+    if (typeof raw[key] !== "string") return null;
+    result[key] = raw[key].slice(0, 800);
+  }
+  if (raw.nights != null) {
+    if (typeof raw.nights !== "number" || !Number.isFinite(raw.nights)) return null;
+    result.nights = raw.nights;
+  }
+  return result as IntentPayload;
+}
 
 function asQuestionSlot(value: unknown): DateIntakeSlot | null {
   return value === "area" ? value : null;
@@ -97,7 +143,8 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
   const intent = ["create", "modify", "remove", "reset", "clarify"].includes(String(patch.intent))
     ? patch.intent as AIPlannerState["intent"]
     : previous ? "modify" : "create";
-  const reset = intent === "reset" || patch.preserveExistingPlaces === false;
+  const reset = intent === "reset";
+  const replacePlaces = reset || patch.preserveExistingPlaces === false;
   const addActivities = uniqueActivities(patch.addActivities ?? []);
   const removeActivities = uniqueActivities(patch.removeActivities ?? []);
   const activities = uniqueActivities([...(reset ? [] : base.activities), ...addActivities].filter(id => !removeActivities.includes(id)));
@@ -110,7 +157,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     return !areas.includes(place);
   });
   const removePlaces = uniqueStrings(patch.removePlaces ?? [], 4);
-  const requiredPlaces = uniqueStrings([...(reset ? [] : base.requiredPlaces), ...addPlaces].filter(place => !removePlaces.includes(place)), 6);
+  const requiredPlaces = uniqueStrings([...(replacePlaces ? [] : base.requiredPlaces), ...addPlaces].filter(place => !removePlaces.includes(place)), 6);
   const indoorPlay = patch.indoorPlay?.trim() || (reset ? null : base.indoorPlay);
   const timeWindow = asTimeWindow(patch.timeWindow) ?? (reset ? null : base.timeWindow);
   const timed = timeWindow && timeWindow !== base.timeWindow ? withTimeWindow(base, timeWindow) : base;
@@ -123,8 +170,18 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
   const areaScope = asAreaScope(patch.areaScope) ?? (reset ? null : base.areaScope);
   const located = withAreas({ ...base, areaScope }, areas);
   return {
+    objective: patch.objective?.trim() || (reset ? undefined : base.objective),
+    preferences: {
+      ...(reset ? { vibe: [] } : base.preferences ?? { vibe: [] }),
+      ...patch.preferences,
+      vibe: patch.preferences?.vibe ?? (reset ? [] : base.preferences?.vibe ?? []),
+    },
+    inferredPreferences: patch.inferredPreferences ?? (reset ? [] : base.inferredPreferences ?? []),
+    memorySuggestions: base.memorySuggestions,
+    excludedFoods: reset ? [] : base.excludedFoods ?? [],
+    foodAllergy: reset ? false : base.foodAllergy ?? false,
     intakeFocusDone: base.intakeFocusDone,
-    discovery: reset ? undefined : base.discovery,
+    discovery: replacePlaces ? undefined : base.discovery,
     budgetWon: base.budgetWon,
     walkingPreference: base.walkingPreference,
     activities,
@@ -143,7 +200,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     startTime: patch.startTime === undefined ? timed.startTime : asTime(patch.startTime) ?? timed.startTime,
     endTime: patch.endTime === undefined ? timed.endTime : asTime(patch.endTime) ?? timed.endTime,
     dateLabel: base.dateLabel || dateLabel || null,
-    pinOrder: reset ? [] : uniqueStrings(base.pinOrder, 8),
+    pinOrder: replacePlaces ? [] : uniqueStrings(base.pinOrder, 8),
     preserveExistingPlaces: patch.preserveExistingPlaces !== false,
     addStop: patch.addStop === true,
     intent,
@@ -174,13 +231,45 @@ function usableReply(value: unknown) {
 export function applyInterpretPatch(input: {
   message: string;
   previousState?: AIPlannerState;
+  currentPlaces?: string[];
   dateLabel?: string;
   patch: IntentPayload;
 }) {
-  const merged = mergeDateState(input.previousState, input.patch, input.dateLabel);
+  const compact = (value: string) => value.normalize("NFKC").replace(/\s/g, "").toLowerCase();
+  const written = compact(input.message);
+  const groundedPlace = (place: string) => place.length >= 2 && written.includes(compact(place));
+  const current = new Set((input.currentPlaces ?? []).map(compact));
+  const explicitStay = extractStay(input.message);
+  const understanding = deriveDateUnderstanding(input.message);
+  const unspecifiedTrip = /여행|놀러\s*가|휴가/.test(input.message) && !explicitStay
+    && !input.previousState?.stayKind;
+  const inferred = [...understanding.inferredPreferences,
+    ...(sanitizeInferredPreferences(input.patch.inferredPreferences, input.message) ?? [])]
+    .filter((item, index, all) => all.findIndex(other => other.value === item.value) === index).slice(0, 5);
+  const patch: IntentPayload = {
+    ...input.patch,
+    objective: input.patch.objective || understanding.objective,
+    preferences: { ...understanding.preferences, ...input.patch.preferences },
+    // A trip aspiration does not establish whether it lasts a day or a night.
+    // Keep the model's semantic intent, but require explicit evidence for duration.
+    stayKind: unspecifiedTrip ? null : input.patch.stayKind,
+    nights: unspecifiedTrip ? null : input.patch.nights,
+    // Cuisine is a hard filter. Never allow a model-inferred cuisine to turn
+    // an open dinner request into an unrequested Korean/Japanese/etc. meal.
+    cuisine: extractCuisine(input.message) ?? input.previousState?.cuisine ?? null,
+    addPlaces: input.patch.addPlaces?.filter(groundedPlace),
+    removePlaces: input.patch.removePlaces?.filter(place => groundedPlace(place) || !input.currentPlaces || current.has(compact(place))),
+    conversationNote: input.message,
+    inferredPreferences: inferred.length ? inferred : undefined,
+  };
+  const merged = mergeDateState(input.previousState, patch, input.dateLabel);
   const areas = groundedAreas(input.message, input.previousState, merged.areas);
   const activities = groundedActivities(input.message, input.previousState, merged.activities, merged);
-  const state = withAreas({ ...merged, ...explicitDateConstraints(input.message, input.previousState), activities, pendingSlot: null }, areas);
+  const exclusions = explicitFoodExclusions(input.message);
+  const state = withAreas({ ...merged, ...explicitDateConstraints(input.message, input.previousState), activities,
+    excludedFoods: [...new Set([...(merged.excludedFoods ?? []), ...exclusions])],
+    foodAllergy: merged.foodAllergy || (exclusions.length > 0 && /알레르기/.test(input.message)),
+    pendingSlot: null }, areas);
   const next = { ...state, pendingSlot: missingSlot(state) };
   return { state: next, slot: missingSlot(next), reply: usableReply(input.patch.reply) };
 }
@@ -204,12 +293,14 @@ export async function interpretDateRequest(input: {
   const fallback = () => applyInterpretPatch({
     message: input.message,
     previousState: input.previousState,
+    currentPlaces: input.previousPlaceNames,
     dateLabel: input.dateLabel,
     patch: localPatch,
   });
   if (!isOpenAiConfigured() || shouldUseLocalInterpret(input.message, input.previousState)) return fallback();
   try {
-    const patch = await completeJson<IntentPayload>({
+    const interpretationRules = await retrieveDatePlaybook(input.message, input.previousState ?? emptyDateBrief(), "interpretation", 4);
+    const response = await completeJson<unknown>({
       temperature: 0,
       maxTokens: 1200,
       reasoningEffort: "low",
@@ -217,18 +308,16 @@ export async function interpretDateRequest(input: {
         {
           role: "system",
           content: [
-            "You read an ongoing Korean couple-date chat. Extract constraints from THIS turn. You do not design the course.",
+            "You understand the goal and preferences in an ongoing Korean couple-date chat. Extract explicit constraints from THIS turn and infer soft ranking preferences. The course planner chooses venues later.",
             "Return JSON only:",
-            '{"intent":"create|modify|remove|reset|clarify","addActivities":[],"removeActivities":[],"addAreas":[],"removeAreas":[],"addPlaces":[],"removePlaces":[],"addStop":false,"cuisine":null,"indoorPlay":null,"areaScope":null,"timeWindow":null,"stayKind":null,"nights":null,"pace":null,"startTime":null,"endTime":null,"preserveExistingPlaces":true,"conversationNote":"short Korean restatement of the latest user meaning","askSlot":null,"reply":""}',
+            '{"intent":"create|modify|remove|reset|clarify","objective":"","preferences":{"vibe":[],"novelty":null,"intimacy":null,"activityLevel":null,"crowdTolerance":null,"scenicPreference":null,"foodImportance":null,"walkingTolerance":null},"inferredPreferences":[],"addActivities":[],"removeActivities":[],"addAreas":[],"removeAreas":[],"addPlaces":[],"addStop":false,"cuisine":null,"indoorPlay":null,"areaScope":null,"timeWindow":null,"stayKind":null,"nights":null,"pace":null,"startTime":null,"endTime":null,"preserveExistingPlaces":true,"conversationNote":"","askSlot":null,"reply":""}',
             "latestMessage is the user's actual turn. recentTurns is the chat. currentPlaces is the course already on screen. Interpret meaning, not keywords. Chip labels like 일정추가, 카페변경, 식당변경, 일정제외 are user turns too.",
             "Never invent a city or neighborhood the user did not write. addAreas may only contain names that appear in latestMessage.",
-            "From 여행가고싶어, 데이트하고싶어, 놀러가고싶어 with no place: addAreas:[], askSlot:\"area\", intent:\"clarify\", reply asking where to go. Do not copy example cities into addAreas.",
-            "From 군산 여행 가려고 하는데 일정 짜줘: addAreas:[\"군산\"], stayKind null unless nights were said, reply empty. From 군산 1박2일: addAreas:[\"군산\"], stayKind:\"overnight\", nights:1.",
+            "If the user intends a trip or date but gives no destination, ask for the destination. Never copy names from the guidance into addAreas.",
             "When the user names a place but not activities, addActivities must be []. Do not guess cafe+walk+exhibit. Do not guess meal+walk+tourism. The course judge chooses the mix from real shops.",
-            "If they named activities, use only those. 성수에서 전시 보고 싶어 → addActivities:[\"exhibit\"]. 성수 카페 투어 → [\"cafe\"]. 파스타 먹고 성수 걷고 싶어 → [\"meal\",\"walk\"].",
-            "From 성수에서 데이트하고 싶어 / 성수 갈래: addAreas:[\"성수\"], stayKind:\"date\", nights:0, addActivities:[].",
-            "From 포천 여행 짜줘: addAreas:[\"포천\"], stayKind null unless nights were said, addActivities:[]. Not a cafe crawl.",
-            "stayKind: 데이트→date, 당일치기/하루만→daytrip, 1박2일/2박3일/여행+박→overnight. Bare 여행 with no nights leaves stayKind null so the app can ask.",
+            "Only explicitly requested activities become hard requirements. A destination alone does not imply a cafe, walk, meal, or attraction.",
+            "Infer a date objective and soft preferences from the whole utterance. For example, 오랜만에 만나 조용히 대화 implies a conversational reunion, high intimacy and low crowd tolerance. These are ranking hints, NEVER hard activity or venue requirements. Cite an exact latestMessage phrase for each inferred preference and express confidence 0..1. An explicit food restriction is a hard constraint, not a preference.",
+            "Use stayKind date for a date, daytrip for a specified one-day trip, overnight with nights for an explicitly specified overnight trip. An unspecified trip length stays null so the app can ask.",
             "If the user names a destination, never askSlot area. Time only if they mentioned when, not because they said 저녁 먹고 싶어.",
             "askSlot may be area only when no city or neighborhood can be inferred. Never ask activity, cuisine, scope, or indoor.",
             "reply is empty whenever a course can be generated. When asking where to go, one polite 해요체 sentence. No emoji, no 반말, no vibe adjectives.",
@@ -246,6 +335,7 @@ export async function interpretDateRequest(input: {
             "conversationNote restates their meaning in short Korean. Do not rewrite it into a canned command.",
             "areaScope only if the user mentioned range. Time only if they mentioned when, not because they said 저녁 먹고 싶어. Cuisine only if they mentioned food type.",
             "Never return clarifyingQuestion. Never return the boolean or string false.",
+            "Apply the supplied interpretationRules to the whole utterance before extracting slots. They are reasoning guidance, never facts about the user.",
           ].join(" "),
         },
         {
@@ -255,14 +345,17 @@ export async function interpretDateRequest(input: {
             currentPlaces: input.previousPlaceNames,
             recentTurns: (input.conversation ?? []).slice(-8),
             latestMessage: input.message,
+            interpretationRules,
           }),
         },
       ],
     });
+    const patch = validateIntentPayload(response);
     if (!patch) return fallback();
     return applyInterpretPatch({
       message: input.message,
       previousState: input.previousState,
+      currentPlaces: input.previousPlaceNames,
       dateLabel: input.dateLabel,
       patch: { ...patch, askSlot: asQuestionSlot(patch.askSlot) },
     });

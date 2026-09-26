@@ -39,6 +39,14 @@ describe("dateCourseCandidate", () => {
     expect(isDateCourseCandidate(festival, [])).toBe(true);
   });
 
+  it("admits a located official attraction but rejects a locationless listing", () => {
+    const attraction = candidate({ externalSource: "tourapi", name: "군산 근대건축관", category: "tourist",
+      categoryLabel: "관광명소", detailedCategory: "관광명소", address: "전북 군산시 해망로 214",
+      kakaoCategoryGroupCode: undefined });
+    expect(isDateCourseCandidate(attraction, [])).toBe(true);
+    expect(isDateCourseCandidate({ ...attraction, address: "" }, [])).toBe(false);
+  });
+
   it("does not treat a longer name as the exact requested venue", () => {
     const other = candidate({ name: "소월아트홀 주차장", category: "tourist", categoryLabel: "주차장", kakaoCategoryGroupCode: undefined });
     expect(isDateCourseCandidate(other, ["소월아트홀"])).toBe(false);

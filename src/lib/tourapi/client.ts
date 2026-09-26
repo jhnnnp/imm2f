@@ -49,6 +49,8 @@ type TourItem = {
 };
 
 type TourResponse = {
+  resultCode?: string;
+  resultMsg?: string;
   response?: {
     header?: { resultCode?: string; resultMsg?: string };
     body?: {
@@ -160,7 +162,8 @@ function toCandidate(item: TourItem, category: PlaceCategoryId): DiscoverCandida
     coordinates: [lng, lat],
     image: item.firstimage || item.firstimage2 || item.originimgurl || undefined,
     openingHours: period || undefined,
-    detailedCategory: period ? `축제 > ${period}` : "축제",
+    detailedCategory: category === "festival" ? (period ? `축제 > ${period}` : "축제")
+      : category === "stay" ? "숙박" : "관광명소",
   };
 }
 
@@ -192,9 +195,9 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
       return { ok: false, code: "invalid_key", error: "TourAPI 키가 거부되었어요. data.go.kr에서 KorService2 활용신청과 키를 확인해 주세요." };
     }
     const payload = JSON.parse(text) as TourResponse;
-    const code = payload.response?.header?.resultCode ?? "";
+    const code = payload.response?.header?.resultCode ?? payload.resultCode ?? "";
     if (code && code !== "0000") {
-      return { ok: false, code: "unavailable", error: payload.response?.header?.resultMsg || "장소를 불러오지 못했어요." };
+      return { ok: false, code: "unavailable", error: payload.response?.header?.resultMsg || payload.resultMsg || "장소를 불러오지 못했어요." };
     }
     return { ok: true, payload, page: Number(params.pageNo || "1") };
   } catch {
@@ -372,9 +375,9 @@ export async function loadTourPlaceDetail(contentId: string, category: PlaceCate
   const id = contentId.trim();
   if (!id) return null;
   const [common, intro, images] = await Promise.all([
-    tourFetch("detailCommon2", { contentId: id, overviewYN: "Y", defaultYN: "Y", firstImageYN: "Y" }),
+    tourFetch("detailCommon2", { contentId: id }),
     tourFetch("detailIntro2", { contentId: id, contentTypeId: contentTypeId(category) }),
-    tourFetch("detailImage2", { contentId: id, imageYN: "Y", subImageYN: "Y" }),
+    tourFetch("detailImage2", { contentId: id }),
   ]);
   const commonItem = common.ok ? asItems(common.payload.response)[0] : undefined;
   const introItem = intro.ok ? asItems(intro.payload.response)[0] : undefined;
@@ -386,4 +389,13 @@ export async function loadTourPlaceDetail(contentId: string, category: PlaceCate
   const facts = detailFacts(introItem, category);
   if (!overview && !image && !openingHours && !homepage && !facts.length) return null;
   return { overview, image, openingHours, homepage, facts };
+}
+
+/** One request per attraction for planning evidence; images and facilities are
+ * fetched separately only when a detail view needs them. */
+export async function loadTourPlaceOverview(contentId: string): Promise<string> {
+  const id = contentId.trim();
+  if (!id) return "";
+  const result = await tourFetch("detailCommon2", { contentId: id });
+  return result.ok ? cleanText(asItems(result.payload.response)[0]?.overview) : "";
 }

@@ -1,5 +1,8 @@
-import { RouteSuspense } from "@/components/layout/RouteSuspense";
+import { Suspense } from "react";
+import { PageLoading } from "@/components/layout/PageLoading";
 import { HomeDashboard } from "@/features/home/components/HomeDashboard";
+import { HomeRecentMemory } from "@/features/home/components/HomeRecentMemory";
+import { RecentActivityPreview } from "@/features/collaboration/components/RecentActivityPreview";
 import { listMemories } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
 import { listDateDrafts, loadCouplePlan } from "@/features/planning/actions";
@@ -14,18 +17,48 @@ function seoulTodayIso() {
   }).format(new Date());
 }
 
+function HomeMemoryLoading() {
+  return (
+    <section className="recent-memory paper-card" aria-busy="true">
+      <div className="section-heading compact">
+        <div><span className="eyebrow">RECENT MEMORY</span><h2>가장 가까운 장면</h2></div>
+      </div>
+      <p className="form-hint">기억을 불러오는 중이에요.</p>
+    </section>
+  );
+}
+
 export default function HomePage() {
   return (
-    <RouteSuspense>
-      <HomePageContent />
-    </RouteSuspense>
+    <>
+      <div className="page-intro home-intro">
+        <div>
+          <span className="eyebrow">ONLY US</span>
+          <h1>오늘도,<br /><em className="home-word is-us">우리</em>의 <em className="home-word is-log">기록</em>은 계속되고 있어요.</h1>
+        </div>
+        <p className="hand-note">just us.</p>
+      </div>
+      <Suspense fallback={<PageLoading />}>
+        <HomePageContent />
+      </Suspense>
+      <div className="home-bottom-grid">
+        <Suspense fallback={<HomeMemoryLoading />}>
+          <HomeMemoryContent />
+        </Suspense>
+        <section className="activity-preview paper-card">
+          <div className="section-heading compact">
+            <div><span className="eyebrow">RECENT ACTIVITY</span><h2>우리의 최근 변화</h2></div>
+          </div>
+          <RecentActivityPreview />
+        </section>
+      </div>
+    </>
   );
 }
 
 async function HomePageContent() {
-  const [placesResult, memoriesResult, trip, date, drafts] = await Promise.all([
+  const [placesResult, trip, date, drafts] = await Promise.all([
     listPlaces(),
-    listMemories({ photos: "cover" }),
     loadCouplePlan("trip"),
     loadCouplePlan("date"),
     listDateDrafts(),
@@ -45,8 +78,6 @@ async function HomePageContent() {
   return (
     <HomeDashboard
       places={placesResult.persist ? placesResult.places : []}
-      memories={memoriesResult.persist ? memoriesResult.memories : []}
-      activities={[]}
       tripItems={trip.items}
       tripTitle={trip.title}
       tripStartDate={trip.startDate}
@@ -56,4 +87,9 @@ async function HomePageContent() {
       dateStartDate={nextDate.date || null}
     />
   );
+}
+
+async function HomeMemoryContent() {
+  const result = await listMemories({ photos: "cover" });
+  return <HomeRecentMemory memories={result.persist ? result.memories : []} />;
 }

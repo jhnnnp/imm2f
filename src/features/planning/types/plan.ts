@@ -117,7 +117,9 @@ export type DatePreviousStop = {
 export type AIChatCard = {
   headline: string;
   lines: string[];
+  routeBasis?: "straight_line" | "walking";
   stops?: AIChatStop[];
+  sources?: Array<{ label: string; url: string }>;
   suggestions?: string[];
   followUp?: string;
 };
@@ -126,9 +128,12 @@ export type AIPlannerReply = {
   design?: {
     theme: string;
     alternativesConsidered: number;
-    routeBasis: "straight_line";
+    routeBasis: "straight_line" | "walking";
     totalDistanceMeters: number;
     evidenceCount: number;
+    scoreBreakdown?: { venues: number; evidence: number; diversity: number; route: number; flow: number; violations: number };
+    /** Coverage of the selected stops; never a human quality score. */
+    evidenceCoverage?: { supportedStops: number; totalStops: number; missingPlaceIds: string[] };
     degraded: boolean;
     rejectionReasons?: string[];
   };
@@ -166,6 +171,24 @@ export type AIPlannerChat = {
 export type AIPlannerResult = AIPlannerReply | AIPlannerClarification | AIPlannerChat;
 
 export type AIPlannerState = {
+  /** The current date's goal, separate from mandatory activities. */
+  objective?: string;
+  preferences?: {
+    vibe: string[];
+    novelty?: number;
+    intimacy?: number;
+    activityLevel?: number;
+    crowdTolerance?: number;
+    scenicPreference?: number;
+    foodImportance?: number;
+    walkingTolerance?: number;
+  };
+  /** Model hypotheses are never promoted to hard constraints. */
+  inferredPreferences?: Array<{ value: string; confidence: number; evidence: string }>;
+  memorySuggestions?: { activities: DateActivityId[]; cuisine: DateCuisineChoice | null };
+  memorySignals?: Array<{ placeName: string; reaction: "crowded" | "liked" | "disliked"; confidence: number }>;
+  excludedFoods?: string[];
+  foodAllergy?: boolean;
   /** A broad first request has already passed the optional date-focus question. */
   intakeFocusDone?: boolean;
   discovery?: {

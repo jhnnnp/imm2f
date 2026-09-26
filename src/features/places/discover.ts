@@ -73,6 +73,7 @@ export function placeToCandidate(place: Place): DiscoverCandidate | null {
     kakaoCategoryGroupCode: place.kakaoCategoryGroupCode,
     distanceMeters: place.distanceMeters,
     openingHours: place.openingHours ?? undefined,
+    expectedCostTwo: place.expectedCostTwo,
   };
 }
 

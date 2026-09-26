@@ -20,10 +20,16 @@ import {
   proximityToAreaScore,
   capLongHops,
   scoreDateCandidate,
+  schedulePerformanceCourse,
   spreadConsecutiveStops,
   stopMatchesActivity,
   validateModelRows,
 } from "./dateCourse";
+
+it("filters child-only attractions from a couple trip unless explicitly requested by name", () => {
+  expect(isOffDateVenue(candidate({ name: "우리 놀이터 마루달", category: "tourist", categoryLabel: "관광지" }))).toBe(true);
+  expect(isOffDateVenue(candidate({ name: "어린이대공원", category: "nature", categoryLabel: "공원" }))).toBe(false);
+});
 
 function candidate(overrides: Partial<DiscoverCandidate> = {}): DiscoverCandidate {
   return {
@@ -795,5 +801,19 @@ describe("dateCourse", () => {
       [{ name: "메시" }, { name: "서울숲" }],
       "성수",
     )).toBe("성수에서 메시 다음에 서울숲 순으로 이어가요.");
+  });
+
+  it("anchors a verified one-day performance and rejects an impossible pre-show course", () => {
+    const meal = candidate({ externalPlaceId: "meal", name: "식당", category: "restaurant", coordinates: [127.035, 37.559] });
+    const cafe = candidate({ externalPlaceId: "cafe", name: "카페", category: "cafe", coordinates: [127.036, 37.559] });
+    const hall = candidate({ externalPlaceId: "hall", name: "소월아트홀", category: "photo", categoryLabel: "공연장",
+      detailedCategory: "문화,예술 > 공연장", coordinates: [127.0362, 37.5593],
+      performanceEvent: { id: "PF297542", title: "콘서트", dateYmd: "20261009", showtimes: ["19:00"],
+        genre: "클래식", sourceUrl: "https://kopis.or.kr/event", checkedAt: "2026-09-24" } });
+    const rows = [meal, cafe, hall].map(place => ({ id: `kakao:${place.externalPlaceId}`, day_index: 0 }));
+    const state = { ...emptyDateBrief(), dateLabel: "2026-10-09", startTime: "17:00", endTime: "22:00" };
+    const scheduled = schedulePerformanceCourse(rows, [meal, cafe, hall], state, "17:00");
+    expect(scheduled?.map(row => row.start_time)).toEqual(["17:00", expect.any(String), "19:00"]);
+    expect(schedulePerformanceCourse(rows, [meal, cafe, hall], { ...state, startTime: "18:30" }, "18:30")).toBeNull();
   });
 });

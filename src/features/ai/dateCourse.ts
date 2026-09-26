@@ -1,4 +1,5 @@
-import { fitSchedule } from "./schedule";
+import { fitSchedule, scheduleGapMinutes } from "./schedule";
+import { tripLocalWindows } from "./planningSupport";
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
 import { distanceMeters } from "@/features/places/geo";
 import type { RankedCandidate } from "@/lib/openai/rank";
@@ -15,6 +16,7 @@ import {
   matchesIndoorType,
   matchesTerm,
   assumedTimeWindow,
+  tripDayYmd,
   selectedAreas,
   uniqueActivities,
   uniqueStrings,
@@ -56,6 +58,7 @@ const HARSH_HOE = /회집|횟집|활어회|수산시장/;
 const HARSH_MEAT = /막창|대창|닭발|족발|보쌈/;
 const HARSH_BAR = /포차|호프|주점|실내포차/;
 const HARSH_OTHER = /편의점|마트|슈퍼마켓|PC방|피시방|모텔|여관|병원|의원|약국|부동산|주차장|주유소|사주|타로|점집|신점|운세|철학관|작명/;
+const CHILD_ONLY = /키즈카페|유아\s*(?:전용|놀이터|체험)|어린이\s*(?:전용|놀이터|체험관)|우리\s*놀이터/;
 const DATE_JUNK = /분식|패스트푸드|패스트\s*푸드|도시락|김밥|컵밥|맥도날드|롯데리아|버거킹|맘스터치|서브웨이|노브랜드버거|\bKFC\b|테마카페|룸카페/;
 const TAKEOUT_COFFEE = /메가\s*MGC|메가MGC|메가커피|컴포즈\s*커피|컴포즈커피|\bCompose\s*Coffee\b|빽다방|Paik'?s\s*Coffee|더\s*벤티|더벤티|The\s*Venti/i;
 const STRONG_DATE = /베이커리|브런치|파스타|이탈리|양식|한식|일식|중식|레스토랑|다이닝|와인|디저트|티룸|갤러리|전시|공원|루프탑|북카페|한옥|전망|미술관|박물관|수목원|계곡|호수|시장|관광|고깃집/;
@@ -77,7 +80,7 @@ export function allowsHarshDateMeal(message: string, cuisine: AIPlannerState["cu
 
 export function isOffDateVenue(candidate: DiscoverCandidate, ctx?: { allowHarsh?: HarshMealAllow; allowKaraoke?: boolean }) {
   const blob = venueBlob(candidate);
-  if (HARSH_OTHER.test(blob) || DATE_JUNK.test(blob) || TAKEOUT_COFFEE.test(blob)) return true;
+  if (HARSH_OTHER.test(blob) || CHILD_ONLY.test(blob) || DATE_JUNK.test(blob) || TAKEOUT_COFFEE.test(blob)) return true;
   if (!ctx?.allowKaraoke && /노래방|코인노래/.test(blob)) return true;
   const allow = ctx?.allowHarsh ?? { hoe: false, meat: false, bar: false };
   if (!allow.hoe && HARSH_HOE.test(blob)) return true;
@@ -410,13 +413,87 @@ export function mealAnchorMinutes(state: AIPlannerState, dayStart: string) {
   return [18 * 60];
 }
 
+/** Anchor a dated, KOPIS-confirmed performance to its published showtime.
+ * Other stops may shorten to 35 minutes, but the show itself never moves. */
+export function schedulePerformanceCourse(
+  rows: DateCourseRow[], candidates: DiscoverCandidate[], state: AIPlannerState, dayStart: string,
+): DateCourseRow[] | null | undefined {
+  const days = courseSize(state).days;
+  if (!state.dateLabel) return undefined;
+  if (days > 1) {
+    const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
+    if (!rows.some(row => byId.get(String(row.id ?? ""))?.performanceEvent)) return undefined;
+    const windows = tripLocalWindows(state.userRequests ?? [], days);
+    const result: DateCourseRow[] = [];
+    for (let day = 0; day < days; day++) {
+      const group = rows.filter(row => (row.day_index ?? 0) === day).map(row => ({ ...row, day_index: 0 }));
+      if (!group.length) continue;
+      const singleDayState: AIPlannerState = { ...state, stayKind: "daytrip", nights: 0,
+        dateLabel: tripDayYmd(state, day) };
+      const scheduled = assignStartTimes(group, candidates, singleDayState, windows[day]?.start ?? dayStart);
+      if (!scheduled.length) return null;
+      const last = scheduled.at(-1)!;
+      const finish = clockMinutes(last.start_time!) + Number(last.duration_minutes ?? 0);
+      const departure = windows[day]?.end;
+      if (departure && finish > clockMinutes(departure)) return null;
+      result.push(...scheduled.map(row => ({ ...row, day_index: day })));
+    }
+    return result;
+  }
+  const dateYmd = state.dateLabel.replace(/\D/g, "").slice(0, 8);
+  const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
+  const anchored = rows.map((row, index) => ({ row, index, candidate: byId.get(String(row.id ?? "")) }))
+    .find(item => item.candidate?.performanceEvent?.dateYmd === dateYmd);
+  if (!anchored?.candidate?.performanceEvent) return undefined;
+  const event = anchored.candidate.performanceEvent;
+  const begin = clockMinutes(dayStart);
+  const window = assumedTimeWindow(state);
+  const end = window.specified ? clockMinutes(window.endTime) : 23 * 60 + 59;
+  const mode = state.discovery?.transport ?? (isTravelPlan(state) ? "transit" : "walk");
+  const gap = rows.map((row, index) => index ? scheduleGapMinutes(
+    byId.get(String(rows[index - 1].id ?? ""))?.coordinates, byId.get(String(row.id ?? ""))?.coordinates, mode) : 0);
+  const desired = rows.map(row => {
+    const candidate = byId.get(String(row.id ?? ""));
+    return Math.max(35, Math.min(180, Number(row.duration_minutes) || (candidate ? defaultDuration(candidate, state.pace) : 70)));
+  });
+  desired[anchored.index] = Math.max(90, desired[anchored.index]);
+  const before = anchored.index;
+  const travelBefore = gap.slice(1, before + 1).reduce((sum, value) => sum + value, 0);
+  for (const showtime of event.showtimes) {
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(showtime)) continue;
+    const show = clockMinutes(showtime);
+    const available = show - begin - travelBefore - (before ? 10 : 0);
+    if (available < before * 35 || show < begin) continue;
+    const durations = [...desired];
+    const wanted = durations.slice(0, before).reduce((sum, value) => sum + value, 0);
+    if (wanted > available) {
+      const flex = wanted - before * 35;
+      const allowed = available - before * 35;
+      for (let index = 0; index < before; index++) durations[index] = 35 + Math.floor((durations[index] - 35) * allowed / Math.max(1, flex));
+    }
+    const result: DateCourseRow[] = [];
+    let cursor = begin;
+    for (let index = 0; index < rows.length; index++) {
+      if (index === before) cursor = show;
+      else if (index > 0) cursor += gap[index];
+      result.push({ ...rows[index], day_index: 0, start_time: formatClock(cursor), duration_minutes: durations[index] });
+      cursor += durations[index];
+    }
+    if (cursor <= end) return result;
+  }
+  return null;
+}
+
 export function assignStartTimes(
   rows: DateCourseRow[],
   candidates: DiscoverCandidate[],
   state: AIPlannerState,
   dayStart = assumedTimeWindow(state).startTime,
 ): DateCourseRow[] {
+  const performanceSchedule = schedulePerformanceCourse(rows, candidates, state, dayStart);
+  if (performanceSchedule !== undefined) return performanceSchedule ?? [];
   const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
+  const localWindows = tripLocalWindows(state.userRequests ?? [], courseSize(state).days);
   const scheduled = fitSchedule(rows.map(row => {
     const candidate = byId.get(String(row.id ?? ""));
     return {
@@ -425,12 +502,14 @@ export function assignStartTimes(
       coordinates: candidate?.coordinates,
       durationMinutes: Number(row.duration_minutes) || (candidate ? defaultDuration(candidate, state.pace) : 70),
     };
-  }), dayStart, assumedTimeWindow(state).specified ? assumedTimeWindow(state).endTime : "23:59", state.discovery?.transport ?? (isTravelPlan(state) ? "transit" : "walk"));
+  }), dayStart, assumedTimeWindow(state).specified ? assumedTimeWindow(state).endTime : "23:59",
+  state.discovery?.transport ?? (isTravelPlan(state) ? "transit" : "walk"), localWindows);
   if (!scheduled) return [];
   // Keep dinner in the evening when an afternoon course has room to wait.
   // This only delays the meal and following stops, and never exceeds the window.
-  const end = clockMinutes(assumedTimeWindow(state).specified ? assumedTimeWindow(state).endTime : "23:59");
   for (const day of new Set(scheduled.map(stop => stop.dayIndex))) {
+    const dayStartTime = localWindows[day]?.start ?? dayStart;
+    const end = clockMinutes(localWindows[day]?.end ?? (assumedTimeWindow(state).specified ? assumedTimeWindow(state).endTime : "23:59"));
     const group = scheduled.filter(stop => stop.dayIndex === day);
     const mealIndex = group.findIndex(stop => {
       const candidate = byId.get(String(stop.row.id ?? ""));
@@ -438,7 +517,7 @@ export function assignStartTimes(
     });
     if (mealIndex < 0) continue;
     const meal = group[mealIndex];
-    const anchor = mealAnchorMinutes(state, dayStart).find(value => value >= clockMinutes(meal.startTime));
+    const anchor = mealAnchorMinutes(state, dayStartTime).find(value => value >= clockMinutes(meal.startTime));
     if (anchor == null || clockMinutes(meal.startTime) >= anchor) continue;
     const delay = anchor - clockMinutes(meal.startTime);
     const last = group.at(-1)!;

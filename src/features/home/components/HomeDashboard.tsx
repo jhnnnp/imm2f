@@ -3,15 +3,11 @@
 import { AppLink as Link } from "@/components/layout/AppLink";
 import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import type { Place } from "@/features/places/types/place";
-import type { Memory } from "@/features/memories/types";
-import { useResolvedMemories } from "@/features/memories/resolvePhotoUrls";
 import type { PlanItem } from "@/features/planning/types/plan";
-import { type CoupleActivity } from "@/features/collaboration/types";
 import type { PlaceCategoryId } from "@/features/places/types/place";
 import { PLACE_CATEGORIES } from "@/features/places/config/placeCategories";
 import { PlaceCategoryIcon } from "@/features/places/components/PlaceCategoryIcon";
 import { addDays, formatKoDate, formatKoShort, toIsoDate } from "@/lib/dates";
-import { RecentActivityPreview } from "@/features/collaboration/components/RecentActivityPreview";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { withSubjectParticle } from "@/features/auth/koreanName";
 
@@ -58,13 +54,6 @@ function journeyHeadline(title: string, items: PlanItem[], places: Place[], dayC
   const district = first?.district?.replace(/시$|군$|구$/u, "") || first?.name;
   if (!district) return trimmed || "우리가 고른 여행";
   return dayCount <= 1 ? `${district}에서의 하루` : `${district}에서 머문 ${stayWord(dayCount)}`;
-}
-
-function memoryCover(memory: Memory) {
-  if (memory.coverUrl) return { kind: "image" as const, src: memory.coverUrl };
-  const photo = memory.photos.find(item => item.storageUrl)?.storageUrl;
-  if (photo) return { kind: "image" as const, src: photo };
-  return { kind: "letter" as const };
 }
 
 function tripRange(startDate: string | null, dayCount: number) {
@@ -460,7 +449,6 @@ function PlaceIndexCard({
 
 export function HomeDashboard({
   places,
-  memories,
   tripItems,
   tripTitle,
   tripStartDate,
@@ -470,8 +458,6 @@ export function HomeDashboard({
   dateStartDate,
 }: {
   places: Place[];
-  memories: Memory[];
-  activities: CoupleActivity[];
   tripItems: PlanItem[];
   tripTitle: string;
   tripStartDate: string | null;
@@ -481,7 +467,6 @@ export function HomeDashboard({
   dateStartDate: string | null;
 }) {
   const session = useAppSession();
-  const resolvedMemories = useResolvedMemories(memories);
   const livePlaces = places;
   const liveTrip = { items: tripItems, title: tripTitle, startDate: tripStartDate, dayCount: tripDayCount };
   const liveDate = { items: dateItems, title: dateTitle, startDate: dateStartDate };
@@ -495,20 +480,11 @@ export function HomeDashboard({
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? "파트너" : "파트너";
   const shownPlaces = shared.length ? shared : mine;
   const shownPlacesLabel = shared.length ? "둘 다 가고 싶은 곳" : "내가 담아 둔 곳";
-  const memory = resolvedMemories[0] ?? null;
-  const cover = memory ? memoryCover(memory) : null;
   const heading = journeyHeadline(liveTrip.title, liveTrip.items, livePlaces, liveTrip.dayCount);
   const dateStops = liveDate.items.map(item => item.placeName).slice(0, 3).join(" - ");
 
   return (
     <>
-      <div className="page-intro home-intro">
-        <div>
-          <span className="eyebrow">ONLY US</span>
-          <h1>오늘도,<br /><em className="home-word is-us">우리</em>의 <em className="home-word is-log">기록</em>은 계속되고 있어요.</h1>
-        </div>
-        <p className="hand-note">just us.</p>
-      </div>
       <div className="home-layout">
         <article className={`home-pass${liveTrip.items.length ? "" : " is-empty"}`}>
           <Link
@@ -675,47 +651,6 @@ export function HomeDashboard({
         </section>
       )}
 
-      <div className="home-bottom-grid">
-        <section className="recent-memory paper-card">
-          <div className="section-heading compact">
-            <div>
-              <span className="eyebrow">RECENT MEMORY</span>
-              <h2>가장 가까운 장면</h2>
-            </div>
-            <Link className="quiet-link" href="/memories">{memory ? "열어보기 →" : "남기러 가기 →"}</Link>
-          </div>
-          {memory && cover ? (
-            <Link className="memory-postcard" href="/memories">
-              <span className="memory-postcard-frame">
-                <span className="memory-postcard-media">
-                  {cover.kind === "image" ? <img src={cover.src} alt="" /> : (
-                    <span className="memory-letter">
-                      <b>{memory.happenedOn ? formatKoShort(memory.happenedOn) : "our day"}</b>
-                      <small>{memory.locationLabel || "우리가 아는 장면"}</small>
-                    </span>
-                  )}
-                </span>
-              </span>
-              <span className="memory-postcard-copy">
-                <b>{memory.title}</b>
-                <em>{memory.description || "우리가 아는 그날의 장면."}</em>
-                <small>{memory.happenedOn ? formatKoDate(memory.happenedOn) : ""}{memory.locationLabel ? ` · ${memory.locationLabel}` : ""}</small>
-              </span>
-            </Link>
-          ) : (
-            <p className="form-hint">다녀온 날을 짧게 적어두면, 홈에서 다시 만나요.</p>
-          )}
-        </section>
-        <section className="activity-preview paper-card">
-          <div className="section-heading compact">
-            <div>
-              <span className="eyebrow">RECENT ACTIVITY</span>
-              <h2>우리의 최근 변화</h2>
-            </div>
-          </div>
-          <RecentActivityPreview />
-        </section>
-      </div>
     </>
   );
 }

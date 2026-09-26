@@ -47,6 +47,13 @@ function candidate(overrides: Partial<DiscoverCandidate> = {}): DiscoverCandidat
 }
 
 describe("dateBrief", () => {
+  it("does not read colloquial travel wording as a second district", () => {
+    expect(extractAreasFromText("부산 여행가려구")).toEqual(["부산"]);
+    expect(extractAreasFromText("부산여행가려구")).toEqual(["부산"]);
+    expect(extractAreasFromText("부산여행갈래")).toEqual(["부산"]);
+    expect(extractAreasFromText("목포 가려구")).toEqual(["목포"]);
+    expect(extractAreasFromText("서울 강남구에서 데이트")).toContain("강남구");
+  });
 
   it("keeps a theater distinct from a cafe named after the theater", () => {
     const theater = candidate({ name: "소월아트홀", category: "photo", categoryLabel: "공연장", detailedCategory: "문화시설 > 공연장" });
@@ -106,6 +113,8 @@ describe("dateBrief", () => {
     expect(groundedActivities("강남에서 데이트하고 싶어", undefined, ["meal", "walk", "exhibit"])).toEqual([]);
     expect(groundedActivities("강남에서 데이트하고 싶어", undefined, ["meal", "cafe"])).toEqual([]);
     expect(groundedActivities("성수에서 전시 보고 싶어", undefined, ["exhibit", "cafe"])).toEqual(["exhibit"]);
+    expect(groundedActivities("왕십리에서 저녁 먹고 예쁜 카페에 들른 뒤 실제 공연을 보고 싶어", undefined, ["meal", "cafe"]))
+      .toEqual(expect.arrayContaining(["meal", "cafe", "performance"]));
     expect(groundedActivities("카페 변경 해줘", undefined, ["cafe"])).toEqual([]);
     expect(rescueSearchQueries("성수", ["cafe", "walk", "exhibit"]).some(query => query.includes("맛집"))).toBe(false);
     expect(rescueSearchQueries("강남", ["meal", "cafe"]).some(query => query.includes("공원"))).toBe(false);
@@ -205,6 +214,9 @@ describe("dateBrief", () => {
       timeWindow: "evening",
     });
     expect(dateSpine(evening)).toEqual(["meal", "cafe"]);
+    expect(dateSpine({ ...evening, activities: ["meal", "cafe", "performance"],
+      userRequests: ["저녁 먹고 예쁜 카페에 들른 뒤 실제 공연을 보고 싶어"] }))
+      .toEqual(expect.arrayContaining(["meal", "cafe", "performance"]));
     const cafeTour = applyDateDefaults({
       ...withAreas(emptyDateBrief(), ["성수"]),
       stayKind: "date",

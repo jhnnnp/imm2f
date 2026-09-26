@@ -5,6 +5,7 @@ type VisionContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
 type VisionMessage = { role: "system" | "user"; content: string | VisionContentPart[] };
+type JsonSchemaFormat = { name: string; strict: true; schema: Record<string, unknown> };
 
 function usesReasoning(model: string) {
   return /^(?:gpt-[5-9]|o[134](?:-|$))/i.test(model);
@@ -19,6 +20,7 @@ function completionBudget(model: string, outputTokens: number) {
 
 async function requestJson<T>(input: {
   messages: Array<ChatMessage | VisionMessage>;
+  jsonSchema?: JsonSchemaFormat;
   temperature?: number;
   maxTokens?: number;
   reasoningEffort?: "none" | "low" | "medium" | "high";
@@ -31,7 +33,10 @@ async function requestJson<T>(input: {
   const signal = AbortSignal.timeout(input.timeoutMs ?? DEFAULT_JSON_TIMEOUT_MS);
   const body: Record<string, unknown> = {
     model,
-    response_format: { type: "json_object" },
+    store: false,
+    response_format: input.jsonSchema
+      ? { type: "json_schema", json_schema: input.jsonSchema }
+      : { type: "json_object" },
     messages: input.messages,
     ...(reasoning ? {
       max_completion_tokens: completionBudget(model, input.maxTokens ?? 2000),
@@ -49,7 +54,7 @@ async function requestJson<T>(input: {
       });
       if (!response.ok) {
         const error = await response.json().catch(() => null) as { error?: { code?: string; param?: string } } | null;
-        console.error("OpenAI completion failed", { model, status: response.status, code: error?.error?.code, param: error?.error?.param });
+        console.error("OpenAI completion failed", { model, status: response.status, requestId: response.headers.get("x-request-id"), code: error?.error?.code, param: error?.error?.param });
         if (attempt === 0 && response.status === 400 && error?.error?.param === "reasoning_effort") {
           delete body.reasoning_effort;
           continue;
@@ -103,12 +108,55 @@ export async function completeJsonFromImage<T>(input: {
 
 export async function completeJson<T>(input: {
   messages: ChatMessage[];
+  jsonSchema?: JsonSchemaFormat;
   temperature?: number;
   maxTokens?: number;
   reasoningEffort?: "none" | "low" | "medium" | "high";
   timeoutMs?: number;
 }): Promise<T | null> {
   return requestJson<T>(input);
+}
+
+/** Returns model-requested function calls. The caller must validate all arguments. */
+export async function completeFunctionCalls(input: {
+  messages: ChatMessage[];
+  tools: Array<{ type: "function"; function: { name: string; description: string;
+    parameters: Record<string, unknown> } }>;
+  maxTokens?: number;
+  timeoutMs?: number;
+}): Promise<Array<{ name: string; arguments: unknown }> | null> {
+  const key = getOpenAiApiKey();
+  if (!key) return null;
+  const model = getOpenAiModel();
+  const reasoning = usesReasoning(model);
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, store: false, messages: input.messages, tools: input.tools,
+        tool_choice: "auto", parallel_tool_calls: true,
+        ...(reasoning ? { max_completion_tokens: completionBudget(model, input.maxTokens ?? 700), reasoning_effort: "low" }
+          : { max_tokens: input.maxTokens ?? 700, temperature: 0.1 }) }),
+      signal: AbortSignal.timeout(input.timeoutMs ?? 7500),
+    });
+    if (!response.ok) {
+      console.error("OpenAI function calling failed", { model, status: response.status,
+        requestId: response.headers.get("x-request-id") });
+      return null;
+    }
+    const payload = await response.json() as { choices?: Array<{ message?: { tool_calls?: Array<{
+      type?: string; function?: { name?: string; arguments?: string } }> } }> };
+    const calls = payload.choices?.[0]?.message?.tool_calls ?? [];
+    return calls.slice(0, 6).flatMap(call => {
+      if (call.type !== "function" || !call.function?.name || !call.function.arguments) return [];
+      try { return [{ name: call.function.name, arguments: JSON.parse(call.function.arguments) as unknown }]; }
+      catch { return []; }
+    });
+  } catch (error) {
+    console.error("OpenAI function calling unavailable", { model,
+      reason: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
 }
 
 function extractOutputText(body: {
@@ -145,6 +193,7 @@ export async function completeJsonWithWebSearch<T>(input: {
   const model = getOpenAiSearchModel();
   const body = {
     model,
+    store: false,
     tools: [{
       type: "web_search",
       user_location: { type: "approximate", country: "KR" },
@@ -167,7 +216,7 @@ export async function completeJsonWithWebSearch<T>(input: {
       signal: AbortSignal.timeout(input.timeoutMs ?? 55000),
     });
     if (!response.ok) {
-      console.error("OpenAI web search response failed", { model, status: response.status });
+      console.error("OpenAI web search response failed", { model, status: response.status, requestId: response.headers.get("x-request-id") });
       return null;
     }
     const payload = await response.json() as {

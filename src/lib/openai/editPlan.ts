@@ -12,13 +12,10 @@ export type PlanEditItemInput = {
 };
 
 type EditPayload = {
-  summary?: string;
   changes?: Array<{
     type?: string;
     itemId?: string;
     minutes?: number;
-    label?: string;
-    detail?: string;
   }>;
 };
 
@@ -66,9 +63,8 @@ export async function proposePlanEditsWithOpenAi(input: {
             "Only propose changes for provided item ids.",
             "Allowed change types: remove, duration.",
             "For duration, minutes must be 30-240 in steps of 10.",
-            "Reply Korean labels/details. JSON shape:",
-            '{"summary":"Korean one sentence","changes":[{"type":"remove","itemId":"...","label":"...","detail":"..."},{"type":"duration","itemId":"...","minutes":90,"label":"...","detail":"..."}]}',
-            "Return 1-4 useful changes. If the request cannot be fulfilled with existing items, return {\"summary\":\"...\",\"changes\":[]}.",
+            "JSON shape: {\"changes\":[{\"type\":\"remove\",\"itemId\":\"...\"},{\"type\":\"duration\",\"itemId\":\"...\",\"minutes\":90}]}",
+            "Return 1-4 useful changes. If the request cannot be fulfilled with existing items, return {\"changes\":[]}.",
           ].join(" "),
         },
         {
@@ -82,18 +78,25 @@ export async function proposePlanEditsWithOpenAi(input: {
     }
     const changes: PlanChange[] = [];
     const seen = new Set<string>();
+    const explicitlyClearAll = /전부|모두|전체|싹|다\s*빼|다\s*지워/.test(prompt)
+      || (input.items.length === 1 && /빼|삭제|제외/.test(prompt));
+    let removals = 0;
 
-    for (const row of parsed.changes ?? []) {
+    for (const row of Array.isArray(parsed.changes) ? parsed.changes : []) {
+      if (!row || typeof row !== "object") continue;
+      if (changes.length >= 4) break;
       const itemId = String(row.itemId ?? "");
       const item = allowed.get(itemId);
       if (!item || seen.has(itemId)) continue;
       if (row.type === "remove") {
+        if (!explicitlyClearAll && removals + 1 >= input.items.length) continue;
         seen.add(itemId);
+        removals++;
         changes.push({
           type: "remove",
           itemId,
-          label: String(row.label ?? item.placeName).trim().slice(0, 40) || item.placeName,
-          detail: String(row.detail ?? "일정에서 빼기").trim().slice(0, 80) || "일정에서 빼기",
+          label: item.placeName,
+          detail: "일정에서 이 장소를 제외합니다.",
         });
         continue;
       }
@@ -105,18 +108,17 @@ export async function proposePlanEditsWithOpenAi(input: {
           type: "duration",
           itemId,
           minutes,
-          label: String(row.label ?? item.placeName).trim().slice(0, 40) || item.placeName,
-          detail: String(row.detail ?? `${item.durationMinutes}분 → ${minutes}분`).trim().slice(0, 80)
-            || `${item.durationMinutes}분 → ${minutes}분`,
+          label: item.placeName,
+          detail: `머무는 시간 ${item.durationMinutes}분 → ${minutes}분`,
         });
       }
     }
 
     return {
       changes,
-      summary: String(parsed.summary ?? "").trim().slice(0, 120) || (changes.length
-        ? "요청에 맞춰 일정을 조금 다듬어 봤어요."
-        : "기존 일정만으로는 바꿀 항목을 찾지 못했어요."),
+      summary: changes.length
+        ? `${changes.length}가지 변경을 제안했어요. 적용할 항목을 골라 주세요.`
+        : "기존 일정만으로는 바꿀 항목을 찾지 못했어요.",
     };
   } catch {
     return { error: "AI 응답을 읽지 못했어요. 잠시 후 다시 시도해 주세요." };

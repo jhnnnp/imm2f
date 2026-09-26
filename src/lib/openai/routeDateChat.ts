@@ -23,7 +23,7 @@ const ROUTER_PROMPT = [
   "course: they want a whole date/trip itinerary built, rebuilt, or edited (add/swap/drop a stop, change pace, different course).",
   "places: they want a list of specific venues of one kind (restaurants, cafes, bars, dessert, exhibitions, activities, spots) — recommend/알려줘/어디가 좋아/먹을 데. Not a full day.",
   "question: they ask about the current course, a listed place, logistics (주차, 예약, 웨이팅, 영업시간, 예산, 거리, 비 오면), or want advice/comparison.",
-  "chat: greeting, thanks, small talk, asking what you can do.",
+  "chat: greeting, thanks, feedback without a concrete edit request, small talk, asking what you can do, or an unclear acknowledgement. Never generate or overwrite a course merely because the message is ambiguous.",
   "area: only a city or neighborhood written in latestMessage, else null. placeKind: restaurant|cafe|bar|dessert|exhibit|activity|spot or null.",
   "query: the dish/cuisine/vibe words the user used for a places request (파스타, 한식, 와인, 조용한), else null.",
   "pickedPlaces: names from shownPlaces the user is choosing (by name or 1번/2번), else [].",
@@ -105,7 +105,13 @@ export async function routeDateChat(input: {
       const picked = uniqueStrings((Array.isArray(parsed.pickedPlaces) ? parsed.pickedPlaces : []).filter(name => shown.includes(name)), 4);
       const indices = Array.isArray(parsed.edit?.indices) ? [...new Set(parsed.edit.indices.filter((n): n is number => Number.isInteger(n) && Number(n) >= 1 && Number(n) <= input.currentCourse.length))] : [];
       const kind = parsed.edit?.kind;
-      const edit = input.hasCourse && (kind === "retime" || (kind === "remove" && indices.length > 0) || (kind === "reorder" && indices.length === input.currentCourse.length))
+      const allowsClearAll = /전부|모두|전체|싹|다\s*빼|다\s*지워|모든\s*장소/.test(input.message);
+      if (input.hasCourse && kind === "remove" && indices.length > 0 && indices.length === input.currentCourse.length && !allowsClearAll) {
+        return { mode: "question", confident: true };
+      }
+      const edit = input.hasCourse && (kind === "retime"
+        || (kind === "remove" && indices.length > 0 && (indices.length < input.currentCourse.length || allowsClearAll))
+        || (kind === "reorder" && indices.length === input.currentCourse.length))
         ? { kind, indices } as NonNullable<ChatRoute["edit"]> : undefined;
       return { mode, confident: true, pickedPlaces: picked.length ? picked : local.pickedPlaces, edit };
     }

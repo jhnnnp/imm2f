@@ -23,7 +23,7 @@ export function PlaceCard({
   const saved = ["want", "must_visit", "revisit"].includes(place.userStatus);
   return <article className={`place-card ${selected ? "is-selected" : ""}`}>
     <button className={`place-image tone-${place.visualTone} ${place.image ? "" : "is-empty"}`} onClick={onSelect} aria-label={`${place.name} ${discover ? "미리보기" : "상세 보기"}`}>
-      {place.image ? <img src={place.image} alt="" /> : <PlaceGraphicCover place={place} />}
+      {place.image ? <img src={place.image} alt="" loading="lazy" decoding="async" /> : <PlaceGraphicCover place={place} />}
       {place.userFit + place.partnerFit > 180 && <span className="match">BEST MATCH</span>}
       {onTripSchedule && !discover ? <PlaceTripStamp /> : null}
       {discover && <span className="match soft">둘러보기</span>}

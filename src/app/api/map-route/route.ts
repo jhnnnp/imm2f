@@ -1,6 +1,9 @@
 import { parseOsrmRoute, type LngLat, type RoadRouteProfile } from "@/features/map/routing/fetchRoadRoute";
 
-const OSRM_BASE = "https://router.project-osrm.org/route/v1";
+const DRIVING_BASE = "https://router.project-osrm.org/route/v1/driving";
+// The car demo returns the same route for /foot and /driving. This endpoint
+// is a separately prepared pedestrian graph (OSRM HTTP path remains /driving).
+const WALKING_BASE = "https://routing.openstreetmap.de/routed-foot/route/v1/driving";
 
 function parseCoordsParam(value: string | null): LngLat[] {
   if (!value) return [];
@@ -26,11 +29,11 @@ export async function GET(request: Request) {
   }
 
   const osrmPath = coordinates.map(([lng, lat]) => `${lng},${lat}`).join(";");
-  const osrmUrl = `${OSRM_BASE}/${profile}/${osrmPath}?overview=full&geometries=geojson&steps=false`;
+  const osrmUrl = `${profile === "foot" ? WALKING_BASE : DRIVING_BASE}/${osrmPath}?overview=full&geometries=geojson&steps=false`;
 
   try {
     const response = await fetch(osrmUrl, {
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", "User-Agent": "OnlyUsDatePlanner/0.2 (date itinerary routing)" },
       next: { revalidate: 86400 },
     });
 
@@ -45,7 +48,7 @@ export async function GET(request: Request) {
     }
 
     return Response.json(
-      { coordinates: path, profile },
+      { coordinates: path, profile, provider: "OSRM/OpenStreetMap" },
       { headers: { "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400" } },
     );
   } catch {

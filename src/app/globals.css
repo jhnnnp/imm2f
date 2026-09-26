@@ -27195,3 +27195,28 @@ html.is-toss-blur .toss-veil {
     width: min(224px, 59vw);
   }
 }
+.ai-editor .ai-stop-evidence-link {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 8px 0 16px;
+  padding: 4px 2px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-underline-offset: 3px;
+}
+
+.ai-editor .ai-answer-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 8px 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ai-editor .ai-answer-sources a {
+  overflow-wrap: anywhere;
+  text-underline-offset: 3px;
+}

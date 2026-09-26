@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyTasteFallback, compareTasteProfiles, plannerStateFromSeed, seedFromProfile, violatesTasteAvoid } from "./compare";
 import { parseTasteInput, parseTasteProfile } from "./parse";
 import type { TasteProfile } from "./types";
+import { emptyDateBrief } from "@/features/ai/dateBrief";
 
 function profile(overrides: Partial<TasteProfile> = {}): TasteProfile {
   return {
@@ -119,6 +120,14 @@ describe("taste seed", () => {
     const kept = applyTasteFallback({ ...plannerStateFromSeed(seed), areas: ["한남"], activities: ["exhibit"] }, seed);
     expect(kept.areas).toEqual(["한남"]);
     expect(kept.activities).toEqual(["exhibit"]);
+  });
+
+  it("keeps saved activities as suggestions in an open-ended chat", () => {
+    const seed = compareTasteProfiles(profile(), profile()).seed;
+    const filled = applyTasteFallback(emptyDateBrief(), seed);
+    expect(filled.activities).toEqual([]);
+    expect(filled.cuisine).toBeNull();
+    expect(filled.memorySuggestions?.activities).toEqual(seed.activities);
   });
 
   it("flags spicy and raw-fish venues from avoid labels", () => {

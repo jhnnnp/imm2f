@@ -64,25 +64,32 @@ export const listPlaces = cache(async (): Promise<{ persist: boolean; places: Pl
   const supabase = await createClient();
   if (!supabase) return { persist: false, places: [] };
 
-  const { data, error } = await supabase
-    .from("places")
-    .select("*")
-    .eq("couple_id", session.coupleId)
-    .order("created_at", { ascending: true });
+  // These reads depend only on the authenticated couple. Starting them together
+  // avoids a second remote round trip after the places response arrives.
+  const memberIds = [session.userId, session.partner?.userId].filter((id): id is string => Boolean(id));
+  const [{ data, error }, preferencesResult, memoEdits] = await Promise.all([
+    supabase.from("places").select("*").eq("couple_id", session.coupleId).order("created_at", { ascending: true }),
+    supabase.from("place_preferences").select("*").in("user_id", memberIds),
+    supabase.from("activities").select("entity_id, actor_user_id").eq("couple_id", session.coupleId).eq("entity_type", "place_memo").order("created_at", { ascending: false }),
+  ]);
 
   if (error) throw new Error("저장한 장소를 불러오지 못했어요.");
   if (!data) return { persist: true, places: [] };
-  const [prefs, memoEdits] = await Promise.all([
-    loadPreferences(data.map(row => row.id)),
-    supabase.from("activities").select("entity_id, actor_user_id").eq("couple_id", session.coupleId).eq("entity_type", "place_memo").order("created_at", { ascending: false }),
-  ]);
+  const placeIds = new Set(data.map(row => row.id));
+  const preferencesByPlace = new Map<string, PreferenceRow[]>();
+  for (const preference of preferencesResult.data ?? []) {
+    if (!placeIds.has(preference.place_id)) continue;
+    const group = preferencesByPlace.get(preference.place_id) ?? [];
+    group.push(preference);
+    preferencesByPlace.set(preference.place_id, group);
+  }
   const authors = new Map<string, string>();
   for (const row of memoEdits.data ?? []) {
-    if (row.entity_id && row.actor_user_id && !authors.has(row.entity_id)) authors.set(row.entity_id, row.actor_user_id);
+    if (row.entity_id && placeIds.has(row.entity_id) && row.actor_user_id && !authors.has(row.entity_id)) authors.set(row.entity_id, row.actor_user_id);
   }
   return {
     persist: true,
-    places: data.map(row => ({ ...toPlace(row, prefs, session.userId, session.partner?.userId ?? null), memoAuthorId: authors.get(row.id) })),
+    places: data.map(row => ({ ...toPlace(row, preferencesByPlace.get(row.id) ?? [], session.userId, session.partner?.userId ?? null), memoAuthorId: authors.get(row.id) })),
   };
 });
 

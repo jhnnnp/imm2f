@@ -19,6 +19,13 @@ export function explicitDateConstraints(message: string, previous?: AIPlannerSta
     const start = clock(range[2], range[3] ?? range[4], range[1], fallbackHour);
     const end = clock(range[6], range[7] ?? range[8], range[5] ?? range[1], start ? Number(start.slice(0, 2)) : fallbackHour);
     if (start && end) Object.assign(result, { startTime: start, endTime: end, timeWindow: "any" });
+  } else {
+    const start = message.match(/(?:(오전|오후|아침|저녁|밤)\s*)?(\d{1,2})(?::(\d{2})|시(?:\s*(\d{1,2})분)?)\s*(?:쯤|정도|경)?\s*(?:만나|모여|출발|시작)/);
+    const end = message.match(/(?:(오전|오후|아침|저녁|밤)\s*)?(\d{1,2})(?::(\d{2})|시(?:\s*(\d{1,2})분)?)\s*(?:전|까지)(?:에는|에|는)?\s*(?:집|귀가|돌아|끝|마무리)/);
+    const startTime = start && clock(start[2], start[3] ?? start[4], start[1], 14);
+    const endTime = end && clock(end[2], end[3] ?? end[4], end[1], 18);
+    if (startTime) Object.assign(result, { startTime, timeWindow: "any" });
+    if (endTime) Object.assign(result, { endTime, timeWindow: "any" });
   }
   const budget = message.match(/(\d+(?:\.\d+)?)\s*(만\s*원|만원|천\s*원|원)/);
   if (budget && /예산|안에서|이내|이하|까지|둘이|합쳐|총/.test(message)) {

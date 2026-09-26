@@ -27,6 +27,13 @@ describe("OpenAI JSON transport", () => {
     expect(requestBody()).toMatchObject({ max_tokens: 300 });
     expect(requestBody()).not.toHaveProperty("reasoning_effort");
   });
+  it("sends a strict JSON schema for a structured completion", async () => {
+    fetchMock.mockResolvedValue(completion('{"ok":true}'));
+    const jsonSchema = { name: "date_turn_test", strict: true as const,
+      schema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false } };
+    expect(await completeJson({ messages, jsonSchema })).toEqual({ ok: true });
+    expect(requestBody().response_format).toEqual({ type: "json_schema", json_schema: jsonSchema });
+  });
   it("reserves reasoning tokens for short router responses", async () => {
     vi.stubEnv("OPENAI_MODEL", "gpt-5.6-terra");
     fetchMock.mockResolvedValue(completion('{"mode":"places"}'));

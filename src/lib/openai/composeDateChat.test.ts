@@ -11,6 +11,32 @@ describe("composeDateChat", () => {
     expect(chatSituationFromMessage("안녕하세요")).toBe("greeting");
   });
 
+  it("distinguishes thanks from an actual follow-up and recognizes feedback", () => {
+    expect(chatSituationFromMessage("고마워요")).toBe("thanks");
+    expect(chatSituationFromMessage("고마워, 카페도 추천해줘")).toBeNull();
+    expect(chatSituationFromMessage("고마워, 2번 카페 주차 돼?")).toBeNull();
+    expect(chatSituationFromMessage("이 코스 별로야")).toBe("feedback");
+    expect(chatSituationFromMessage("이 코스 별로야. 식당 바꿔줘")).toBeNull();
+  });
+
+  it("asks for a specific correction while preserving an existing course", () => {
+    const card = dateChatCard({
+      situation: "feedback",
+      userMessage: "이 코스 별로야",
+      state: emptyDateBrief(),
+      extras: { currentCourse: ["식당 A", "카페 B"] },
+    });
+    expect(card.lines.join(" ")).toContain("나머지 장소는 유지");
+    expect(card.suggestions).toContain("동선을 고쳐줘");
+  });
+
+  it("offers a fresh candidate list after place feedback without a course", () => {
+    const state = { ...emptyDateBrief(), shownPlaces: ["카페 A", "카페 B"] };
+    const card = dateChatCard({ situation: "feedback", userMessage: "이 추천 별로야", state });
+    expect(card.suggestions).toContain("다른 곳 더 보여줘");
+    expect(card.suggestions).not.toContain("식당을 바꿔줘");
+  });
+
   it("explains what it can do without rating disclaimers", () => {
     const card = dateChatCard({
       situation: "capability",

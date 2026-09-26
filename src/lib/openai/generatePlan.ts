@@ -70,7 +70,8 @@ function buildItems(
   const seen = new Set<string>();
   const items: PlanItem[] = [];
 
-  for (const row of rawItems ?? []) {
+  for (const row of Array.isArray(rawItems) ? rawItems : []) {
+    if (!row || typeof row !== "object") continue;
     const placeId = String(row.place_id ?? "");
     const place = places.get(placeId);
     if (!place || seen.has(placeId)) continue;
@@ -120,13 +121,16 @@ function toOption(
   const items = buildItems(kind, style, raw?.items ?? [], places);
   if (!items.length) return null;
   const totalCost = items.reduce((sum, item) => sum + item.expectedCost, 0);
+  const knownCosts = items.filter(item => (places.get(item.placeId)?.expectedCostTwo ?? null) != null).length;
+  const label = style === "budget" && knownCosts === 0 ? "비용 미확인" : meta.label;
   return {
     key: meta.key,
     style,
-    styleLabel: meta.label,
-    title: String(raw?.title ?? meta.label).trim().slice(0, 40) || meta.label,
-    summary: String(raw?.summary ?? "").trim().slice(0, 120)
-      || `${meta.label}으로 ${items.length}곳을 이었어요.`,
+    styleLabel: label,
+    title: label,
+    summary: style === "budget" ? `${items.length}곳 중 ${knownCosts}곳의 비용 기록을 반영했어요.`
+      : style === "relaxed" ? `${items.length}곳에서 평균 ${Math.round(items.reduce((sum, item) => sum + item.durationMinutes, 0) / items.length)}분씩 머무는 안이에요.`
+        : `${items.length}곳을 이은 일정 제안이에요.`,
     items,
     totalCost,
     placeCount: items.length,
@@ -139,20 +143,21 @@ function heuristicOptions(kind: PlanKind, places: PlanPlaceInput[]): PlanOption[
       let value = 0;
       if (["want", "must_visit", "revisit"].includes(place.userStatus)) value += 2;
       if (["want", "must_visit", "revisit"].includes(place.partnerStatus)) value += 2;
-      if (place.expectedCostTwo == null) value += 1;
       return value;
     };
     return score(b) - score(a);
   });
   const map = new Map(ranked.map(place => [place.id, place]));
-  const take = (count: number, preferCheap: boolean) => {
-    const pool = preferCheap
-      ? [...ranked].sort((a, b) => (a.expectedCostTwo ?? 0) - (b.expectedCostTwo ?? 0))
+  const take = (count: number, style: PlanOptionStyle) => {
+    const pool = style === "budget"
+      ? [...ranked].sort((a, b) => a.expectedCostTwo == null ? (b.expectedCostTwo == null ? 0 : 1)
+        : b.expectedCostTwo == null ? -1 : a.expectedCostTwo - b.expectedCostTwo)
       : ranked;
-    return pool.slice(0, count).map((place, index) => ({
+    return pool.slice(0, count).map(place => ({
       place_id: place.id,
       start_time: kind === "date" ? "15:00" : "09:30",
-      duration_minutes: preferCheap ? Math.max(40, Math.min(90, place.durationMinutes || 60)) : (place.durationMinutes || 60) + (index === pool.length - 1 ? 30 : 0),
+      duration_minutes: style === "relaxed" ? Math.min(240, (place.durationMinutes || 60) + 30)
+        : style === "budget" ? Math.max(40, Math.min(90, place.durationMinutes || 60)) : place.durationMinutes || 60,
       memo: "",
     }));
   };
@@ -160,9 +165,10 @@ function heuristicOptions(kind: PlanKind, places: PlanPlaceInput[]): PlanOption[
   const relaxedCount = Math.max(kind === "date" ? 2 : 3, count - 1);
   const styles: PlanOptionStyle[] = ["balanced", "relaxed", "budget"];
   const rawByStyle: Record<PlanOptionStyle, RawOption> = {
-    balanced: { style: "balanced", title: "균형형", summary: "저장된 장소를 고르게 이은 기본안이에요.", items: take(count, false) },
-    relaxed: { style: "relaxed", title: "여유형", summary: "장소를 조금 줄이고 더 오래 머무는 안이에요.", items: take(relaxedCount, false) },
-    budget: { style: "budget", title: "가성비형", summary: "예상 비용이 낮은 장소 위주로 구성했어요.", items: take(count, true) },
+    balanced: { style: "balanced", title: "균형형", summary: "저장된 장소를 고르게 이은 기본안이에요.", items: take(count, "balanced") },
+    relaxed: { style: "relaxed", title: "여유형", summary: "장소를 조금 줄이고 더 오래 머무는 안이에요.", items: take(relaxedCount, "relaxed") },
+    budget: { style: "budget", title: "가성비형", summary: ranked.some(place => place.expectedCostTwo != null)
+      ? "비용이 기록된 장소 중 저렴한 곳을 우선했어요." : "비용 정보가 없어 저장한 장소를 기준으로 구성했어요.", items: take(count, "budget") },
   };
   return styles.map(style => toOption(kind, style, rawByStyle[style], map)).filter((item): item is PlanOption => Boolean(item));
 }
@@ -175,13 +181,17 @@ export async function generatePlanOptionsWithOpenAi(input: {
   if (!input.places.length) {
     return { error: "저장된 장소가 없어요. Places에서 장소를 먼저 담아 주세요." };
   }
-  if (input.places.length < 2) {
-    return { error: "일정을 만들려면 장소가 2곳 이상 필요해요." };
+  const minCount = input.kind === "trip" ? 3 : 2;
+  const eligible = input.places.filter(place => !["dislike", "not_interested"].includes(place.userStatus)
+    && !["dislike", "not_interested"].includes(place.partnerStatus));
+  if (eligible.length < minCount) {
+    return { error: `두 분이 피하고 싶은 장소를 제외하면 일정에 넣을 곳이 ${minCount}곳 미만이에요. 저장한 장소를 더 골라 주세요.` };
   }
 
   const prompt = input.prompt.trim().slice(0, 400);
-  const placeMap = new Map(input.places.map(place => [place.id, place]));
-  const catalog = input.places.slice(0, 24).map(place => ({
+  const available = eligible.slice(0, 24);
+  const placeMap = new Map(available.map(place => [place.id, place]));
+  const catalog = available.map(place => ({
     id: place.id,
     name: place.name,
     category: place.categoryLabel,
@@ -191,14 +201,15 @@ export async function generatePlanOptionsWithOpenAi(input: {
     userStatus: place.userStatus,
     partnerStatus: place.partnerStatus,
   }));
-  const note = input.places.length < 4
+  const note = [eligible.length < 4
     ? "현재 저장된 기록이 적어 이번 제안은 입력한 조건과 저장 장소를 중심으로 구성했어요."
-    : "";
+    : "", eligible.some(place => place.expectedCostTwo == null)
+      ? "비용이 기록되지 않은 장소는 예상 합계에 포함되지 않았어요." : ""].filter(Boolean).join(" ");
 
   if (!isOpenAiConfigured()) {
-    const options = heuristicOptions(input.kind, input.places);
+    const options = heuristicOptions(input.kind, available);
     if (!options.length) return { error: "일정을 만들지 못했어요. 장소를 더 저장해 주세요." };
-    return { options, note: note || "OpenAI 키가 없어 규칙 기반으로 3안을 만들었어요." };
+    return { options, note: [note, "OpenAI 키가 없어 규칙 기반으로 3안을 만들었어요."].filter(Boolean).join(" ") };
   }
 
   try {
@@ -226,12 +237,13 @@ export async function generatePlanOptionsWithOpenAi(input: {
       ],
     });
     if (!parsed) {
-      const options = heuristicOptions(input.kind, input.places);
+      const options = heuristicOptions(input.kind, available);
       if (!options.length) return { error: "AI 일정을 만들지 못했어요. 잠시 후 다시 시도해 주세요." };
-      return { options, note: note || "AI 응답이 불안정해 규칙 기반 3안으로 대체했어요." };
+      return { options, note: [note, "AI 응답이 불안정해 규칙 기반 3안으로 대체했어요."].filter(Boolean).join(" ") };
     }
     const byStyle = new Map<PlanOptionStyle, RawOption>();
-    for (const row of parsed.options ?? []) {
+    for (const row of Array.isArray(parsed.options) ? parsed.options : []) {
+      if (!row || typeof row !== "object") continue;
       const style = normalizeStyle(row.style) ?? normalizeStyle(row.key);
       if (!style || byStyle.has(style)) continue;
       byStyle.set(style, row);
@@ -241,16 +253,21 @@ export async function generatePlanOptionsWithOpenAi(input: {
       .map(style => toOption(input.kind, style, byStyle.get(style), placeMap))
       .filter((item): item is PlanOption => Boolean(item));
 
-    if (options.length < 2) {
-      const fallback = heuristicOptions(input.kind, input.places);
+    const signatures = new Set(options.map(option => option.items.map(item => `${item.placeId}:${item.durationMinutes}`).join("|")));
+    const balanced = options.find(option => option.style === "balanced");
+    const budget = options.find(option => option.style === "budget");
+    const allBudgetCostsKnown = budget?.items.every(item => placeMap.get(item.placeId)?.expectedCostTwo != null);
+    if (options.length !== 3 || signatures.size !== 3
+      || (balanced && budget && allBudgetCostsKnown && budget.totalCost > balanced.totalCost)) {
+      const fallback = heuristicOptions(input.kind, available);
       if (!fallback.length) return { error: "유효한 일정 안을 만들지 못했어요." };
-      return { options: fallback, note: note || "AI 결과를 보정하지 못해 규칙 기반 3안으로 대체했어요." };
+      return { options: fallback, note: [note, "AI 결과를 보정하지 못해 규칙 기반 3안으로 대체했어요."].filter(Boolean).join(" ") };
     }
 
     return { options, note };
   } catch {
-    const options = heuristicOptions(input.kind, input.places);
+    const options = heuristicOptions(input.kind, available);
     if (!options.length) return { error: "AI 응답을 읽지 못했어요. 잠시 후 다시 시도해 주세요." };
-    return { options, note: note || "AI 응답을 읽지 못해 규칙 기반 3안으로 대체했어요." };
+    return { options, note: [note, "AI 응답을 읽지 못해 규칙 기반 3안으로 대체했어요."].filter(Boolean).join(" ") };
   }
 }

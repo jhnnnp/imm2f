@@ -3,7 +3,6 @@ import localFont from "next/font/local";
 import { Nanum_Pen_Script } from "next/font/google";
 import { SessionProvider } from "@/features/auth/components/SessionProvider";
 import "./globals.css";
-import "./map-polish.css";
 
 const accentScript = Nanum_Pen_Script({
   weight: "400",

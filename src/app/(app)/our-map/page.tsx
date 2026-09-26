@@ -4,6 +4,7 @@ import { CoupleMapLazy } from "@/features/map/components/CoupleMapLazy";
 import { listMemories } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
 import { listArchivedTripPlans, loadCouplePlan } from "@/features/planning/actions";
+import "../../map-polish.css";
 
 export const metadata: Metadata = { title: "Our Map" };
 

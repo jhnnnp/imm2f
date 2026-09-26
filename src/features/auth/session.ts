@@ -45,13 +45,32 @@ function refreshSessionUI() {
 
 const loadAppSession = cache(async (): Promise<AppSession> => {
   if (!isSupabaseConfigured()) return { mode: "guest" };
+  const startedAt = performance.now();
   const supabase = await createClient();
   if (!supabase) return { mode: "guest" };
 
   const { data: claimsData } = await supabase.auth.getClaims();
   const userId = claimsData?.claims?.sub;
   if (!userId || typeof userId !== "string") return { mode: "guest" };
+  const claimsDoneAt = performance.now();
 
+  const { data: snapshot, error: snapshotError } = await supabase.rpc("app_session_snapshot").maybeSingle();
+  if (!snapshotError && snapshot?.couple_id) {
+    if (process.env.PERF_DEBUG === "1") console.info("app_session_timing", JSON.stringify({
+      path: "snapshot", claimsMs: Math.round(claimsDoneAt - startedAt), databaseMs: Math.round(performance.now() - claimsDoneAt),
+    }));
+    return {
+      mode: "authenticated",
+      userId,
+      displayName: displayNameOf(snapshot.display_name, "나"),
+      coupleId: snapshot.couple_id,
+      partner: snapshot.partner_user_id
+        ? { userId: snapshot.partner_user_id, displayName: displayNameOf(snapshot.partner_display_name) }
+        : null,
+    };
+  }
+
+  // Older databases and new users without a couple still use the setup path.
   const [{ data: profile }, { data: existingCoupleId }] = await Promise.all([
     supabase.from("profiles").select("id, display_name").eq("id", userId).maybeSingle(),
     supabase.rpc("my_couple_id"),
@@ -77,6 +96,10 @@ const loadAppSession = cache(async (): Promise<AppSession> => {
   const { data: partnerRow } = partnerId
     ? await supabase.from("profiles").select("id, display_name").eq("id", partnerId).maybeSingle()
     : { data: null };
+
+  if (process.env.PERF_DEBUG === "1") console.info("app_session_timing", JSON.stringify({
+    path: "fallback", claimsMs: Math.round(claimsDoneAt - startedAt), databaseMs: Math.round(performance.now() - claimsDoneAt),
+  }));
 
   return {
     mode: "authenticated",

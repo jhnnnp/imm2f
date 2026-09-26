@@ -29,6 +29,11 @@ export const PLACE_KIND_LABEL: Record<PlaceAskKind, string> = {
   spot: "장소",
 };
 
+function objectParticle(word: string) {
+  const last = word.charCodeAt(word.length - 1);
+  return last >= 0xac00 && last <= 0xd7a3 && (last - 0xac00) % 28 !== 0 ? "을" : "를";
+}
+
 const FOOD_NOUN = /맛집|식당|음식점|밥집|레스토랑|먹을\s*(?:곳|데|만한)|(?:저녁|점심|아침|밥)\s*(?:먹|식사)|식사할|한식|일식|중식|양식|파스타|피자|초밥|스시|오마카세|라멘|우동|돈카츠|고기|삼겹|갈비|한우|곱창|국밥|찌개|브런치|스테이크|햄버거|버거|샐러드|타코|쌀국수|마라|딤섬|짜장|짬뽕|족발|보쌈|치킨|회\s*(?:먹|한\s*접시)|횟집|모둠회|해물|해산물|냉면|칼국수|만두|떡볶이|카레|덮밥|비건|채식/;
 const CAFE_NOUN = /카페|커피|디저트|베이커리|빵집|케이크|마카롱|젤라또|아이스크림|티룸|찻집|와플|도넛|타르트|크로플|소금빵/;
 const BAR_NOUN = /술집|와인바|와인|칵테일|루프탑바|이자카야|맥주|펍|포차|하이볼|사케|위스키|막걸리|전통주|한잔/;
@@ -81,6 +86,15 @@ export function isPlaceRequest(message: string) {
   return ASK_VERB.test(message) || /먹고\s*싶|마시고\s*싶|먹을까|마실까|보고\s*싶|가고\s*싶/.test(message);
 }
 
+/** A request for a sequence of different experiences needs a course, not a list of one venue type. */
+function isMultiStopRequest(message: string) {
+  const kinds = [FOOD_NOUN, CAFE_NOUN, BAR_NOUN, EXHIBIT_NOUN, ACTIVITY_NOUN]
+    .filter(pattern => pattern.test(message)).length;
+  return kinds >= 2
+    && /(?:먹|마시|보|가|들르|걷|산책|식사).{0,25}(?:고|다음|후에|들렀다가|거쳐|이어|→)/.test(message)
+    && !/비교|차이|어느\s*(?:게|쪽)|뭐가\s*더/.test(message);
+}
+
 export function isMoreRequest(message: string) {
   return MORE_WORD.test(message) && !COURSE_WORD.test(message);
 }
@@ -127,14 +141,11 @@ export function routeDateChatLocally(input: {
   const message = input.message.trim();
   const shown = input.state?.shownPlaces ?? [];
   if (!message) return { mode: "course", confident: true };
-  if (/(?:데이트|여행).*(?:하고\s*싶|가고\s*싶|코스|일정|짜\s*줘|추천)/.test(message)) {
-    return { mode: "course", confident: true };
-  }
   if (input.chatSituation) return { mode: "chat", confident: true };
   // A typed area answer must resume the same search, just like an area chip.
   const pendingAsk = input.state?.placeAsk;
   const writtenAreas = extractAreasFromText(message);
-  if (pendingAsk && !pendingAsk.area && writtenAreas.length && !COURSE_WORD.test(message)) {
+  if (pendingAsk && !pendingAsk.area && writtenAreas.length && !COURSE_WORD.test(message) && !isMultiStopRequest(message)) {
     const kind = detectPlaceKind(message) ?? pendingAsk.kind;
     return {
       mode: "places",
@@ -147,6 +158,9 @@ export function routeDateChatLocally(input: {
     };
   }
   if (isCourseQuickAction(message)) return { mode: "course", confident: true };
+  const discussingEdit = /왜.*(?:바뀌|바꿨|변경|빠졌|삭제)|(?:바꾸|바꿔|교체|변경|빼|제외|추가|대신).*(?:할까|될까|어때|좋을까|됐|된\s*거|했어|했나요)/.test(message);
+  const commandsEdit = /해\s*줘|해\s*주|바꿔\s*줘|빼\s*줘|넣어\s*줘|고쳐|짜\s*줘/.test(message);
+  if (discussingEdit && !commandsEdit) return { mode: "question", confident: true };
   if (input.hasCourse && (isSwapRequest(message) || isRedoRequest(message) || isSoftReroll(message) || /빼\s*줘|제외|한\s*곳\s*더|추가해/.test(message))) {
     return { mode: "course", confident: true };
   }
@@ -156,6 +170,14 @@ export function routeDateChatLocally(input: {
   if (shown.length && input.state?.placeAsk && isMoreRequest(message) && !detectPlaceKind(message)) {
     return { mode: "places", confident: true, placeAsk: { ...input.state.placeAsk, area: writtenAreas[0] || input.state.placeAsk.area } };
   }
+  // Questions about a referenced venue must not become another venue search.
+  const referencesPlace = /(?:이|그|저)\s*(?:카페|식당|곳|장소)|거기|\d+\s*번|첫\s*번째|두\s*번째|세\s*번째|마지막/.test(message)
+    || shown.some(name => message.replace(/\s/g, "").includes(name.replace(/\s/g, "")));
+  if (referencesPlace && QUESTION_WORD.test(message)) return { mode: "question", confident: true };
+  if (input.hasCourse && /^(?:(?:그|이)\s*)?(?:식당|카페|공연장|전시)\s*(?:은|는|이|가)?\s*(?:어때|괜찮아|좋아|어떤데)\??$/.test(message)) {
+    return { mode: "question", confident: true };
+  }
+  if (isMultiStopRequest(message)) return { mode: "course", confident: true };
   if (isPlaceRequest(message)) {
     const kind = detectPlaceKind(message) ?? "spot";
     const area = resolveArea(message, input.state);
@@ -178,7 +200,8 @@ export function routeDateChatLocally(input: {
   if (/\?\s*$/.test(message) || /어때|어떨까|뭐가|어떻게|왜|얼마|언제/.test(message)) {
     return { mode: "question", confident: false };
   }
-  return { mode: "course", confident: false };
+  // An opaque acknowledgement or complaint must not silently replace a course.
+  return { mode: "chat", confident: false };
 }
 
 /** Short status line shown under the typing indicator while the server works. */
@@ -187,7 +210,8 @@ export function pendingLabelFor(message: string, hasCourse: boolean, state?: AIP
   if (route.mode === "places") {
     const kind = route.placeAsk?.kind ?? "spot";
     const area = route.placeAsk?.area;
-    return `${area ? `${area} ` : ""}${PLACE_KIND_LABEL[kind]}을 찾아보고 후기를 확인하는 중입니다.`;
+    const label = PLACE_KIND_LABEL[kind];
+    return `${area ? `${area} ` : ""}${label}${objectParticle(label)} 찾아보고 후기를 확인하는 중입니다.`;
   }
   if (route.mode === "question") return "질문을 읽고 답을 정리하는 중입니다.";
   if (route.mode === "chat") return "답변을 준비하는 중입니다.";

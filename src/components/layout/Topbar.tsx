@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { AppLink as Link } from "@/components/layout/AppLink";
-import { CommandPalette } from "@/components/shared/CommandPalette";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { initialFromName } from "@/features/auth/types";
 import { signOut } from "@/features/auth/session";
 import { useCoupleActivityFeed } from "@/features/collaboration/activityLive";
 import { hrefForActivity } from "@/features/collaboration/types";
+
+const CommandPalette = dynamic(() => import("@/components/shared/CommandPalette").then(mod => mod.CommandPalette));
 
 function todayLabel() {
   return new Date().toLocaleDateString("ko-KR", {
@@ -66,7 +68,7 @@ export function Topbar() {
         <button className="global-search" type="button" onClick={() => setSearchOpen(true)} aria-label="전체 검색 열기" aria-expanded={searchOpen}>
           <span>⌕</span><b>장소, 여행, 추억 검색</b><kbd>⌘K</kbd>
         </button>
-        <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
+        {searchOpen && <CommandPalette open onClose={() => setSearchOpen(false)} />}
       </div>
       <div className="notify-wrap" ref={notifyRef}>
         <button

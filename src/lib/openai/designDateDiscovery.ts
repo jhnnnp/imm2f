@@ -2,11 +2,12 @@ import type { AIPlannerState, DateActivityId, DateChatTurn } from "@/features/pl
 import { selectedAreas, uniqueStrings, isTravelPlan, isExclusiveCrawl, courseSize, extractActivitiesFromText } from "@/features/ai/dateBrief";
 import { completeJson } from "./client";
 import { isOpenAiConfigured } from "./env";
+import { retrieveDatePlaybook } from "./datePlaybook";
+import { explicitlyDislikedActivities, toDateIntent } from "@/features/ai/dateIntent";
 
 type Discovery = NonNullable<AIPlannerState["discovery"]>;
 const activities = new Set<DateActivityId>(["meal", "cafe", "walk", "exhibit", "movie", "performance", "indoor", "nightview"]);
 const list = (value: unknown, limit: number) => uniqueStrings(Array.isArray(value) ? value.filter((v): v is string => typeof v === "string").map(v => v.slice(0, 100)) : [], limit);
-const activityList = (value: unknown) => list(value, 6).filter((v): v is DateActivityId => activities.has(v as DateActivityId));
 
 const ORDER_TERMS: Array<[DateActivityId, RegExp]> = [
   ["meal", /저녁\s*(?:먹|식사)|점심\s*(?:먹|식사)|아침\s*(?:먹|식사)|식사|밥\s*먹|파스타|맛집/g],
@@ -33,11 +34,14 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
   const areas = selectedAreas(input.state);
   const previous = input.state.discovery;
   const trip = isTravelPlan(input.state);
-  const explicitActivities = extractActivitiesFromText(input.message);
+  const rejectedActivities = explicitlyDislikedActivities(input.message);
+  const explicitActivities = extractActivitiesFromText(input.message).filter(activity => !rejectedActivities.includes(activity));
   // The model may suggest discovery themes, but only the user's interpreted
   // activities may become hard requirements.
   const lockedActivities = input.state.activities.length ? input.state.activities : explicitActivities;
   const userOrder = requestedActivityOrder(input.message, lockedActivities);
+  const retainedOrder = input.state.preserveExistingPlaces
+    ? (previous?.activityOrder ?? []).filter(activity => activities.has(activity) && lockedActivities.includes(activity)) : [];
   const size = courseSize(input.state);
   const pinnedCount = input.state.preserveExistingPlaces ? input.state.pinOrder.length : 0;
   const swapping = input.state.intent === "modify" && input.state.pinOrder.some(name => input.state.excludedPlaces.includes(name));
@@ -49,24 +53,27 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
     priorities: previous?.priorities ?? [], queries: queries.slice(0, 12),
     transport: previous?.transport ?? "transit",
     requiredActivities: [...new Set(lockedActivities)],
-    activityOrder: userOrder.length >= 2 ? userOrder : previous?.activityOrder ?? [],
+    activityOrder: userOrder.length >= 2 ? userOrder : retainedOrder,
     minStops: additionCount || size.min,
     maxStops: additionCount || size.max,
   };
   if (!isOpenAiConfigured()) return fallback;
+  const playbook = await retrieveDatePlaybook(input.message, input.state, "discovery", trip ? 8 : 6);
   const raw = await completeJson<Record<string, unknown>>({
     timeoutMs: 15000, maxTokens: 1800, reasoningEffort: "low", temperature: 0.3,
     messages: [
       { role: "system", content: [
         "Design a venue discovery brief for a Korean couple's date. You do not pick venues or write the itinerary yet. Return JSON.",
-        'Schema: {themes:[string],priorities:[string],queries:[{region:string,query:string}],transport:"walk|drive|transit",requiredActivities:["meal|cafe|walk|exhibit|movie|performance|indoor|nightview"],activityOrder:[],minStops:2,maxStops:4}.',
+        'Schema: {themes:[string],priorities:[string],queries:[{region:string,query:string}],transport:"walk|drive|transit",requiredActivities:["meal|cafe|walk|exhibit|movie|performance|indoor|nightview"],activityOrder:[],minStops:number,maxStops:number}. For overnight trips honor the supplied minimum and allow 3-4 stops on a full day.',
         "Invent 2-3 meaningfully different course concepts that fit the user's intent: food destination with a distinctive cafe, architecture and local streets, an exhibition and dessert, regional food and scenery, etc. Never impose the same meal-cafe-walk template.",
         "queries: 6-12 short complementary Kakao keyword searches (not sentences). Retain the user's exact dish and aesthetic preferences: 파스타, 한옥 카페, 정원 카페, 로스터리, 오션뷰, 독립서점, 공방, 미술관. Include 1-2 broad searches for coverage. Use ONLY the supplied areas as region. Never invent shop names.",
         "priorities: concrete requested qualities, not generic positivity. requiredActivities: only explicit user requirements, not suggestions you invented. '걷는 거 적게' does NOT require a walk attraction. activityOrder: only an order the user explicitly asks for. An omitted preference is not a prohibition.",
+        "Use dateIntent.objective and preferences to propose search themes, including implicit conversation, novelty, photo or quiet-place needs. Treat inferredPreferences as soft hints weighted by confidence. Keep hardConstraints authoritative.",
         "Honor latest corrections and previous brief. For a local date choose 2-4 worthwhile stops, never maximize count. For a trip allow 3-4 per day. Explicit cafe/food/exhibit tours may repeat the requested kind; otherwise diversify experiences. Do not add food to a cafe-only request.",
         "Transport comes from explicit wording, otherwise retain prior mode or allow transit. Choose walk only when the user explicitly wants a walkable course. Exact times are optional. Focus on venue appeal and coherent geography.",
       ].join(" ") },
-      { role: "user", content: JSON.stringify({ latestMessage: input.message, areas, trip, exclusiveTour: isExclusiveCrawl(input.state), days: input.state.nights + 1, previous, state: input.state, taste: input.taste.slice(0, 10), recentTurns: (input.conversation ?? []).slice(-6) }) },
+      { role: "user", content: JSON.stringify({ latestMessage: input.message, areas, trip, exclusiveTour: isExclusiveCrawl(input.state), days: input.state.nights + 1, previous, state: input.state, dateIntent: toDateIntent(input.state), taste: input.taste.slice(0, 10), recentTurns: (input.conversation ?? []).slice(-6),
+        planningPlaybook: playbook, playbookScope: "검색 전략과 비교 관점만 제공하며 장소·행사 사실이나 사용자 하드 제약을 만들지 않음" }) },
     ],
   });
   if (!raw) return fallback;
@@ -81,14 +88,14 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
     seen.add(key);
     return [{ region: row.region, query }];
   }).slice(0, 12);
-  const min = additionCount || (typeof raw.minStops === "number" && Number.isFinite(raw.minStops) ? Math.max(2, Math.min(8, Math.round(raw.minStops))) : fallback.minStops);
+  const min = additionCount || Math.max(size.min, (typeof raw.minStops === "number" && Number.isFinite(raw.minStops) ? Math.max(2, Math.min(8, Math.round(raw.minStops))) : fallback.minStops));
   const max = Math.max(min, additionCount || (typeof raw.maxStops === "number" && Number.isFinite(raw.maxStops) ? Math.max(min, Math.min(12, Math.round(raw.maxStops))) : fallback.maxStops));
   return {
     themes: list(raw.themes, 3).length ? list(raw.themes, 3) : fallback.themes,
     priorities: list(raw.priorities, 8), queries: modelQueries.length ? modelQueries : fallback.queries,
     transport: raw.transport === "drive" || raw.transport === "transit" || raw.transport === "walk" ? raw.transport : fallback.transport,
     requiredActivities: fallback.requiredActivities,
-    activityOrder: userOrder.length >= 2 ? userOrder : previous?.activityOrder?.length ? previous.activityOrder : activityList(raw.activityOrder),
+    activityOrder: userOrder.length >= 2 ? userOrder : retainedOrder,
     minStops: min, maxStops: max,
   };
 }

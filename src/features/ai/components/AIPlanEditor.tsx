@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { proposePlanEdits, recommendDatePlan } from "../actions";
+import { proposePlanEdits, recommendDatePlanWithSession } from "../actions";
+import type { SessionCandidateContext } from "../sessionCandidates";
 import {
   DATE_KEEP_LABEL,
   TRIP_KEEP_LABEL,
@@ -62,11 +63,11 @@ function stopKakaoUrl(stop: AIChatStop) {
   return kakaoPlaceUrl(stop.name, stop.coordinates);
 }
 
-function formatHop(meters: number | null | undefined) {
+function formatHop(meters: number | null | undefined, basis: AIChatCard["routeBasis"] = "straight_line") {
   if (meters == null) return "";
-  if (meters < 80) return `직선 ${meters}m`;
-  if (meters < 1000) return `직선 ${meters}m`;
-  return `직선 ${(meters / 1000).toFixed(1)}km`;
+  const label = basis === "walking" ? "도보 경로" : "직선";
+  if (meters < 1000) return `${label} ${meters}m`;
+  return `${label} ${(meters / 1000).toFixed(1)}km`;
 }
 
 function formatRouteLength(meters: number) {
@@ -196,6 +197,15 @@ function AssistantCard({
     <article className="ai-bubble is-assistant">
       {card?.headline ? <b>{card.headline}</b> : null}
       {lines.map((line, index) => <p key={`${index}-${line}`} className="ai-bubble-paragraph">{line}</p>)}
+      {card?.sources?.length ? (
+        <div className="ai-answer-sources" aria-label="답변 출처">
+          {card.sources.map(source => (
+            <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">
+              출처 · {source.label} ↗
+            </a>
+          ))}
+        </div>
+      ) : null}
       {card?.stops?.length ? (
         <ol className="ai-bubble-stops">
           {card.stops.map((stop, index) => {
@@ -208,7 +218,7 @@ function AssistantCard({
               <li key={key}>
                 {showDay ? <p className="ai-stop-day">{(stop.dayIndex ?? 0) + 1}일차</p> : null}
                 {index > 0 && stop.distanceFromPreviousMeters != null ? (
-                  <p className="ai-route-distance"><span>↓</span>{formatHop(stop.distanceFromPreviousMeters)}</p>
+                  <p className="ai-route-distance"><span>↓</span>{formatHop(stop.distanceFromPreviousMeters, card.routeBasis)}</p>
                 ) : null}
                 <div className={`ai-stop-card${stop.image ? " has-photo" : ""}${open ? " is-open" : ""}`}>
                   <button
@@ -241,6 +251,11 @@ function AssistantCard({
                     지도 ↗
                   </button>
                 </div>
+                {stop.factSourceUrl && sourceHost(stop.factSourceUrl) ? (
+                  <a className="ai-stop-evidence-link" href={stop.factSourceUrl} target="_blank" rel="noopener noreferrer">
+                    추천 근거 · {sourceHost(stop.factSourceUrl)} ↗
+                  </a>
+                ) : null}
               </li>
             );
           })}
@@ -298,6 +313,8 @@ export function AIPlanEditor({
   const [selected, setSelected] = useState<boolean[]>([]);
   const [recommendation, setRecommendation] = useState<AIPlannerReply | null>(null);
   const [plannerState, setPlannerState] = useState<AIPlannerState>(() => tasteSeed ? plannerStateFromSeed(tasteSeed) : emptyDateBrief());
+  const [planningSessionId, setPlanningSessionId] = useState(() => crypto.randomUUID());
+  const sessionCandidatesRef = useRef<SessionCandidateContext | null>(null);
   const [conversation, setConversation] = useState<ChatTurn[]>(() => tasteSeed ? [{
     role: "assistant",
     text: tasteSeed.prompt,
@@ -478,6 +495,8 @@ export function AIPlanEditor({
     setChanges([]);
     setRecommendation(null);
     setPlannerState(emptyDateBrief());
+    setPlanningSessionId(crypto.randomUUID());
+    sessionCandidatesRef.current = null;
     setConversation([]);
     setChoicePrompt(null);
     setSelectedChoices([]);
@@ -549,7 +568,7 @@ export function AIPlanEditor({
       ...(displayText || request ? [{ role: "user" as const, text: displayText || request }] : []),
     ].slice(-8);
     try {
-      const result = await recommendDatePlan({
+      const response = await recommendDatePlanWithSession({
         currentPlan: recommendation,
         message: request,
         previousPlaceNames: recommendation?.recommendations.map(place => place.name),
@@ -559,8 +578,11 @@ export function AIPlanEditor({
         previousState: nextState,
         dateLabel: startDate || undefined,
         conversation: nextTurns.map(turn => ({ role: turn.role, text: turn.text })),
+        planningSessionId, sessionCandidates: sessionCandidatesRef.current,
       });
       if (ticket !== requestIdRef.current) return;
+      const result = response.result;
+      sessionCandidatesRef.current = response.sessionCandidates;
       if ("error" in result) {
         const safeError = /^false\b/i.test(result.error)
           ? "조건에 맞는 장소를 충분히 찾지 못했습니다. 가고 싶은 동네를 다시 말해 주세요."
@@ -584,6 +606,7 @@ export function AIPlanEditor({
         return;
       }
       setRecommendation(result);
+      setShownStops([]);
       resetKeep();
       setConversation(current => [
         ...current,
@@ -727,7 +750,7 @@ export function AIPlanEditor({
                   <PlanMap items={recommendation.items} dayLabel={`${recommendation.condition.region} 동선`} />
                   <div className="ai-map-legend">
                     <span><i /> 추천 순서</span>
-                    <b>추천 순서 · 직선거리</b>
+                    <b>{recommendation.design?.routeBasis === "walking" ? "추천 순서 · 도보 경로 (OSRM/OSM)" : "추천 순서 · 직선거리"}</b>
                   </div>
                 </div>
               )}
@@ -773,7 +796,7 @@ export function AIPlanEditor({
                     <div>
                       <span>
                         {recommendation.recommendations.length}곳
-                        {routeSummary ? ` · 직선 ${formatRouteLength(routeSummary.distance)}` : ""}
+                        {routeSummary ? ` · ${recommendation.design?.routeBasis === "walking" ? "도보 경로" : "직선"} ${formatRouteLength(routeSummary.distance)}` : ""}
                         {keepDays > 1 ? ` · ${staySpanLabel(keepDays)}` : ""}
                       </span>
                       <small>담을 때 데이트 코스와 여행 중 고를 수 있습니다.</small>
@@ -857,7 +880,9 @@ export function AIPlanEditor({
 
       <p className="form-hint ai-disclaimer">
         {mode === "generate"
-          ? "동선은 직선거리 기준입니다. 담을 때 데이트 코스와 여행 중 고를 수 있습니다."
+          ? recommendation?.design?.routeBasis === "walking"
+            ? "도보 경로는 OSRM/OpenStreetMap 자료 기준입니다. 실제 통행 상황은 달라질 수 있습니다."
+            : "동선은 직선거리 기준입니다. 담을 때 데이트 코스와 여행 중 고를 수 있습니다."
           : "이미 담긴 일정만 삭제하거나 체류 시간을 조정합니다."}
       </p>
     </div>

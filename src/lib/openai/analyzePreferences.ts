@@ -152,7 +152,7 @@ export function calculatePreferenceInsight(places: PreferencePlaceInput[]): Pref
       {
         title: "둘 다 편안한 선택",
         description: `${sharedPrimary} 분위기가 느껴지는 곳`,
-        reason: commonTastes.length ? "우리의긍정 기록에서 가장 자주 겹친 취향이에요." : "공통 취향 데이터가 쌓이기 전까지 두 사람의 긍정 조건을 함께 확인해요.",
+        reason: commonTastes.length ? "두 사람의 긍정 기록에서 가장 자주 겹친 취향이에요." : "공통 취향 데이터가 쌓이기 전까지 두 사람의 긍정 조건을 함께 확인해요.",
       },
       {
         title: "서로의 취향을 섞은 선택",
@@ -224,7 +224,8 @@ export async function analyzePreferencesWithOpenAi(input: {
       ],
     });
     if (!parsed) return fallback;
-    const differences = (parsed.differences ?? [])
+    const differences = (Array.isArray(parsed.differences) ? parsed.differences : [])
+      .filter((item): item is NonNullable<typeof item> => Boolean(item) && typeof item === "object")
       .map(item => ({
         you: String(item.you ?? "").trim().slice(0, 80),
         partner: String(item.partner ?? "").trim().slice(0, 80),
@@ -232,7 +233,8 @@ export async function analyzePreferencesWithOpenAi(input: {
       }))
       .filter(item => item.you && item.partner && item.bridge)
       .slice(0, 2);
-    const recommendations = (parsed.recommendations ?? [])
+    const recommendations = (Array.isArray(parsed.recommendations) ? parsed.recommendations : [])
+      .filter((item): item is NonNullable<typeof item> => Boolean(item) && typeof item === "object")
       .map(item => ({
         title: String(item.title ?? "").trim().slice(0, 40),
         description: String(item.description ?? "").trim().slice(0, 100),

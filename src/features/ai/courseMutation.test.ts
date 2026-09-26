@@ -33,6 +33,12 @@ describe("course mutation transaction", () => {
     const after = plan(["kakao:hall", "소월아트홀"], ["kakao:meal", "칼국수집"], ["kakao:cafe", "정원 카페"], ["kakao:gallery", "전시관"]);
     expect(courseMutationProblems(before, after, state)).toEqual([]);
   });
+  it("preserves the relative order of existing stops during an addition", () => {
+    const state = { ...emptyDateBrief(), intent: "modify" as const, preserveExistingPlaces: true, addStop: true };
+    const reordered = plan(["kakao:cafe", "정원 카페"], ["kakao:hall", "소월아트홀"],
+      ["kakao:meal", "칼국수집"], ["kakao:gallery", "전시관"]);
+    expect(courseMutationProblems(before, reordered, state)).toContain("기존 장소 순서 변경");
+  });
 
   it("rejects a cafe in the restaurant slot even when the place count is unchanged", () => {
     const old = typedPlan(["kakao:meal", "식당", "meal"], ["kakao:hall", "소월아트홀", "performance"]);
@@ -49,6 +55,13 @@ describe("course mutation transaction", () => {
     expect(courseMutationProblems(old, next, { ...state, userRequests: ["카페 한 곳 더 추가해줘"] })).toEqual([]);
   });
 
+  it("does not accept a replacement whose role is missing", () => {
+    const old = typedPlan(["meal", "식당", "meal"], ["hall", "공연장", "performance"]);
+    const next = plan(["unknown", "업종 불명 장소"], ["hall", "공연장"]);
+    expect(courseMutationProblems(old, next, { ...emptyDateBrief(), intent: "modify", excludedPlaces: ["식당"] }))
+      .toContain("장소 교체 역할 불일치");
+  });
+
   it("keeps the existing course when a cafe swap creates a large detour", () => {
     const old = { ...typedPlan(["kakao:meal", "식당", "meal"], ["kakao:cafe", "카페", "cafe"], ["kakao:hall", "공연장", "performance"]),
       design: { routeBasis: "straight_line" as const, totalDistanceMeters: 402 } };
@@ -57,5 +70,13 @@ describe("course mutation transaction", () => {
     const state = { ...emptyDateBrief(), intent: "modify" as const, excludedPlaces: ["카페"] };
     expect(courseMutationProblems(old, next, state)).toContain("교체로 동선이 크게 늘어남");
     expect(courseMutationProblems(old, next, { ...state, areaScope: "nearby" })).toEqual([]);
+  });
+
+  it("does not replace an aesthetic cafe with another unsupported cafe", () => {
+    const old = typedPlan(["meal", "식당", "meal"], ["cafe", "카페", "cafe"]);
+    const next = { ...typedPlan(["meal", "식당", "meal"], ["new-cafe", "다른 카페", "cafe"]),
+      design: { evidenceCoverage: { supportedStops: 0, totalStops: 2, missingPlaceIds: ["new-cafe"] } } } as AIPlannerReply;
+    const state = { ...emptyDateBrief(), intent: "modify" as const, excludedPlaces: ["카페"], userRequests: ["예쁜 카페로 바꿔줘"] };
+    expect(courseMutationProblems(old, next, state)).toContain("새 카페의 공간 근거 부족");
   });
 });
