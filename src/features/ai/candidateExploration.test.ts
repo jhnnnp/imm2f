@@ -5,9 +5,9 @@ import { buildDateCandidatePool } from "./dateCandidatePool";
 import { buildDateContext } from "./dateContext";
 import { buildExperiencePlanInput } from "./experiencePlan";
 import { emptySessionCandidates, markExplorationCandidates, mergeSessionCandidates } from "./sessionCandidates";
-import { candidateQualityBadges, explorationPrompt, explorationResearchPlan,
+import { candidateCardFact, candidateQualityBadges, explorationPrompt, explorationResearchPlan,
   groupExplorationCandidates, initialExplorationPreferences, refineExplorationNeed,
-  refinementGroupForMessage,
+  refinementGroupForMessage, validExplorationPreferences,
   type CandidateExplorationPreferences } from "./candidateExploration";
 
 const state = withAreas(emptyDateBrief(), ["부산"]);
@@ -19,7 +19,7 @@ const venue = (id: number, category: DiscoverCandidate["category"] = "cafe",
   mapUrl: `https://place.map.kakao.com/${id}`, phone: "", coordinates: [129.16, 35.16],
   kakaoCategoryGroupCode: category === "cafe" ? "CE7" : "FD6" });
 const prefs = (activities: CandidateExplorationPreferences["activities"]): CandidateExplorationPreferences => ({
-  activities, cafeQualities: [], cuisine: null, shoppingKind: null, cultureKind: null,
+  activities, cafeQualities: [], cuisines: [], shoppingKinds: [], cultureKinds: [], additionalDetails: "",
   pace: "balanced", provenance: {},
 });
 
@@ -30,7 +30,7 @@ describe("P3.25 candidate exploration", () => {
     expect(choices.activities).toEqual(["cafe"]);
     expect(choices.cafeQualities).toEqual(["aesthetic", "view"]);
     const prompt = explorationPrompt("부산 2박3일", choices);
-    expect(prompt).toContain("예쁜 공간, 오션뷰/전망");
+    expect(prompt).toContain("공간이 예쁜 곳, 전망 좋은 곳");
     expect(buildExperiencePlanInput(prompt, trip,
       buildDateContext({ state: trip, observedAt: now })).qualitativeNeeds)
       .toEqual(expect.arrayContaining([
@@ -45,7 +45,7 @@ describe("P3.25 candidate exploration", () => {
   });
 
   it("makes seafood an explicit meal need, without unrelated groups", () => {
-    const options = { ...prefs(["meal"]), cuisine: "해산물" };
+    const options = { ...prefs(["meal"]), cuisines: ["해산물"] };
     const research = explorationResearchPlan(null, options, "부산");
     expect(research.needs.filter(need => need.kind === "venue")).toEqual([
       expect.objectContaining({ purpose: "해산물 식당 방문 경험", category: "restaurant" }),
@@ -53,6 +53,26 @@ describe("P3.25 candidate exploration", () => {
     const groups = groupExplorationCandidates({ plan: research, preferences: options,
       candidates: [venue(1, "restaurant", "해산물 식당"), venue(2, "restaurant", "피자 가게")], session: null });
     expect(groups[0].cards.map(card => card.name)).toEqual(["해산물 식당"]);
+  });
+
+  it("accepts multiple detail choices as alternatives and keeps an inland view preference generic", () => {
+    const options = { ...prefs(["meal", "shopping", "culture", "cafe"]),
+      cuisines: ["한식", "일식"], shoppingKinds: ["outlet", "market"] as CandidateExplorationPreferences["shoppingKinds"],
+      cultureKinds: ["museum", "exhibit"] as CandidateExplorationPreferences["cultureKinds"],
+      cafeQualities: ["view"] as CandidateExplorationPreferences["cafeQualities"],
+      additionalDetails: "서울에서 조용한 카페" };
+    expect(validExplorationPreferences(options)).toBe(true);
+    const prompt = explorationPrompt("서울 데이트", options);
+    expect(prompt).toContain("전망 좋은 카페");
+    expect(prompt).not.toContain("오션뷰 카페");
+    const plan = explorationResearchPlan(null, options, "서울");
+    expect(plan.needs.find(need => need.id === "explore-cafe")?.qualities).toEqual(["view", "quiet"]);
+    expect(plan.needs.find(need => need.id === "explore-meal")?.purpose).toBe("식당 방문 경험");
+    const groups = groupExplorationCandidates({ plan, preferences: options,
+      candidates: [venue(11, "restaurant", "한식당"), venue(12, "restaurant", "일식당"),
+        venue(13, "restaurant", "파스타집")], session: null });
+    expect(groups.find(group => group.id === "meal")?.cards.map(card => card.name)).toEqual(["일식당", "한식당"]);
+    expect(validExplorationPreferences({ ...options, cuisines: ["한식", "한식"] })).toBe(false);
   });
 
   it("returns only five eligible candidates and never fills eight with rejected rows", () => {
@@ -125,12 +145,36 @@ describe("P3.25 candidate exploration", () => {
       checkedAt: "2020-01-01T00:00:00.000Z" }] }, need)).toEqual([]);
   });
 
+  it("shows checked evidence or provider identity details without inventing a venue trait", () => {
+    const walkway = venue(20, "tourist", "동백공원 해안산책로");
+    expect(candidateCardFact(walkway)).toEqual({ label: "장소 유형",
+      text: "해안 산책로" });
+    expect(candidateCardFact({ ...walkway, detailedCategory: "여행 > 관광명소 > 산책로" }))
+      .toEqual({ label: "장소 유형", text: "산책로" });
+    const evidence = { id: "checked", text: "해안을 따라 걷는 산책 구간", url: "https://example.com/walk",
+      checkedAt: now, attribute: "experience" as const, venueId: "kakao:20",
+      verification: "source_checked" as const };
+    expect(candidateCardFact({ ...walkway, evidence: [evidence] })).toEqual({
+      label: "확인된 정보", text: "해안을 따라 걷는 산책 구간" });
+    expect(candidateCardFact({ ...walkway, evidence: [{ ...evidence,
+      checkedAt: "2020-01-01T00:00:00.000Z" }] }).label).toBe("장소 유형");
+    expect(candidateCardFact({ ...walkway, evidence: [{ ...evidence,
+      venueId: "kakao:other" }] }).label).toBe("장소 유형");
+    const reported = { ...evidence, id: "reported", verification: "search_report" as const,
+      sourceExcerpt: "해안을 따라 걷는 산책 구간", sourceVenueName: walkway.name,
+      sourceAddress: walkway.address };
+    expect(candidateCardFact({ ...walkway, evidence: [reported] })).toEqual({
+      label: "검색 자료 · 확인 필요", text: "해안을 따라 걷는 산책 구간" });
+    expect(candidateCardFact({ ...walkway, evidence: [{ ...reported,
+      sourceExcerpt: "" }] }).label).toBe("장소 유형");
+  });
+
   it("retains explicit selection provenance and session-only rejection events", () => {
     const options = initialExplorationPreferences("카페만 가고 싶어", state);
     expect(options.provenance.cafe).toBe("explicit_text");
     const detailed = initialExplorationPreferences("아울렛 쇼핑하고 미술관도 가고 싶어", state);
-    expect(detailed.shoppingKind).toBe("outlet");
-    expect(detailed.cultureKind).toBe("art_museum");
+    expect(detailed.shoppingKinds).toEqual(["outlet"]);
+    expect(detailed.cultureKinds).toEqual(["art_museum"]);
     expect(detailed.provenance.shoppingKind).toBe("explicit_text");
     expect(explorationPrompt("부산 1박2일", detailed)).toContain("쇼핑 종류: 아울렛");
     const session = emptySessionCandidates("new-planning-session");

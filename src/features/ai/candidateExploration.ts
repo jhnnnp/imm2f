@@ -12,20 +12,23 @@ export type ExplorationActivity = "beach" | "culture" | "shopping" | "meal" | "c
   | "nightview" | "experience" | "nature";
 export type PreferenceProvenance = "user_selected" | "explicit_text" | "inferred" | "legacy_default";
 type CafeQuality = "aesthetic" | "view" | "spacious" | "traditional" | "dessert";
-type PreferenceKey = ExplorationActivity | "cuisine" | "pace" | "shoppingKind" | "cultureKind"
+type ShoppingKind = "outlet" | "department" | "market" | "select_shop";
+type CultureKind = "art_museum" | "museum" | "media_art" | "exhibit";
+type PreferenceKey = ExplorationActivity | "cuisine" | "pace" | "shoppingKind" | "cultureKind" | "additionalDetails"
   | `cafe:${CafeQuality}`;
 export type CandidateExplorationPreferences = {
   activities: ExplorationActivity[];
   cafeQualities: CafeQuality[];
-  cuisine: string | null;
-  shoppingKind: "outlet" | "department" | "market" | "select_shop" | null;
-  cultureKind: "art_museum" | "museum" | "media_art" | "exhibit" | null;
+  cuisines: string[];
+  shoppingKinds: ShoppingKind[];
+  cultureKinds: CultureKind[];
+  additionalDetails: string;
   pace: "relaxed" | "balanced" | "active";
   provenance: Partial<Record<PreferenceKey, PreferenceProvenance>>;
 };
 export type ExplorationCard = { candidateId: string; name: string; area: string;
   category: string; image?: string; mapUrl: string; address: string; badges: string[];
-  reason: string; evidenceUrls: string[] };
+  reason: string; factLabel: string; evidenceUrls: string[] };
 export type CandidateGroup = { id: ExplorationActivity; title: string; description: string;
   needIds: string[]; cards: ExplorationCard[]; availableCount: number };
 export type CandidateExplorationState = { experiencePlan: ExperiencePlan | null;
@@ -43,9 +46,9 @@ export const EXPLORATION_ACTIVITIES: Array<{ id: ExplorationActivity; label: str
   { id: "experience", label: "체험" }, { id: "nature", label: "자연/휴식" },
 ];
 export const CAFE_CHOICES = [
-  { value: "aesthetic", label: "예쁜 공간" }, { value: "view", label: "오션뷰/전망" },
-  { value: "spacious", label: "대형 카페" }, { value: "traditional", label: "한옥/전통" },
-  { value: "dessert", label: "디저트" },
+  { value: "aesthetic", label: "공간이 예쁜 곳" }, { value: "dessert", label: "디저트" },
+  { value: "traditional", label: "한옥/전통" }, { value: "view", label: "전망 좋은 곳" },
+  { value: "spacious", label: "좌석이 넉넉한 곳" },
 ] as const;
 export const CUISINE_CHOICES = ["한식", "양식", "일식", "중식", "고기", "해산물", "면/국수", "지역 음식"] as const;
 export const SHOPPING_CHOICES = [
@@ -93,34 +96,42 @@ export function initialExplorationPreferences(message: string, state: AIPlannerS
   if (/대형|넓은/.test(explicit)) cafeQualities.push("spacious");
   if (/한옥|전통/.test(explicit)) cafeQualities.push("traditional");
   if (/디저트|케이크/.test(explicit)) cafeQualities.push("dessert");
-  const cuisine = /돼지국밥/.test(explicit) ? "돼지국밥" : /파스타/.test(explicit) ? "파스타"
-    : /해산물/.test(explicit) ? "해산물" : /(?:^|\s)회(?:\s|$)/.test(explicit) ? "회"
-      : state.cuisine && state.cuisine !== "any" ? state.cuisine : null;
-  const shoppingKind = /아울렛|아웃렛/.test(explicit) ? "outlet" : /백화점/.test(explicit) ? "department"
-    : /시장|마켓/.test(explicit) ? "market" : /소품샵|편집샵/.test(explicit) ? "select_shop" : null;
-  const cultureKind = /미디어아트/.test(explicit) ? "media_art" : /미술관/.test(explicit) ? "art_museum"
-    : /박물관/.test(explicit) ? "museum" : /전시/.test(explicit) ? "exhibit" : null;
+  const cuisines = ["돼지국밥", "파스타", "해산물", "회", ...CUISINE_CHOICES]
+    .filter(cuisine => cuisine === "회" ? /(?:^|\s)회(?:\s|$)/.test(explicit) : explicit.includes(cuisine));
+  if (!cuisines.length && state.cuisine && state.cuisine !== "any") cuisines.push(state.cuisine);
+  const shoppingKinds = SHOPPING_CHOICES.filter(option =>
+    (option.value === "outlet" ? /아울렛|아웃렛/ : option.value === "department" ? /백화점/
+      : option.value === "market" ? /시장|마켓/ : /소품샵|편집샵/).test(explicit)).map(option => option.value);
+  const cultureKinds = CULTURE_CHOICES.filter(option =>
+    (option.value === "art_museum" ? /미술관/ : option.value === "museum" ? /박물관/
+      : option.value === "media_art" ? /미디어아트/ : /전시/).test(explicit)).map(option => option.value);
   const pace = /여유롭|느긋|쉬엄쉬엄/.test(explicit) ? "relaxed"
     : /많이 둘러|활동적|빡빡/.test(explicit) ? "active" : state.pace;
-  return { activities, cafeQualities, cuisine, shoppingKind, cultureKind, pace,
+  return { activities, cafeQualities, cuisines: [...new Set(cuisines)], shoppingKinds, cultureKinds,
+    additionalDetails: "", pace,
     provenance: Object.fromEntries([...activities.map(id => [id, "explicit_text"]),
       ...cafeQualities.map(quality => [`cafe:${quality}`, "explicit_text"]),
-      ...(cuisine ? [["cuisine", /돼지국밥|파스타|해산물|(?:^|\s)회(?:\s|$)|한식|양식|일식|중식/.test(explicit)
+      ...(cuisines.length ? [["cuisine", /돼지국밥|파스타|해산물|(?:^|\s)회(?:\s|$)|한식|양식|일식|중식/.test(explicit)
         ? "explicit_text" : "inferred"]] : []),
-      ...(shoppingKind ? [["shoppingKind", "explicit_text"]] : []),
-      ...(cultureKind ? [["cultureKind", "explicit_text"]] : []),
+      ...(shoppingKinds.length ? [["shoppingKind", "explicit_text"]] : []),
+      ...(cultureKinds.length ? [["cultureKind", "explicit_text"]] : []),
       ...(pace !== "balanced" ? [["pace", "explicit_text"]] : [])]) as CandidateExplorationPreferences["provenance"] };
 }
 
 export function validExplorationPreferences(value: CandidateExplorationPreferences): boolean {
   const ids = new Set(EXPLORATION_ACTIVITIES.map(item => item.id));
+  const validList = <T>(items: T[], allowed: readonly T[]) => Array.isArray(items)
+    && items.length <= allowed.length && new Set(items).size === items.length
+    && items.every(item => allowed.includes(item));
   return Array.isArray(value.activities) && value.activities.length <= ids.size
     && value.activities.every(id => ids.has(id)) && new Set(value.activities).size === value.activities.length
-    && Array.isArray(value.cafeQualities) && value.cafeQualities.length <= 5
-    && value.cafeQualities.every(q => CAFE_CHOICES.some(option => option.value === q))
-    && (value.cuisine === null || typeof value.cuisine === "string" && value.cuisine.length <= 40)
-    && [null, ...SHOPPING_CHOICES.map(item => item.value)].includes(value.shoppingKind)
-    && [null, ...CULTURE_CHOICES.map(item => item.value)].includes(value.cultureKind)
+    && validList(value.cafeQualities, CAFE_CHOICES.map(option => option.value))
+    && Array.isArray(value.cuisines) && value.cuisines.length <= 8
+    && new Set(value.cuisines).size === value.cuisines.length
+    && value.cuisines.every(item => typeof item === "string" && item.length <= 40)
+    && validList(value.shoppingKinds, SHOPPING_CHOICES.map(item => item.value))
+    && validList(value.cultureKinds, CULTURE_CHOICES.map(item => item.value))
+    && typeof value.additionalDetails === "string" && value.additionalDetails.length <= 160
     && ["relaxed", "balanced", "active"].includes(value.pace);
 }
 
@@ -131,19 +142,20 @@ export function explorationPrompt(message: string, preferences: CandidateExplora
   // Phrase checked qualities as explicit user choices so P2's narrow input
   // parser retains them instead of dropping them as a generic "cafe" category.
   const cafePhrases: Record<CandidateExplorationPreferences["cafeQualities"][number], string> = {
-    aesthetic: "예쁜 카페", view: "오션뷰 카페", spacious: "넓은 카페",
+    aesthetic: "예쁜 카페", view: "전망 좋은 카페", spacious: "좌석이 넉넉한 카페",
     traditional: "한옥 카페", dessert: "디저트 카페",
   };
   const explicitCafe = preferences.activities.includes("cafe")
     ? preferences.cafeQualities.map(quality => cafePhrases[quality]) : [];
-  const cuisine = preferences.activities.includes("meal") && preferences.cuisine ? [preferences.cuisine] : [];
-  const shopping = preferences.activities.includes("shopping") && preferences.shoppingKind
-    ? SHOPPING_CHOICES.find(item => item.value === preferences.shoppingKind)?.label ?? "" : "";
-  const culture = preferences.activities.includes("culture") && preferences.cultureKind
-    ? CULTURE_CHOICES.find(item => item.value === preferences.cultureKind)?.label ?? "" : "";
+  const cuisine = preferences.activities.includes("meal") ? preferences.cuisines : [];
+  const shopping = preferences.activities.includes("shopping") ? preferences.shoppingKinds
+    .map(kind => SHOPPING_CHOICES.find(item => item.value === kind)?.label).filter(Boolean) : [];
+  const culture = preferences.activities.includes("culture") ? preferences.cultureKinds
+    .map(kind => CULTURE_CHOICES.find(item => item.value === kind)?.label).filter(Boolean) : [];
   const pace = preferences.pace === "relaxed" ? "여유롭게" : preferences.pace === "active" ? "많이 둘러보기" : "적당히";
-  return `${message.slice(0, 500)}\n사용자가 선택한 활동: ${labels.join(", ")}. 카페 조건: ${cafe.join(", ")}.
-선택한 카페 경험: ${explicitCafe.join(", ")}. 식사 종류: ${cuisine.join(", ")}. 쇼핑 종류: ${shopping}. 문화 종류: ${culture}. 일정 스타일: ${pace}.`.slice(0, 800);
+  return `${message.slice(0, 350)}\n추가 선호: ${preferences.additionalDetails.slice(0, 160)}.
+사용자가 선택한 활동: ${labels.join(", ")}. 카페 조건: ${cafe.join(", ")}.
+선택한 카페 경험: ${explicitCafe.join(", ")}. 식사 종류(복수 선택은 대안): ${cuisine.join(", ")}. 쇼핑 종류: ${shopping.join(", ")}. 문화 종류: ${culture.join(", ")}. 일정 스타일: ${pace}.`.slice(0, 1000);
 }
 
 /** Only explicitly chosen categories become exploration groups; P2 may add supporting needs. */
@@ -154,11 +166,11 @@ export function explorationResearchPlan(plan: ResearchPlan | null, preferences: 
     const base = plan?.needs.find(need => need.kind === "venue" && need.category === category);
     const qualities = id === "cafe" ? preferences.cafeQualities : [];
     const qualityList = [...new Set([...(base?.qualities ?? []), ...qualities])];
-    const query = id === "meal" && preferences.cuisine && preferences.cuisine !== "지역 음식"
-      ? `${preferences.cuisine} 식당` : id === "shopping" && preferences.shoppingKind
-        ? `${SHOPPING_CHOICES.find(item => item.value === preferences.shoppingKind)?.label ?? "쇼핑"}`
-        : id === "culture" && preferences.cultureKind
-          ? `${CULTURE_CHOICES.find(item => item.value === preferences.cultureKind)?.label ?? "전시"}`
+    const query = id === "meal" && preferences.cuisines.length === 1 && preferences.cuisines[0] !== "지역 음식"
+      ? `${preferences.cuisines[0]} 식당` : id === "shopping" && preferences.shoppingKinds.length === 1
+        ? `${SHOPPING_CHOICES.find(item => item.value === preferences.shoppingKinds[0])?.label ?? "쇼핑"}`
+        : id === "culture" && preferences.cultureKinds.length === 1
+          ? `${CULTURE_CHOICES.find(item => item.value === preferences.cultureKinds[0])?.label ?? "전시"}`
           : activityQuery[id];
     return { id: `explore-${id}`, kind: "venue", purpose: `${query} 방문 경험`, category,
       geographicFocus: base?.geographicFocus ?? area, qualities: qualityList,
@@ -167,7 +179,18 @@ export function explorationResearchPlan(plan: ResearchPlan | null, preferences: 
   });
   for (const need of [...needs]) if (need.evidenceNeeded.length)
     needs.push({ ...need, id: `${need.id}-evidence`, kind: "evidence", priority: "important" });
-  return { needs, unresolved: [], source: plan?.source ?? "legacy_fallback" };
+  const research = { needs, unresolved: [], source: plan?.source ?? "legacy_fallback" } as ResearchPlan;
+  const detail = preferences.additionalDetails.trim();
+  if (!detail) return research;
+  const named = preferences.activities.filter(id => {
+    const terms: Record<ExplorationActivity, RegExp> = {
+      cafe: /카페|커피|디저트/, meal: /식당|맛집|음식|식사|밥/, shopping: /쇼핑|가게|시장/,
+      culture: /전시|문화|미술|박물관/, beach: /바다|해변|산책/, nightview: /야경/,
+      experience: /체험|공방/, nature: /자연|공원|숲|휴식/ };
+    return terms[id].test(detail);
+  });
+  const target = named.length ? named : preferences.activities.length === 1 ? preferences.activities : [];
+  return target.reduce((current, id) => refineExplorationNeed(current, id, detail), research);
 }
 
 export function refineExplorationNeed(plan: ResearchPlan, groupId: ExplorationActivity, text: string): ResearchPlan {
@@ -205,6 +228,28 @@ export function refinementGroupForMessage(groups: CandidateGroup[], message: str
 
 const liveEvidence = (candidate: DiscoverCandidate) => (candidate.evidence ?? []).filter(fact =>
   (!fact.venueId || fact.venueId === dateCandidateKey(candidate)) && researchEvidenceFresh(fact));
+
+/** Only a checked source or provider identity metadata may describe a card. */
+export function candidateCardFact(candidate: DiscoverCandidate): { label: string; text: string } {
+  const checked = liveEvidence(candidate).find(fact => fact.verification === "source_checked" && fact.text.trim());
+  if (checked) return { label: "확인된 정보", text: checked.text.replace(/\s+/g, " ").trim().slice(0, 120) };
+  const reported = liveEvidence(candidate).find(fact => fact.verification === "search_report"
+    && fact.sourceExcerpt?.trim() && fact.sourceVenueName?.trim() && fact.sourceAddress?.trim()
+    && fact.url.startsWith("https://") && fact.text.trim());
+  if (reported) return { label: "검색 자료 · 확인 필요",
+    text: reported.text.replace(/\s+/g, " ").trim().slice(0, 120) };
+  const providerType = candidate.detailedCategory?.split(/\s*>\s*/).at(-1)?.trim();
+  if (providerType && providerType !== candidate.categoryLabel && providerType !== candidate.name)
+    return { label: "장소 유형", text: providerType.slice(0, 64) };
+  const namedTypes: Array<[string, RegExp]> = [
+    ["해안 산책로", /해안.*산책로|해변.*산책로/], ["해수욕장", /해수욕장/],
+    ["미술관", /미술관/], ["박물관", /박물관/], ["갤러리", /갤러리/],
+    ["전시관", /전시관|전시장/], ["공원", /공원/], ["시장", /시장/],
+  ];
+  const named = namedTypes.find(([, pattern]) => pattern.test(candidate.name));
+  if (named) return { label: "장소 유형", text: named[0] };
+  return { label: "제공된 분류", text: candidate.categoryLabel || "장소 상세 정보 확인 전" };
+}
 export function candidateQualityBadges(candidate: DiscoverCandidate, need: ResearchNeed): string[] {
   const facts = liveEvidence(candidate).filter(fact => fact.verification === "source_checked");
   return need.qualities.flatMap(quality => {
@@ -225,8 +270,8 @@ export function candidateQualityBadges(candidate: DiscoverCandidate, need: Resea
   }).slice(0, 3);
 }
 
-function cuisineMatches(candidate: DiscoverCandidate, cuisine: string | null) {
-  if (!cuisine || cuisine === "지역 음식") return true;
+function cuisineMatches(candidate: DiscoverCandidate, cuisines: string[]) {
+  if (!cuisines.length || cuisines.includes("지역 음식")) return true;
   const text = `${candidate.name} ${candidate.detailedCategory ?? ""} ${candidate.dishes ?? ""}
     ${(candidate.evidence ?? []).filter(fact => fact.attribute === "menu" && researchEvidenceFresh(fact))
       .map(fact => fact.text).join(" ")}`;
@@ -235,20 +280,23 @@ function cuisineMatches(candidate: DiscoverCandidate, cuisine: string | null) {
     중식: /중식|중국집|짜장|짬뽕|마라|딤섬/, 고기: /고기|삼겹|갈비|한우|소고기|바비큐/,
     해산물: /해산물|해물|횟집|회센터|생선|조개|새우|굴|씨푸드/,
     "면/국수": /면|국수|라멘|우동|파스타|냉면|칼국수/ };
-  return (terms[cuisine] ?? new RegExp(cuisine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).test(text);
+  return cuisines.some(cuisine => (terms[cuisine]
+    ?? new RegExp(cuisine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).test(text));
 }
 
 function subtypeMatches(candidate: DiscoverCandidate, id: ExplorationActivity,
   preferences: CandidateExplorationPreferences) {
   const text = `${candidate.name} ${candidate.detailedCategory ?? ""} ${candidate.categoryLabel}`;
-  const shopping: Record<NonNullable<CandidateExplorationPreferences["shoppingKind"]>, RegExp> = {
+  const shopping: Record<ShoppingKind, RegExp> = {
     outlet: /아울렛|아웃렛|outlet/i, department: /백화점|department/i,
     market: /시장|마켓|market/i, select_shop: /소품샵|편집샵|셀렉트샵|잡화|라이프스타일/i };
-  const culture: Record<NonNullable<CandidateExplorationPreferences["cultureKind"]>, RegExp> = {
+  const culture: Record<CultureKind, RegExp> = {
     art_museum: /미술관|갤러리|아트센터/i, museum: /박물관|뮤지엄/i,
     media_art: /미디어아트|미디어\s*전시|몰입형\s*전시/i, exhibit: /전시|갤러리|미술관/i };
-  return id === "shopping" && preferences.shoppingKind ? shopping[preferences.shoppingKind].test(text)
-    : id === "culture" && preferences.cultureKind ? culture[preferences.cultureKind].test(text) : true;
+  return id === "shopping" && preferences.shoppingKinds.length
+    ? preferences.shoppingKinds.some(kind => shopping[kind].test(text))
+    : id === "culture" && preferences.cultureKinds.length
+      ? preferences.cultureKinds.some(kind => culture[kind].test(text)) : true;
 }
 
 export function groupExplorationCandidates(input: { plan: ResearchPlan; preferences: CandidateExplorationPreferences;
@@ -262,7 +310,7 @@ export function groupExplorationCandidates(input: { plan: ResearchPlan; preferen
     const need = input.plan.needs.find(item => item.id === `explore-${id}`)!;
     const seen = new Set<string>();
     const ranked = input.candidates.filter(item => item.category === need.category && !hidden.has(dateCandidateKey(item)))
-      .filter(item => id !== "meal" || cuisineMatches(item, input.preferences.cuisine))
+      .filter(item => id !== "meal" || cuisineMatches(item, input.preferences.cuisines))
       .filter(item => id !== "shopping" || /쇼핑|아울렛|백화점|시장|편집샵|소품샵/.test(`${item.name} ${item.detailedCategory ?? ""}`))
       .filter(item => subtypeMatches(item, id, input.preferences))
       .filter(item => { const key = `${item.name.replace(/\s/g, "").toLowerCase()}|${item.address.replace(/\s/g, "").toLowerCase()}`;
@@ -273,23 +321,27 @@ export function groupExplorationCandidates(input: { plan: ResearchPlan; preferen
       .sort((a, b) => b.focusFit - a.focusFit || b.badges.length - a.badges.length
         || b.baseScore - a.baseScore || liveEvidence(b.item).length - liveEvidence(a.item).length
         || a.item.name.localeCompare(b.item.name));
-    const cards = ranked.slice(0, MAX_EXPLORATION_CANDIDATES).map(({ item, badges }) => ({
+    const cards = ranked.slice(0, MAX_EXPLORATION_CANDIDATES).map(({ item, badges }) => {
+      const fact = candidateCardFact(item);
+      return ({
       candidateId: dateCandidateKey(item), name: item.name, area: item.district,
       category: item.categoryLabel, image: item.image, mapUrl: item.mapUrl,
       address: item.address || item.roadAddress, badges,
-      reason: badges.length ? `${badges.join(" · ")} 근거를 확인했어요.`
-        : `${item.district}의 ${item.categoryLabel} 후보예요. 세부 속성은 확인이 필요해요.`,
-      evidenceUrls: liveEvidence(item).filter(fact => fact.verification === "source_checked")
+      reason: fact.text, factLabel: fact.label,
+      evidenceUrls: liveEvidence(item).filter(fact => fact.verification === "source_checked"
+        || fact.verification === "search_report" && Boolean(fact.sourceExcerpt?.trim()
+          && fact.sourceVenueName?.trim() && fact.sourceAddress?.trim()))
         .map(fact => fact.url).slice(0, 3),
-    }));
+    }); });
     const label = EXPLORATION_ACTIVITIES.find(item => item.id === id)?.label ?? id;
     return { id, title: id === "cafe" && input.preferences.cafeQualities.length
       ? `${input.preferences.cafeQualities.map(q => CAFE_CHOICES.find(item => item.value === q)?.label).filter(Boolean).join(" · ")} 카페`
-      : id === "meal" && input.preferences.cuisine ? `${input.preferences.cuisine} 맛집` : label,
+      : id === "meal" && input.preferences.cuisines.length === 1
+        ? `${input.preferences.cuisines[0]} 맛집` : label,
       description: need.qualities.length ? cards.some(card => card.badges.length)
         ? "확인된 근거가 있는 속성만 배지로 표시했어요."
         : "요청한 분위기와 속성은 아직 확인되지 않았어요. 장소 정보를 살펴보세요."
-        : "방문 가능한 장소 후보를 골랐어요.", needIds: [need.id], cards, availableCount: ranked.length };
+        : "지역과 장소 종류가 맞는 후보예요. 방문 가능 시간은 상세 정보에서 확인해 주세요.", needIds: [need.id], cards, availableCount: ranked.length };
   });
 }
 
@@ -300,6 +352,7 @@ export function explorationStateForActivities(state: AIPlannerState,
   const mapped = preferences.activities.flatMap(id => mappings[id] ? [mappings[id]!] : []);
   return { ...state, activities: mapped, pace: preferences.pace,
     explicitPlanningSelections: { ...state.explicitPlanningSelections,
-      activities: mapped, ...(preferences.cuisine && ["한식", "양식", "일식", "중식"].includes(preferences.cuisine)
-        ? { cuisine: preferences.cuisine as "한식" | "양식" | "일식" | "중식" } : {}) } };
+      activities: mapped, ...(preferences.cuisines.length === 1
+        && ["한식", "양식", "일식", "중식"].includes(preferences.cuisines[0])
+        ? { cuisine: preferences.cuisines[0] as "한식" | "양식" | "일식" | "중식" } : {}) } };
 }

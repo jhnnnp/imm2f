@@ -27224,14 +27224,14 @@ html.is-toss-blur .toss-veil {
 /* Candidate exploration keeps eight cards readable in the AI workspace. */
 @media (min-width: 901px) {
   .app-shell:has(.candidate-exploration) {
-    --shell-cols: minmax(78px, 1fr) minmax(0, 4fr) minmax(43rem, 10fr);
+    --shell-cols: minmax(78px, 8rem) minmax(0, 1fr) minmax(30rem, min(53rem, 45vw));
   }
 }
 .candidate-exploration {
   flex: 0 1 auto;
   min-height: 0;
-  max-height: min(69dvh, 850px);
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   padding: 20px;
   margin: 4px 0 14px;
   border: 1px solid #dfe6dd;
@@ -27251,6 +27251,13 @@ html.is-toss-blur .toss-veil {
 .candidate-pref-field { border: 0; margin: 20px 0 0; padding: 0; }
 .candidate-pref-field legend { margin-bottom: 10px; font-size: 14px; font-weight: 750; color: #253e31; }
 .candidate-pref-field legend small { font-size: 11px; font-weight: 400; color: #819088; }
+.candidate-more-options { margin-top: 12px; }
+.candidate-more-options summary { width: fit-content; color: #537461; font-size: 12px; font-weight: 650; cursor: pointer; }
+.candidate-more-options .candidate-choice-grid { margin-top: 10px; }
+.candidate-extra-details { display: grid; gap: 8px; margin-top: 20px; color: #253e31; font-size: 14px; font-weight: 750; }
+.candidate-extra-details small { margin-left: 5px; color: #819088; font-size: 11px; font-weight: 400; }
+.candidate-extra-details textarea { width: 100%; resize: vertical; min-height: 66px; padding: 10px 12px; border: 1px solid #d7e0d9; border-radius: 11px; background: #fff; color: #253e31; font-family: inherit; font-size: 13px; font-weight: 400; line-height: 1.5; }
+.candidate-extra-details > span { color: #819088; font-size: 11px; font-weight: 400; }
 .candidate-choice-grid { display: flex; gap: 8px; flex-wrap: wrap; }
 .candidate-choice-grid button,
 .candidate-results-head > button,
@@ -27263,7 +27270,9 @@ html.is-toss-blur .toss-veil {
 .candidate-primary { padding: 12px 18px; border: 0; border-radius: 12px; background: #315a42; color: white; font-weight: 750; font-size: 13px; cursor: pointer; }
 .candidate-primary:hover { background: #244b36; }
 .candidate-primary:disabled { opacity: .5; cursor: not-allowed; }
-.candidate-intake > .candidate-primary { width: 100%; margin-top: 22px; }
+.candidate-intake-action { display: grid; gap: 8px; margin: 22px -20px -20px; padding: 13px 20px 20px; border-top: 1px solid #dce5dd; background: rgba(250, 251, 248, .97); }
+.candidate-intake-action > span { color: #66756c; font-size: 11px; }
+.candidate-intake-action > .candidate-primary { width: 100%; }
 .candidate-results-head,
 .candidate-group-head { display: flex; justify-content: space-between; align-items: start; gap: 14px; }
 .candidate-group { margin-top: 27px; }
@@ -27272,6 +27281,9 @@ html.is-toss-blur .toss-veil {
 .candidate-group-head h4 small { margin-left: 5px; color: #78897c; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .candidate-group-head > button { flex: none; }
 .candidate-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+@media (min-width: 901px) and (max-width: 1500px) {
+  .candidate-card-grid { grid-template-columns: minmax(0, 1fr); }
+}
 .candidate-card { min-width: 0; min-height: 226px; display: flex; flex-direction: column; padding: 17px 18px 15px; border: 1px solid #dce5dd; border-radius: 17px; background: #fff; box-shadow: 0 7px 22px rgba(28, 54, 36, .045); transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
 .candidate-card:hover { border-color: #b8cbbd; box-shadow: 0 12px 26px rgba(28, 54, 36, .09); transform: translateY(-2px); }
 .candidate-card.is-selected { border-color: #39754c; background: linear-gradient(180deg, #f7fbf7 0%, #fff 42%); box-shadow: 0 0 0 2px rgba(57, 117, 76, .13), 0 9px 24px rgba(28, 54, 36, .08); }
@@ -27284,6 +27296,8 @@ html.is-toss-blur .toss-veil {
 .candidate-card-location { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; margin: 5px 0 0; color: #78877c; font-size: 12px; line-height: 1.5; }
 .candidate-card-evidence { display: flex; align-items: center; gap: 10px; min-height: 39px; margin-top: auto; padding: 9px 11px; border: 1px solid #e8eee9; border-radius: 9px; background: #f8faf8; }
 .candidate-card-evidence-label { flex: none; color: #708177; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.candidate-card-facts { min-width: 0; display: grid; gap: 4px; }
+.candidate-card-facts p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0; color: #536659; font-size: 11px; line-height: 1.45; }
 .candidate-card-badges { display: flex; gap: 5px; flex-wrap: wrap; min-width: 0; }
 .candidate-card-badges span { padding: 3px 7px; border-radius: 5px; background: #e7f0e8; color: #315e40; font-size: 10px; font-weight: 650; }
 .candidate-card-unknown { color: #87958a; font-size: 11px; }
@@ -27304,7 +27318,7 @@ html.is-toss-blur .toss-veil {
 .candidate-refine { display: flex; gap: 7px; margin-top: 12px; }
 .candidate-refine input { min-width: 0; flex: 1; padding: 10px 12px; border: 1px solid #dce4dc; border-radius: 10px; background: #fff; font-size: 12px; }
 .candidate-empty { padding: 20px; border: 1px dashed #cad7cd; border-radius: 12px; color: #637469; font-size: 12px; }
-.candidate-selection-summary { position: sticky; bottom: -20px; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 26px -20px -20px; padding: 13px 20px; border-top: 1px solid #dce5dd; background: rgba(250, 251, 248, .97); backdrop-filter: blur(10px); }
+.candidate-selection-summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 26px -20px -20px; padding: 13px 20px; border-top: 1px solid #dce5dd; background: rgba(250, 251, 248, .97); }
 .candidate-selection-summary b { display: block; margin-bottom: 6px; font-size: 13px; color: #2d4735; }
 .candidate-selection-summary div div { display: flex; flex-wrap: wrap; gap: 5px; }
 .candidate-selection-summary div div button { padding: 4px 8px; border: 0; border-radius: 8px; background: #e8f0e9; color: #41664d; font-size: 11px; cursor: pointer; }
@@ -27313,10 +27327,21 @@ html.is-toss-blur .toss-veil {
 .plan-map-days button { border: 0; border-radius: 8px; padding: 7px 11px; background: transparent; color: #496452; font-size: 12px; font-weight: 700; cursor: pointer; }
 .plan-map-days button.is-active { background: #315a42; color: #fff; }
 @media (max-width: 900px) {
-  .candidate-exploration { max-height: 62dvh; padding: 15px; }
+  .candidate-exploration { max-height: none; padding: 15px; }
+  .candidate-intake-action { bottom: -15px; margin: 22px -15px -15px; padding: 12px 15px 15px; }
   .candidate-card-grid { grid-template-columns: minmax(0, 1fr); }
   .candidate-selection-summary { margin: 22px -15px -15px; padding: 12px 15px; }
 }
+
+/* The context panel is the only scroll container for the entire conversation. */
+.ai-editor:has(.ai-chat-thread) { display: block; min-height: 100%; }
+.ai-chat-thread { display: flex; flex-direction: column; flex: none; min-height: 0; }
+.ai-chat-log { flex: none; min-height: 0; max-height: none; overflow: visible; }
+.ai-exploration-turn { min-width: 0; width: 100%; }
+.ai-chat-thread .ai-chat-composer { position: sticky; bottom: 12px; z-index: 4; }
+.ai-bubble { margin-left: 48px; width: calc(100% - 48px); max-width: calc(100% - 48px); }
+.ai-bubble:before { left: -48px; width: 36px; height: 36px; border-radius: 12px; font-size: 11px; }
+.ai-bubble.is-typing { max-width: calc(100% - 48px); }
 @media (max-width: 480px) {
   .candidate-card { min-height: 207px; padding: 15px; }
   .candidate-card-main h5 { font-size: 18px; }

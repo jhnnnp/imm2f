@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { proposePlanEdits, recommendDatePlanWithSession } from "../actions";
 import type { SessionCandidateContext } from "../sessionCandidates";
 import {
@@ -59,9 +59,14 @@ const EDIT_PROMPT = "일정이 조금 빡센 것 같아. 한곳 빼고 남는 �
 const GENERATE_PLACEHOLDER = "동네와 하고 싶은 일을 말해 주세요";
 const COURSE_PLACEHOLDER = "예: 식당 변경 해줘 · 1번 주차 돼?";
 const WELCOME_CARD: AIChatCard = {
-  headline: "어떤 데이트를 원하세요?",
-  lines: ["동네와 하고 싶은 일을 알려 주세요. 동네만 정했다면 취향을 함께 고를 수 있어요."],
+  headline: "어떤 데이트를 계획할까요?",
+  lines: ["지역과 원하는 경험을 말해 주세요. 장소 후보를 먼저 고른 뒤 일정을 만들 수 있어요."],
   suggestions: ["왕십리 데이트 코스", "성수 영화·카페 코스", "을지로 공연·저녁 코스"],
+};
+const TRIP_WELCOME_CARD: AIChatCard = {
+  headline: "어디로 여행을 떠나시나요?",
+  lines: ["여행 지역과 기간을 알려 주세요. 아직 기간을 정하지 않았다면 함께 선택할 수 있어요."],
+  suggestions: ["부산 여행", "제주 1박2일 여행", "강릉 당일치기"],
 };
 
 type KeepStep = "idle" | "destination" | "trip-dates";
@@ -88,6 +93,7 @@ type ChatTurn = {
   role: "user" | "assistant";
   text: string;
   card?: AIChatCard;
+  explorationAnchorId?: string;
 };
 
 type Mode = "edit" | "generate";
@@ -341,7 +347,7 @@ export function AIPlanEditor({
   const [selectedChoices, setSelectedChoices] = useState<string[]>([]);
   const [peek, setPeek] = useState<{ key: string; stop: AIChatStop } | null>(null);
   const [shownStops, setShownStops] = useState<AIChatStop[]>([]);
-  const [exploration, setExploration] = useState<{ request: string;
+  const [exploration, setExploration] = useState<{ request: string; anchorId: string;
     preferences: CandidateExplorationPreferences; groups: CandidateGroup[] | null;
     experiencePlan: ExperiencePlan | null; researchPlan: ResearchPlan | null } | null>(null);
   const [explorationSelectedIds, setExplorationSelectedIds] = useState<string[]>([]);
@@ -349,7 +355,7 @@ export function AIPlanEditor({
   const [explorationRejectedIds, setExplorationRejectedIds] = useState<string[]>([]);
   const [activeExplorationGroup, setActiveExplorationGroup] = useState<ExplorationActivity | null>(null);
   const [explorationBusy, setExplorationBusy] = useState(false);
-  const [pendingExplorationArea, setPendingExplorationArea] = useState("");
+  const [pendingExplorationRequest, setPendingExplorationRequest] = useState("");
   const [pendingLabel, setPendingLabel] = useState("");
   const [error, setError] = useState("");
   const [keepStep, setKeepStep] = useState<KeepStep>("idle");
@@ -357,19 +363,28 @@ export function AIPlanEditor({
   const [keeping, setKeeping] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const chatLogRef = useRef<HTMLDivElement>(null);
-  const keepChatPinnedRef = useRef(true);
+  const explorationAnchorRef = useRef<HTMLDivElement>(null);
   const requestIdRef = useRef(0);
 
   const keepDays = courseDayCount(recommendation?.items ?? [], plannerState.nights);
 
   useEffect(() => {
-    const chatLog = chatLogRef.current;
-    if (!chatLog || !keepChatPinnedRef.current) return;
+    const last = [...(chatLogRef.current?.children ?? [])]
+      .filter(element => !element.classList.contains("ai-exploration-turn")).at(-1) as HTMLElement | undefined;
+    if (!last) return;
     const frame = window.requestAnimationFrame(() => {
-      chatLog.scrollTo({ top: chatLog.scrollHeight, behavior: "smooth" });
+      last.scrollIntoView({ block: conversation.at(-1)?.role === "assistant" ? "start" : "end", behavior: "smooth" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [conversation, phase, keepStep, tripStartDate]);
+
+  useEffect(() => {
+    if (!exploration) return;
+    const frame = window.requestAnimationFrame(() => {
+      explorationAnchorRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [exploration?.anchorId, exploration?.groups]);
 
   useEffect(() => {
     if (keepStep !== "trip-dates") return;
@@ -529,7 +544,7 @@ export function AIPlanEditor({
     setExplorationSelectedCards([]);
     setExplorationRejectedIds([]);
     setActiveExplorationGroup(null);
-    setPendingExplorationArea("");
+    setPendingExplorationRequest("");
     resetKeep();
     requestIdRef.current += 1;
   }
@@ -582,20 +597,35 @@ export function AIPlanEditor({
     setExplorationBusy(true);
     setConversation(current => [...current, { role: "user", text: message }]);
     try {
-      const combined = pendingExplorationArea ? `${pendingExplorationArea} ${message}` : message;
+      const combined = pendingExplorationRequest ? `${pendingExplorationRequest} ${message}` : message;
       const prepared = await prepareCandidateExploration({ message: combined, previousState: nextState });
       if ("error" in prepared) throw new Error(prepared.error);
       setPlannerState(prepared.state);
       if (prepared.needsArea) {
-        setPendingExplorationArea(combined);
-        setConversation(current => [...current, { role: "assistant", text: "어느 지역에서 계획할까요? 지역만 알려 주세요." }]);
+        setPendingExplorationRequest(combined);
+        setConversation(current => [...current, { role: "assistant", text: "어느 지역으로 갈까요? 여행할 지역이나 동네를 알려 주세요." }]);
         return;
       }
-      setPendingExplorationArea("");
-      setExploration({ request: combined, preferences: prepared.preferences, groups: null,
+      if (prepared.needsSpan) {
+        setPendingExplorationRequest(combined);
+        setConversation(current => [...current, { role: "assistant", text: "며칠 동안 여행하시나요? 당일치기, 1박 2일, 2박 3일 중 골라 주세요.",
+          card: { headline: "여행 기간을 알려 주세요", lines: ["당일치기, 1박 2일, 2박 3일 중 하나를 고르거나 직접 입력해 주세요."],
+            suggestions: ["당일치기", "1박2일", "2박3일"] } }]);
+        return;
+      }
+      setPendingExplorationRequest("");
+      const anchorId = crypto.randomUUID();
+      setExploration({ request: combined, anchorId, preferences: prepared.preferences, groups: null,
         experiencePlan: null, researchPlan: null });
       setActiveExplorationGroup(null);
-      setConversation(current => [...current, { role: "assistant", text: "알려주신 조건은 반영했어요. 하고 싶은 것만 가볍게 확인해 주세요." }]);
+      const area = selectedAreas(prepared.state)[0] ?? "이 지역";
+      const span = prepared.state.stayKind === "overnight"
+        ? `${prepared.state.nights}박 ${prepared.state.nights + 1}일` : prepared.state.stayKind === "daytrip" ? "당일치기" : "데이트";
+      setConversation(current => [...current, { role: "assistant",
+        text: span === "데이트"
+          ? `${area}에서 데이트할 장소를 함께 골라볼게요. 원하는 종류를 선택하면 후보를 찾아드릴게요.`
+          : `${area} ${span} 여행이군요. 원하는 장소 종류를 선택하면 일정에 맞는 후보를 찾아드릴게요.`,
+        explorationAnchorId: anchorId }]);
     } catch {
       setConversation(current => [...current, { role: "assistant", text: "요청을 이해하지 못했어요. 지역과 기간을 다시 알려 주세요." }]);
     } finally { setExplorationBusy(false); setGeneratePrompt(""); }
@@ -633,13 +663,29 @@ export function AIPlanEditor({
       if (exploration?.groups && request) {
         const groupId = refinementGroupForMessage(exploration.groups, request, activeExplorationGroup);
         if (groupId) {
-          setConversation(current => [...current, { role: "user", text: request }]);
+          const anchorId = crypto.randomUUID();
+          setExploration(current => current ? { ...current, anchorId } : current);
+          setConversation(current => [...current, { role: "user", text: request, explorationAnchorId: anchorId }]);
           await searchExploration(groupId, request);
           setGeneratePrompt("");
           return;
         }
         setConversation(current => [...current, { role: "user", text: request },
           { role: "assistant", text: "어느 종류의 장소를 더 찾아볼까요? 카페나 맛집처럼 알려 주세요." }]);
+        setGeneratePrompt("");
+        return;
+      }
+      if (exploration && !exploration.groups) {
+        if (!request) return;
+        const anchorId = crypto.randomUUID();
+        setExploration(current => current ? { ...current, anchorId, preferences: {
+          ...current.preferences,
+          additionalDetails: [current.preferences.additionalDetails, request].filter(Boolean).join(" ").slice(0, 160),
+          provenance: { ...current.preferences.provenance, additionalDetails: "explicit_text" },
+        } } : current);
+        setConversation(current => [...current, { role: "user", text: request },
+          { role: "assistant", text: "추가 조건을 반영했어요. 원하는 장소 종류를 고른 뒤 ‘선택 완료 · 장소 찾기’를 눌러 주세요.",
+            explorationAnchorId: anchorId }]);
         setGeneratePrompt("");
         return;
       }
@@ -773,6 +819,38 @@ export function AIPlanEditor({
     void runGenerate(next, "", userText);
   }
 
+  const explorationPanel = exploration && <div className="ai-exploration-turn" ref={explorationAnchorRef}><CandidateExplorationPanel area={selectedAreas(plannerState)[0] ?? "지역 미정"}
+            nights={plannerState.nights} preferences={exploration.preferences}
+            onPreferencesChange={preferences => setExploration(current => current
+              ? { ...current, preferences, experiencePlan: null, researchPlan: null } : current)}
+            groups={exploration.groups} selectedIds={explorationSelectedIds}
+            selectedCards={explorationSelectedCards}
+            rejectedIds={explorationRejectedIds} busy={explorationBusy}
+            onSearch={() => void searchExploration()}
+            onSelect={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
+              group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
+              setExplorationSelectedIds(current => current.includes(card.candidateId)
+              ? current.filter(id => id !== card.candidateId) : [...current, card.candidateId]);
+              setExplorationSelectedCards(current => current.some(item => item.candidateId === card.candidateId)
+                ? current.filter(item => item.candidateId !== card.candidateId) : [...current, card]); }}
+            onReject={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
+              group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
+              setExplorationRejectedIds(current => [...new Set([...current, card.candidateId])]);
+              setExplorationSelectedIds(current => current.filter(id => id !== card.candidateId));
+              setExplorationSelectedCards(current => current.filter(item => item.candidateId !== card.candidateId)); }}
+            onMore={id => { setActiveExplorationGroup(id); void searchExploration(id); }}
+            onRefine={(id, text) => { setActiveExplorationGroup(id); void searchExploration(id, text); }}
+            onDetail={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
+              group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
+              setPeek({ key: card.candidateId, stop: {
+              name: card.name, meta: `${card.area} · ${card.category}`, reason: card.reason,
+              image: card.image, mapUrl: card.mapUrl, address: card.address,
+              factSourceUrl: card.evidenceUrls[0],
+            } }); }}
+            onPlan={() => void planSelectedCandidates()}
+            onEdit={() => setExploration(current => current ? { ...current, groups: null,
+              experiencePlan: null, researchPlan: null } : current)} /></div>;
+
   return (
     <div className="ai-editor">
       <header className="ai-editor-head">
@@ -781,8 +859,8 @@ export function AIPlanEditor({
         </div>
         <div>
           <span className="eyebrow">ONLY US AI</span>
-          <h2>{mode === "generate" ? "데이트 플래너" : "일정 다듬기"}</h2>
-          <p>{mode === "generate" ? "AI로 완성하는 우리만의 하루" : "말 한마디로 더 여유로운 일정"}</p>
+          <h2>{mode === "generate" ? kind === "trip" ? "여행 플래너" : "데이트 플래너" : "일정 다듬기"}</h2>
+          <p>{mode === "generate" ? kind === "trip" ? "여행 기간에 맞춰 장소부터 일정까지" : "장소부터 고르는 우리만의 하루" : "원하는 부분만 바꿔 보세요"}</p>
         </div>
         <span className="ai-online"><i /> online</span>
       </header>
@@ -815,14 +893,10 @@ export function AIPlanEditor({
             className="ai-chat-log"
             aria-live="polite"
             ref={chatLogRef}
-            onScroll={event => {
-              const element = event.currentTarget;
-              keepChatPinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 36;
-            }}
           >
             {conversation.length === 0 && (
               <AssistantCard
-                card={WELCOME_CARD}
+                card={kind === "trip" ? TRIP_WELCOME_CARD : WELCOME_CARD}
                 text=""
                 selectedChoices={[]}
                 disabled={phase === "loading"}
@@ -832,11 +906,12 @@ export function AIPlanEditor({
             {conversation.map((message, index) => {
               const last = index === conversation.length - 1;
               if (message.role === "user") {
-                return <p key={`user-${index}`} className="is-user">{message.text}</p>;
+                return <Fragment key={`user-${index}`}><p className="is-user">{message.text}</p>
+                  {message.explorationAnchorId === exploration?.anchorId && explorationPanel}</Fragment>;
               }
               return (
+                <Fragment key={`assistant-${index}`}>
                 <AssistantCard
-                  key={`assistant-${index}`}
                   card={message.card}
                   text={message.text}
                   options={last ? choicePrompt : undefined}
@@ -848,6 +923,8 @@ export function AIPlanEditor({
                   onToggle={label => setSelectedChoices(current => label === "추천에 맡기기" ? [label] : current.includes(label) ? current.filter(item => item !== label) : [...current.filter(item => item !== "추천에 맡기기"), label])}
                   onSubmit={submitChoices}
                 />
+                {message.explorationAnchorId === exploration?.anchorId && explorationPanel}
+                </Fragment>
               );
             })}
             {phase === "loading" && (
@@ -857,37 +934,6 @@ export function AIPlanEditor({
               </article>
             )}
           </div>
-          {exploration && <CandidateExplorationPanel area={selectedAreas(plannerState)[0] ?? "지역 미정"}
-            nights={plannerState.nights} preferences={exploration.preferences}
-            onPreferencesChange={preferences => setExploration(current => current
-              ? { ...current, preferences, experiencePlan: null, researchPlan: null } : current)}
-            groups={exploration.groups} selectedIds={explorationSelectedIds}
-            selectedCards={explorationSelectedCards}
-            rejectedIds={explorationRejectedIds} busy={explorationBusy}
-            onSearch={() => void searchExploration()}
-            onSelect={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
-              group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
-              setExplorationSelectedIds(current => current.includes(card.candidateId)
-              ? current.filter(id => id !== card.candidateId) : [...current, card.candidateId]);
-              setExplorationSelectedCards(current => current.some(item => item.candidateId === card.candidateId)
-                ? current.filter(item => item.candidateId !== card.candidateId) : [...current, card]); }}
-            onReject={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
-              group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
-              setExplorationRejectedIds(current => [...new Set([...current, card.candidateId])]);
-              setExplorationSelectedIds(current => current.filter(id => id !== card.candidateId));
-              setExplorationSelectedCards(current => current.filter(item => item.candidateId !== card.candidateId)); }}
-            onMore={id => { setActiveExplorationGroup(id); void searchExploration(id); }}
-            onRefine={(id, text) => { setActiveExplorationGroup(id); void searchExploration(id, text); }}
-            onDetail={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
-              group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
-              setPeek({ key: card.candidateId, stop: {
-              name: card.name, meta: `${card.area} · ${card.category}`, reason: card.reason,
-              image: card.image, mapUrl: card.mapUrl, address: card.address,
-              factSourceUrl: card.evidenceUrls[0],
-            } }); }}
-            onPlan={() => void planSelectedCandidates()}
-            onEdit={() => setExploration(current => current ? { ...current, groups: null,
-              experiencePlan: null, researchPlan: null } : current)} />}
           {peek ? <CoursePlacePeek key={peek.key} stop={peek.stop} onClose={() => setPeek(null)} /> : null}
           {recommendation ? (
             <div className="ai-course-preview">

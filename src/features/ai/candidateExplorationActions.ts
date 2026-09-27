@@ -36,10 +36,16 @@ export async function prepareCandidateExploration(input: { message: string; prev
   if (!message) return { error: "empty_request" } as const;
   const interpreted = await interpretDateRequest({ message, previousState: input.previousState,
     previousPlaceNames: [] });
-  const state = applyDateDefaults({ ...interpreted.state, ...extractStay(message),
+  const explicitStay = extractStay(message);
+  const previousSpan = input.previousState?.stayKind === "overnight" || input.previousState?.stayKind === "daytrip"
+    ? { stayKind: input.previousState.stayKind, nights: input.previousState.nights } : null;
+  const state = applyDateDefaults({ ...interpreted.state, ...(explicitStay ?? previousSpan),
     userRequests: [...(interpreted.state.userRequests ?? []), message].slice(-8) });
+  const travelRequested = /여행|휴가|관광|놀러/.test(message)
+    || interpreted.state.stayKind === "overnight" || interpreted.state.stayKind === "daytrip";
   return { state, preferences: initialExplorationPreferences(message, state),
-    needsArea: selectedAreas(state).length === 0 };
+    needsArea: selectedAreas(state).length === 0,
+    needsSpan: travelRequested && !explicitStay && !previousSpan };
 }
 
 export async function updateCandidateExplorationChoices(input: {

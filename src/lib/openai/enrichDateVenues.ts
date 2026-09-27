@@ -271,13 +271,14 @@ export async function enrichResearchNeedEvidence(candidates: DiscoverCandidate[]
   const evidenceNeeds = needs.filter(need => need.kind === "evidence" && need.evidenceNeeded.length);
   if (!candidates.length) return candidates;
   const fresh = candidates.map(freshResearchCandidateEvidence);
-  if (!evidenceNeeds.length) return fresh;
   const stored = await readVenueEvidence(fresh);
   const grounded = fresh.map(candidate => {
     const evidence = [...new Map([...(candidate.evidence ?? []), ...(stored.get(dateCandidateKey(candidate)) ?? [])]
       .map(fact => [`${fact.url}:${fact.text}`, fact])).values()];
     return evidence.length ? { ...candidate, evidence } : candidate;
   });
+  // Previously checked venue facts can still improve cards when no new quality research was requested.
+  if (!evidenceNeeds.length) return grounded;
   if (!isOpenAiConfigured()) return grounded;
   const focus = new Map<string, string[]>();
   for (const need of evidenceNeeds) {

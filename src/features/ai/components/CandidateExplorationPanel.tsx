@@ -24,17 +24,21 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
     onPreferencesChange({ ...preferences, activities,
       provenance: { ...preferences.provenance, [id]: "user_selected" } });
   };
+  const toggleDetail = <T,>(items: T[], value: T) => items.includes(value)
+    ? items.filter(item => item !== value) : [...items, value];
   return <section className="candidate-exploration" aria-label="장소 후보 탐색">
     {!groups ? <div className="candidate-intake">
       <div className="candidate-intake-heading">
         <span className="eyebrow">DISCOVER THE PLACE</span>
-        <h3>어떤 경험을 담아볼까요?</h3>
-        <p>알려주신 지역과 기간을 바탕으로 장소부터 함께 골라요.</p>
+        <h3>어떤 장소를 찾을까요?</h3>
+        <p>가고 싶은 장소 종류를 선택해 주세요. 선택이 끝나면 후보를 찾아볼게요.</p>
       </div>
       <div className="candidate-pref-summary"><b>{area} · {nights > 0 ? `${nights}박${nights + 1}일` : "하루"}</b>
         {preferences.activities.map(id => <span key={id}>{EXPLORATION_ACTIVITIES.find(item => item.id === id)?.label}</span>)}
         {preferences.cafeQualities.map(q => <span key={q}>{CAFE_CHOICES.find(item => item.value === q)?.label}</span>)}
-        {preferences.cuisine && <span>{preferences.cuisine}</span>}
+        {preferences.cuisines.map(item => <span key={item}>{item}</span>)}
+        {preferences.shoppingKinds.map(item => <span key={item}>{SHOPPING_CHOICES.find(option => option.value === item)?.label}</span>)}
+        {preferences.cultureKinds.map(item => <span key={item}>{CULTURE_CHOICES.find(option => option.value === item)?.label}</span>)}
         <span>{preferences.pace === "relaxed" ? "여유롭게" : preferences.pace === "active" ? "많이 둘러보기" : "적당히"}</span>
       </div>
       <fieldset className="candidate-pref-field"><legend>이번 일정에서 하고 싶은 것</legend>
@@ -43,34 +47,49 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
           className={preferences.activities.includes(option.id) ? "is-selected" : ""}
           onClick={() => toggle(option.id)}>{option.label}</button>)}</div>
       </fieldset>
-      {preferences.activities.includes("cafe") && <fieldset className="candidate-pref-field"><legend>카페 조건 <small>선택 사항</small></legend>
-        <div className="candidate-choice-grid">{CAFE_CHOICES.map(option => <button key={option.value}
+      {preferences.activities.includes("cafe") && <fieldset className="candidate-pref-field"><legend>카페 취향 <small>여러 개 선택 가능 · 선택하지 않아도 돼요</small></legend>
+        <div className="candidate-choice-grid">{CAFE_CHOICES.filter(option => !["view", "spacious"].includes(option.value)).map(option => <button key={option.value}
           type="button" aria-pressed={preferences.cafeQualities.includes(option.value)}
           className={preferences.cafeQualities.includes(option.value) ? "is-selected" : ""}
           onClick={() => onPreferencesChange({ ...preferences, cafeQualities: preferences.cafeQualities.includes(option.value)
             ? preferences.cafeQualities.filter(q => q !== option.value) : [...preferences.cafeQualities, option.value],
             provenance: { ...preferences.provenance, [`cafe:${option.value}`]: "user_selected" } })}>{option.label}</button>)}</div>
+        <details className="candidate-more-options"><summary>다른 카페 취향도 고르기</summary>
+          <div className="candidate-choice-grid">{CAFE_CHOICES.filter(option => ["view", "spacious"].includes(option.value)).map(option => <button key={option.value}
+            type="button" aria-pressed={preferences.cafeQualities.includes(option.value)}
+            className={preferences.cafeQualities.includes(option.value) ? "is-selected" : ""}
+            onClick={() => onPreferencesChange({ ...preferences,
+              cafeQualities: toggleDetail(preferences.cafeQualities, option.value),
+              provenance: { ...preferences.provenance, [`cafe:${option.value}`]: "user_selected" } })}>{option.label}</button>)}</div>
+        </details>
       </fieldset>}
-      {preferences.activities.includes("meal") && <fieldset className="candidate-pref-field"><legend>음식 종류 <small>선택 사항</small></legend>
+      {preferences.activities.includes("meal") && <fieldset className="candidate-pref-field"><legend>음식 종류 <small>여러 개 선택 가능</small></legend>
         <div className="candidate-choice-grid">{CUISINE_CHOICES.map(option => <button key={option} type="button"
-          aria-pressed={preferences.cuisine === option} className={preferences.cuisine === option ? "is-selected" : ""}
-          onClick={() => onPreferencesChange({ ...preferences, cuisine: preferences.cuisine === option ? null : option,
+          aria-pressed={preferences.cuisines.includes(option)} className={preferences.cuisines.includes(option) ? "is-selected" : ""}
+          onClick={() => onPreferencesChange({ ...preferences, cuisines: toggleDetail(preferences.cuisines, option),
             provenance: { ...preferences.provenance, cuisine: "user_selected" } })}>{option}</button>)}</div>
       </fieldset>}
-      {preferences.activities.includes("shopping") && <fieldset className="candidate-pref-field"><legend>쇼핑 종류 <small>선택 사항</small></legend>
+      {preferences.activities.includes("shopping") && <fieldset className="candidate-pref-field"><legend>쇼핑 종류 <small>여러 개 선택 가능</small></legend>
         <div className="candidate-choice-grid">{SHOPPING_CHOICES.map(option => <button key={option.value} type="button"
-          aria-pressed={preferences.shoppingKind === option.value}
-          className={preferences.shoppingKind === option.value ? "is-selected" : ""}
-          onClick={() => onPreferencesChange({ ...preferences, shoppingKind: preferences.shoppingKind === option.value ? null : option.value,
+          aria-pressed={preferences.shoppingKinds.includes(option.value)}
+          className={preferences.shoppingKinds.includes(option.value) ? "is-selected" : ""}
+          onClick={() => onPreferencesChange({ ...preferences, shoppingKinds: toggleDetail(preferences.shoppingKinds, option.value),
             provenance: { ...preferences.provenance, shoppingKind: "user_selected" } })}>{option.label}</button>)}</div>
       </fieldset>}
-      {preferences.activities.includes("culture") && <fieldset className="candidate-pref-field"><legend>문화 종류 <small>선택 사항</small></legend>
+      {preferences.activities.includes("culture") && <fieldset className="candidate-pref-field"><legend>문화 종류 <small>여러 개 선택 가능</small></legend>
         <div className="candidate-choice-grid">{CULTURE_CHOICES.map(option => <button key={option.value} type="button"
-          aria-pressed={preferences.cultureKind === option.value}
-          className={preferences.cultureKind === option.value ? "is-selected" : ""}
-          onClick={() => onPreferencesChange({ ...preferences, cultureKind: preferences.cultureKind === option.value ? null : option.value,
+          aria-pressed={preferences.cultureKinds.includes(option.value)}
+          className={preferences.cultureKinds.includes(option.value) ? "is-selected" : ""}
+          onClick={() => onPreferencesChange({ ...preferences, cultureKinds: toggleDetail(preferences.cultureKinds, option.value),
             provenance: { ...preferences.provenance, cultureKind: "user_selected" } })}>{option.label}</button>)}</div>
       </fieldset>}
+      <label className="candidate-extra-details" htmlFor="candidate-extra-details">더 원하는 조건 <small>선택 사항</small>
+        <textarea id="candidate-extra-details" maxLength={160} rows={2} value={preferences.additionalDetails}
+          placeholder="예: 조용히 대화할 카페, 덜 붐비는 전시"
+          onChange={event => onPreferencesChange({ ...preferences, additionalDetails: event.target.value,
+            provenance: { ...preferences.provenance, additionalDetails: "user_selected" } })} />
+        <span>선택한 장소 종류를 찾을 때 참고하고, 확인되지 않은 특징은 단정하지 않아요.</span>
+      </label>
       <fieldset className="candidate-pref-field"><legend>일정 스타일</legend>
         <div className="candidate-choice-grid is-pace">{([
           ["relaxed", "여유롭게"], ["balanced", "적당히"], ["active", "많이 둘러보기"],
@@ -79,8 +98,9 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
           onClick={() => onPreferencesChange({ ...preferences, pace: value,
             provenance: { ...preferences.provenance, pace: "user_selected" } })}>{label}</button>)}</div>
       </fieldset>
-      <button className="candidate-primary" type="button" disabled={busy || !preferences.activities.length}
-        onClick={onSearch}>{busy ? "장소를 찾고 있어요…" : "장소 후보 보기"}</button>
+      <div className="candidate-intake-action"><span>조건을 고른 뒤 버튼을 눌러야 장소를 찾습니다.</span>
+        <button className="candidate-primary" type="button" disabled={busy || !preferences.activities.length}
+          onClick={onSearch}>{busy ? "장소를 찾고 있어요…" : "선택 완료 · 장소 찾기"}</button></div>
     </div> : <div className="candidate-results">
       <header className="candidate-results-head"><div><span className="eyebrow">YOUR PLACE SHORTLIST</span>
         <h3>{area} · {nights > 0 ? `${nights}박${nights + 1}일` : "하루"}</h3>
@@ -106,10 +126,12 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
                 <p className="candidate-card-location">{card.address || card.area}</p>
               </div>
               <div className="candidate-card-evidence">
-                <span className="candidate-card-evidence-label">{card.badges.length ? "확인된 특징" : "장소 특징"}</span>
-                {card.badges.length ? <div className="candidate-card-badges">{card.badges.slice(0, 3)
-                  .map(badge => <span key={badge}>{badge}</span>)}</div>
-                  : <span className="candidate-card-unknown">세부 특징 확인 전</span>}
+                <span className="candidate-card-evidence-label">{card.factLabel}</span>
+                <div className="candidate-card-facts">
+                  {card.badges.length > 0 && <div className="candidate-card-badges">{card.badges.slice(0, 3)
+                    .map(badge => <span key={badge}>{badge}</span>)}</div>}
+                  <p>{card.reason}</p>
+                </div>
               </div>
               <div className="candidate-card-actions"><button type="button" className="candidate-select"
                 aria-pressed={selected} onClick={() => onSelect(card)}>{selected ? "선택 취소" : "장소 선택"}</button>

@@ -21,8 +21,9 @@ import { exploreCandidateGroups, prepareCandidateExploration,
 import { candidateExplorationMode } from "./candidateExplorationMode";
 
 const state = withAreas(emptyDateBrief(), ["부산"]);
-const prefs: CandidateExplorationPreferences = { activities: ["cafe"], cafeQualities: [], cuisine: null,
-  shoppingKind: null, cultureKind: null, pace: "balanced", provenance: { cafe: "user_selected" } };
+const prefs: CandidateExplorationPreferences = { activities: ["cafe"], cafeQualities: [], cuisines: [],
+  shoppingKinds: [], cultureKinds: [], additionalDetails: "", pace: "balanced",
+  provenance: { cafe: "user_selected" } };
 const sessionId = "123e4567-e89b-12d3-a456-426614174000";
 const venue = (id: number): DiscoverCandidate => ({ externalSource: "kakao", externalPlaceId: String(id),
   name: `카페 ${id}`, category: "cafe", categoryLabel: "카페", district: "부산 해운대구",
@@ -71,6 +72,26 @@ it("prepares known region and activity, then shows only the five eligible provid
   expect(result.groups[0].cards).toHaveLength(5);
   expect(result.sessionCandidates.shownCandidateIds).toHaveLength(5);
   expect(result.researchPlan.needs.filter(need => need.kind === "venue")).toHaveLength(1);
+});
+
+it("asks for a travel span before candidate exploration unless the user supplied one", async () => {
+  const missing = await prepareCandidateExploration({ message: "부산 여행가려고" });
+  if ("error" in missing) throw new Error(missing.error);
+  expect(missing.needsArea).toBe(false);
+  expect(missing.needsSpan).toBe(true);
+  expect(searchKakaoPlacesRemote).not.toHaveBeenCalled();
+
+  const completed = await prepareCandidateExploration({ message: "부산 여행가려고 2박3일" });
+  if ("error" in completed) throw new Error(completed.error);
+  expect(completed.needsSpan).toBe(false);
+  expect(completed.state.nights).toBe(2);
+  expect(completed.state.stayKind).toBe("overnight");
+
+  const previous = await prepareCandidateExploration({ message: "부산 카페 여행",
+    previousState: { ...state, stayKind: "daytrip", nights: 0 } });
+  if ("error" in previous) throw new Error(previous.error);
+  expect(previous.needsSpan).toBe(false);
+  expect(previous.state.stayKind).toBe("daytrip");
 });
 
 it("reuses eight unseen eligible session candidates before issuing a provider search", async () => {
