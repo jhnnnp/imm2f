@@ -23,6 +23,21 @@ export type DateObservation =
       timestamp: string }
   | { type: "semantic_signal"; source: "date_turn_assist";
       data: SemanticSignalDecision; timestamp: string }
+  | { type: "experience_plan"; source: "experience_plan_shadow";
+      data: { dayCount: number; densities: string[]; blockCount: number;
+        qualitativeNeedCount: number; potentialRewriteConflicts: string[];
+        densityWindowWarningCount: number; paceWarning: boolean;
+        supportingSlotConflict: boolean };
+      timestamp: string }
+  | { type: "research_plan"; source: "date_research_plan";
+      data: { mode: "off" | "shadow" | "active"; needCount: number;
+        requiredNeedCount: number; sufficientCount: number; insufficientCount: number;
+        qualitativeNeedCount: number; fallbackReason: string | null;
+        qualitativeNeedLostCount: number;
+        legacyOpenPool?: string[];
+        legacyOnlySearchCount: number; researchOnlySearchCount: number;
+        unnecessaryLegacySupportSearchCount: number };
+      timestamp: string }
   | { type: "execution_plan"; source: "date_execution_planner";
       data: { taskTypes: DateExecutionTaskType[]; taskCount: number; blockedCount: number;
         validTaskCount?: number; executableTaskCount?: number; dependencyBlockedCount?: number;

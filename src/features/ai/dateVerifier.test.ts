@@ -31,4 +31,17 @@ describe("date itinerary verifier", () => {
     expect(verification.passed).toBe(true);
     expect(verification.routeVerified).toBe(false);
   });
+
+  it.each([
+    ["1일차 여행일 핵심 경험 누락", true, "missing_daily_experience", "soft"],
+    ["예산 초과", false, "budget_exceeded", "hard"],
+    ["새로운 미분류 경고", true, "legacy_unclassified", "soft"],
+  ] as const)("applies legacy policy to %s", (message, passed, code, severity) => {
+    const verification = verifyDateItinerary({ course: { ...course, problems: [message] },
+      candidates: [], state: emptyDateBrief(), condition, route: null });
+    expect(verification.passed).toBe(passed);
+    expect((passed ? verification.softIssues : verification.hardIssues)[0]).toMatchObject({ code, severity });
+    expect(verification.issues).toEqual(passed ? [] : [message]);
+    expect(verification.warnings).toEqual(passed ? [message] : []);
+  });
 });

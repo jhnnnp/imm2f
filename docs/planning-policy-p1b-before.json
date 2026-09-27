@@ -1,0 +1,239 @@
+{
+  "summary": {
+    "total": 15,
+    "generationSuccessRate": 0.125,
+    "hardViolationCount": 59,
+    "softIssueCount": 1,
+    "unnecessaryRejectionCount": 7,
+    "unsafeAcceptanceCount": 0,
+    "transformationCount": 16,
+    "simulatedFallbackUseRateWhenModelUnavailable": 0.13333333333333333
+  },
+  "rows": [
+    {
+      "id": "A_busan_three_days",
+      "expected": "accepted",
+      "accepted": false,
+      "hardIssues": [
+        "stop_count",
+        "missing_experience_evidence",
+        "missing_experience_evidence",
+        "missing_daily_experience",
+        "missing_experience_evidence"
+      ],
+      "softIssues": [],
+      "stopCount": 7,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "B_late_arrival",
+      "expected": "accepted",
+      "accepted": false,
+      "hardIssues": [
+        "stop_count",
+        "sparse_day",
+        "missing_daily_meal",
+        "missing_experience_evidence",
+        "missing_experience_evidence",
+        "sparse_day",
+        "missing_daily_meal",
+        "missing_daily_experience",
+        "missing_experience_evidence"
+      ],
+      "softIssues": [],
+      "stopCount": 5,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "C_early_departure",
+      "expected": "accepted",
+      "accepted": false,
+      "hardIssues": [
+        "stop_count",
+        "missing_experience_evidence",
+        "sparse_day",
+        "missing_experience_evidence",
+        "sparse_day",
+        "missing_daily_meal",
+        "missing_daily_experience",
+        "missing_experience_evidence"
+      ],
+      "softIssues": [],
+      "stopCount": 5,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "D_restful_trip",
+      "expected": "accepted",
+      "accepted": false,
+      "hardIssues": [
+        "stop_count",
+        "sparse_day",
+        "missing_daily_meal",
+        "sparse_day",
+        "missing_daily_meal",
+        "sparse_day",
+        "missing_daily_meal"
+      ],
+      "softIssues": [],
+      "stopCount": 3,
+      "fallbackUsed": true,
+      "transformationCount": 1
+    },
+    {
+      "id": "E_cafe_tour",
+      "expected": "accepted",
+      "accepted": true,
+      "hardIssues": [],
+      "softIssues": [],
+      "stopCount": 2,
+      "fallbackUsed": true,
+      "transformationCount": 1
+    },
+    {
+      "id": "F_short_evening",
+      "expected": "accepted",
+      "accepted": false,
+      "hardIssues": [
+        "stop_count",
+        "missing_daily_experience",
+        "missing_experience_evidence"
+      ],
+      "softIssues": [],
+      "stopCount": 1,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "G_active_date",
+      "expected": "accepted",
+      "accepted": false,
+      "hardIssues": [
+        "missing_experience_evidence"
+      ],
+      "softIssues": [
+        "low_variety"
+      ],
+      "stopCount": 2,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "H_slim_three_days",
+      "expected": "accepted",
+      "accepted": false,
+      "hardIssues": [
+        "stop_count",
+        "sparse_day",
+        "missing_daily_meal",
+        "missing_experience_evidence",
+        "sparse_day",
+        "missing_daily_meal",
+        "missing_experience_evidence",
+        "sparse_day",
+        "missing_daily_meal",
+        "missing_experience_evidence"
+      ],
+      "softIssues": [],
+      "stopCount": 3,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "S_budget",
+      "expected": "blocked",
+      "accepted": false,
+      "hardIssues": [
+        "missing_daily_experience",
+        "missing_experience_evidence",
+        "budget_exceeded"
+      ],
+      "softIssues": [],
+      "stopCount": 2,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "S_excluded_food",
+      "expected": "blocked",
+      "accepted": false,
+      "hardIssues": [
+        "missing_experience_evidence",
+        "excluded_food"
+      ],
+      "softIssues": [],
+      "stopCount": 2,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "S_required_place",
+      "expected": "blocked",
+      "accepted": false,
+      "hardIssues": [
+        "missing_experience_evidence",
+        "required_place_missing"
+      ],
+      "softIssues": [],
+      "stopCount": 2,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "S_excluded_place",
+      "expected": "blocked",
+      "accepted": false,
+      "hardIssues": [
+        "missing_experience_evidence",
+        "excluded_place"
+      ],
+      "softIssues": [],
+      "stopCount": 2,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "S_explicit_time",
+      "expected": "blocked",
+      "accepted": false,
+      "hardIssues": [
+        "missing_experience_evidence",
+        "schedule_infeasible"
+      ],
+      "softIssues": [],
+      "stopCount": 2,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    },
+    {
+      "id": "S_invalid_candidate",
+      "expected": "blocked",
+      "accepted": false,
+      "hardIssues": [
+        "unknown_candidate",
+        "stop_count",
+        "missing_daily_experience",
+        "missing_experience_evidence"
+      ],
+      "softIssues": [],
+      "stopCount": 1,
+      "fallbackUsed": false,
+      "transformationCount": 2
+    },
+    {
+      "id": "S_required_opening",
+      "expected": "blocked",
+      "accepted": false,
+      "hardIssues": [
+        "missing_experience_evidence"
+      ],
+      "softIssues": [],
+      "stopCount": 2,
+      "fallbackUsed": false,
+      "transformationCount": 1
+    }
+  ]
+}

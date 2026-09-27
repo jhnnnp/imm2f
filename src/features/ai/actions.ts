@@ -52,6 +52,7 @@ import {
   uniqueStrings,
   isTravelPlan,
   dateSpine,
+  openSearchPool,
   discoveryActivities,
   rescueSearchQueries,
   missingWantedSlots,
@@ -67,13 +68,21 @@ import { editCurrentCourse } from "./editCurrentCourse";
 import { designDateDiscovery } from "@/lib/openai/designDateDiscovery";
 import { readVenueEvidence } from "@/lib/openai/venueEvidenceStore";
 import { candidateFoodConflict, toDateIntent } from "@/features/ai/dateIntent";
-import { runDateTaskPlanner } from "@/lib/openai/dateTaskPlanner";
+import { dateTaskObjectives, runDateTaskPlanner } from "@/lib/openai/dateTaskPlanner";
 import { planNextDateResearch, dateResearchCallKey } from "@/lib/openai/dateResearchAgent";
 import { runDateAgentCourse } from "@/lib/openai/dateAgentOrchestrator";
 import { applyDateMemory, collectDateMemory } from "@/features/ai/dateMemory";
 import { discoveryCatalog } from "./courseDesign";
+import { planningFailureMessage } from "./planningFailureMessage";
 import { buildDateCandidatePool, type DateCandidateRecord } from "./dateCandidatePool";
 import { buildDateContext, type DateContext } from "./dateContext";
+import { observeExperiencePlan } from "@/lib/openai/experiencePlan";
+import { compareResearchSearches, evaluateResearchCoverage, executeResearchIntents, freshResearchCandidateEvidence,
+  getResearchPlanMode, tryBuildResearchPlan,
+  primarySearchIntents, providerCategoryForResearchIntent,
+  researchCoverageFallbackReason, researchSearchAuthority, researchSearchIntents, validateResearchPlan,
+  type ResearchCoverage, type ResearchPlan } from "./researchPlan";
+import { enrichResearchNeedEvidence } from "@/lib/openai/enrichDateVenues";
 import { mergeSessionCandidates, sealSessionCandidates, sessionShownPlaces,
   verifiedSessionCandidates, type SessionCandidateContext } from "./sessionCandidates";
 import { candidateSessionObservation } from "./dateObservation";
@@ -383,6 +392,7 @@ async function recommendPlacesForChat(input: {
   excludedCandidateIds?: string[];
   requireHardEligibility?: boolean;
   sessionFeedbackSignals?: PlaceSessionFeedbackSignal[];
+  researchPlan?: ResearchPlan | null;
 }): Promise<AIPlannerResult> {
   const startedAt = performance.now();
   const area = input.ask.area || selectedAreas(input.state)[0] || "";
@@ -397,6 +407,16 @@ async function recommendPlacesForChat(input: {
     return clarificationReply("area", { ...input.state, placeAsk: { ...input.ask, area: "" } }, card);
   }
   const ask: PlaceAsk = { ...input.ask, area };
+  const researchPlan = getResearchPlanMode() === "active" && validateResearchPlan(input.researchPlan ?? null)
+    ? input.researchPlan! : null;
+  const researchCategories = ask.kind === "cafe" || ask.kind === "dessert" ? ["cafe"]
+    : ask.kind === "restaurant" || ask.kind === "bar" ? ["restaurant"]
+      : ask.kind === "exhibit" ? ["photo"]
+        : ask.kind === "spot" ? ["tourist", "nature"] : ["photo", "tourist", "nature"];
+  const researchSearches = researchPlan ? researchSearchIntents(researchPlan, area)
+    .filter(intent => intent.category && researchCategories.includes(intent.category)) : [];
+  const activeResearch = researchSearches.length > 0;
+  let researchFallback = false;
   const continuing = Boolean(input.state.placeAsk && input.state.placeAsk.kind === ask.kind && input.state.placeAsk.area === area && isMoreRequest(input.message));
   const alreadyShown = continuing ? (input.state.seenPlaces ?? input.state.shownPlaces ?? []) : [];
   const requestedAreas = extractAreasFromText(input.message);
@@ -407,18 +427,27 @@ async function recommendPlacesForChat(input: {
     listPlaces(), loadLatestCoupleInsight(),
     ...(input.skipSearch ? [] : [
       searchKakaoPlacesRemote({ query: area, page: 1 }),
-      ...placeSearchPlans(ask).map(plan => searchKakaoPlacesRemote({
+      ...(activeResearch ? researchSearches.flatMap(plan => [1, 2].map(page => ({ ...plan, page })))
+        : placeSearchPlans(ask)).map(plan => searchKakaoPlacesRemote({
       region: plan.region,
       query: plan.query,
-      category: plan.category,
+      category: activeResearch ? providerCategoryForResearchIntent(plan) : plan.category,
       page: plan.page,
       })),
     ]),
   ]);
-  const [anchorSearch, ...planSearches] = searches;
+  const [anchorSearch, ...initialPlanSearches] = searches;
+  let planSearches = initialPlanSearches;
   const anchor = anchorSearch?.ok
     ? (anchorSearch.places.find(candidate => candidate.name.replace(/\s/g, "").includes(area.replace(/\s/g, ""))) ?? anchorSearch.places[0])
     : undefined;
+  if (activeResearch && !input.skipSearch && !planSearches.some(result => result.ok
+    && result.places.some(candidate => researchCategories.includes(candidate.category)))) {
+    researchFallback = true;
+    planSearches = [...planSearches, ...await Promise.all(placeSearchPlans(ask).map(plan =>
+      searchKakaoPlacesRemote({ region: plan.region, query: plan.query,
+        category: plan.category, page: plan.page })))];
+  }
   const initialDoneAt = performance.now();
   const allowHarsh = placeAskHarshAllow(input.message, ask, applyTasteHarshAllow(allowsHarshDateMeal(input.message), input.message, input.avoidFoods));
   const filterContext = {
@@ -436,7 +465,8 @@ async function recommendPlacesForChat(input: {
     ask,
     filterContext,
   ).length : 0;
-  const needGeoSearch = Boolean(anchor && (ask.kind === "restaurant" || ask.kind === "cafe") && nearbyInitial < PLACE_PICK_MIN * 3);
+  const needGeoSearch = Boolean((!activeResearch || researchFallback) && anchor
+    && (ask.kind === "restaurant" || ask.kind === "cafe") && nearbyInitial < PLACE_PICK_MIN * 3);
   const geoSearches = needGeoSearch && anchor
     ? await Promise.all([1, 2].map(page => searchKakaoPlacesRemote({
       category: ask.kind === "restaurant" ? "restaurant" : "cafe",
@@ -488,7 +518,9 @@ async function recommendPlacesForChat(input: {
     activities: [],
     allowHarsh,
   };
-  const ranked = rankPlaceCandidates(filtered, ask, rankContext);
+  const researchGrounded = activeResearch && !input.skipSearch && researchPlan
+    ? await enrichResearchNeedEvidence(filtered, baseState, researchPlan.needs).catch(() => filtered) : filtered;
+  const ranked = rankPlaceCandidates(researchGrounded, ask, rankContext);
   if (ranked.length < 1) {
     const suggestions = nearbyAreaSuggestions(baseState);
     const card: AIChatCard = {
@@ -546,6 +578,7 @@ async function recommendPlacesForChat(input: {
     kind: ask.kind, searchMs: Math.round(initialDoneAt - startedAt), geoMs: Math.round(geoDoneAt - initialDoneAt),
     hydrateMs: Math.round(hydrateDoneAt - geoDoneAt), selectMs: Math.round(pickedDoneAt - hydrateDoneAt),
     totalMs: Math.round(pickedDoneAt - startedAt), nearbyInitial, geoSearched: needGeoSearch,
+    researchMode: activeResearch ? "active" : getResearchPlanMode(), researchFallback,
     candidateCount: hydrated.length, shownCount: picked.shownPlaces.length, source: picked.source,
   }));
   if (picked.card.stops && picked.card.stops.length < Math.min(PLACE_PICK_MIN, hydrated.length) && !alreadyShown.length) {
@@ -573,6 +606,8 @@ type RecommendDatePlanInput = {
   previousState?: AIPlannerState;
   dateLabel?: string;
   conversation?: DateChatTurn[];
+  /** Verified session selections are hard anchors for the existing planner handoff. */
+  selectedCandidateIds?: string[];
 };
 
 async function recommendDatePlanCore(input: RecommendDatePlanInput,
@@ -628,7 +663,43 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       const observedContext = execution ? { ...baseContext, executionPlan: execution.plan,
         executionPlanComparison: execution.comparison,
         observations: [...baseContext.observations, execution.observation] } : baseContext;
-      observedContextSnapshot.current = observedContext;
+      const needsExperience = route?.mode === "course"
+        && (!input.currentPlan || state.intent === "reset" || state.intent === "create")
+        || route?.mode === "places" && Boolean(route.placeAsk?.area)
+          && getResearchPlanMode() !== "off";
+      const experience = needsExperience
+        ? await observeExperiencePlan({ message, state: route?.mode === "places" && route.placeAsk?.area
+          ? withAreas(state, [route.placeAsk.area]) : state, context: observedContext }) : null;
+      const observedResearchPlan = tryBuildResearchPlan(experience?.plan);
+      const observedResearchComparison = observedResearchPlan
+        ? compareResearchSearches(observedResearchPlan, route?.mode === "places"
+          ? route.placeAsk?.area || selectedAreas(state)[0] || ""
+          : selectedAreas(state)[0] || "", searchIntents(state), experience?.plan.qualitativeNeeds) : null;
+      const finalContext: DateContext = experience ? { ...observedContext,
+        experiencePlan: experience.plan, experiencePlanComparison: experience.comparison,
+        researchPlan: observedResearchPlan, researchPlanMode: getResearchPlanMode(),
+        observations: [...observedContext.observations, { type: "experience_plan",
+          source: "experience_plan_shadow", timestamp: new Date().toISOString(),
+          data: { dayCount: experience.plan.days.length,
+            densities: experience.comparison.plannedDensities,
+            blockCount: experience.comparison.plannedExperienceCount,
+            qualitativeNeedCount: experience.plan.qualitativeNeeds.length,
+            potentialRewriteConflicts: experience.comparison.potentialRewriteConflicts,
+            densityWindowWarningCount: experience.comparison.densityWindowWarnings.length,
+            paceWarning: experience.comparison.paceWarning,
+            supportingSlotConflict: experience.comparison.supportingSlotConflict } },
+          ...(observedResearchPlan ? [{ type: "research_plan" as const, source: "date_research_plan" as const,
+            timestamp: new Date().toISOString(), data: {
+              mode: getResearchPlanMode(), needCount: observedResearchPlan.needs.length,
+              requiredNeedCount: observedResearchPlan.needs.filter(need => need.priority === "required").length,
+              sufficientCount: 0, insufficientCount: 0,
+              qualitativeNeedCount: observedResearchPlan.needs.filter(need => need.qualities.length).length,
+              qualitativeNeedLostCount: observedResearchComparison?.qualitativeNeedLostCount ?? 0,
+              fallbackReason: null, legacyOnlySearchCount: observedResearchComparison?.legacyOnlySearches.length ?? 0,
+              researchOnlySearchCount: observedResearchComparison?.researchOnlySearches.length ?? 0,
+              unnecessaryLegacySupportSearchCount: observedResearchComparison?.unnecessaryLegacySupportSearchCount ?? 0,
+            } }] : [])] } : observedContext;
+      observedContextSnapshot.current = finalContext;
       if (process.env.NODE_ENV === "development") console.info("date_turn_understanding", JSON.stringify({
         legacyRoute: route?.mode ?? null,
         goals: currentUnderstanding.goals.map(goal => goal.type),
@@ -650,6 +721,12 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
         ambiguityCount: observedContext.effectiveUnderstanding?.ambiguities.length ?? 0,
         plannedTaskTypes: observedContext.executionPlan?.tasks.map(task => task.type) ?? [],
         executionPlanCoverage: observedContext.executionPlanComparison?.routeCoverage ?? null,
+        experiencePlanDays: experience?.plan.days.length ?? null,
+        experiencePlanDensities: experience?.comparison.plannedDensities ?? null,
+        potentialLegacyRewriteConflicts: experience?.comparison.potentialRewriteConflicts ?? [],
+        experienceDensityWindowWarnings: experience?.comparison.densityWindowWarnings.length ?? 0,
+        experiencePaceWarning: experience?.comparison.paceWarning ?? false,
+        experienceSupportingSlotConflict: experience?.comparison.supportingSlotConflict ?? false,
       }));
       return observedContext.currentUnderstanding;
     } catch (error) {
@@ -727,6 +804,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
           seedCandidates: request.reusable, skipSearch: !request.search,
           excludedCandidateIds: request.excludedCandidateIds, requireHardEligibility: true,
           sessionFeedbackSignals: request.sessionFeedbackSignals,
+          researchPlan: tryBuildResearchPlan(observedContextSnapshot.current?.experiencePlan),
           observeCandidates: request.observeCandidates,
         }),
       },
@@ -792,6 +870,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     if (route.mode === "places" && route.placeAsk) {
       await observeTurn(state, route);
       const placeAsk = route.placeAsk;
+      const primaryResearchPlan = tryBuildResearchPlan(observedContextSnapshot.current?.experiencePlan);
       const useSessionCandidates = legacyPlacesReuseEnabled({ session: sessionCapture?.previous,
         interpreterMode: getDateTurnInterpreterMode(), executionMode: getDateExecutionMode(),
         plan: executionPlanSnapshot.current?.plan });
@@ -814,9 +893,10 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
         seedCandidates: sessionReuse?.reusable,
         skipSearch: sessionReuse ? !sessionReuse.search : undefined,
         excludedCandidateIds: sessionReuse?.excludedCandidateIds,
-        requireHardEligibility: Boolean(sessionReuse),
+        requireHardEligibility: Boolean(sessionReuse) || getResearchPlanMode() === "active" && Boolean(primaryResearchPlan),
         sessionFeedbackSignals: useSessionCandidates
           ? placeSessionFeedbackSignals(sessionCapture?.previous?.feedback, "") : undefined,
+        researchPlan: primaryResearchPlan,
         tasteBoard,
       }), state);
     }
@@ -853,6 +933,10 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       reply: "",
     };
   const intentDone = performance.now();
+  const selectedAnchorNames = input.selectedCandidateIds?.length && sessionCapture?.previous
+    ? sessionCapture.previous.records.filter(row => input.selectedCandidateIds!.includes(row.candidateId)
+      && sessionCapture.previous!.selectedCandidateIds.includes(row.candidateId))
+      .map(row => row.name).slice(0, 12) : [];
   const turnUnderstanding = message ? await observeTurn(interpretation.state, routed, true) : null;
 
   if (courseEdit && input.currentPlan?.items.length && input.currentPlan.items.length === input.currentPlan.recommendations.length) {
@@ -882,9 +966,10 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
         .filter(Boolean).slice(-MAX_CONVERSATION_NOTES),
       dateLabel: interpretation.state.dateLabel || input.dateLabel || null,
       requiredPlaces: uniqueStrings([
+        ...selectedAnchorNames,
         ...pickedPlaces,
         ...interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|만화카페|VR(?:카페|\s*체험)?|실내(?:\s*놀거리)?)$/.test(place)),
-      ], 6),
+      ], selectedAnchorNames.length ? 12 : 6),
     },
   });
   const interpreted = tasteSeed ? applyTasteFallback(interpretedRaw, tasteSeed) : interpretedRaw;
@@ -903,6 +988,16 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     return clarificationReply("area", state, dateChatCard({ situation: "need_area", userMessage: message, state }));
   }
   const searchRegions = expandedSearchRegions(state);
+  const researchMode = getResearchPlanMode();
+  const researchPlan: ResearchPlan | null = researchMode === "off" ? null
+    : tryBuildResearchPlan(observedContextSnapshot.current?.experiencePlan);
+  const researchAuthority = researchSearchAuthority(researchMode, researchPlan,
+    Boolean(observedContextSnapshot.current?.experiencePlan));
+  const researchActive = researchAuthority.active;
+  let researchFallbackReason: string | null = researchAuthority.fallbackReason;
+  let researchCoverage: ResearchCoverage[] = [];
+  const researchIntents = researchActive ? researchSearchIntents(researchPlan!, selectedRegions[0]) : [];
+  const searchedResearchNeeds = new Set(researchIntents.flatMap(intent => intent.needIds));
   const retainedPlaces = state.preserveExistingPlaces ? previousStops.map(stop => stop.name.trim()).filter(Boolean).slice(0, 12) : [];
   const directQueries = uniqueStrings([...state.requiredPlaces, ...retainedPlaces]).filter(name => !state.excludedPlaces.includes(name));
   const prefetchedKeywords = new Map<string, ReturnType<typeof searchKakaoPlacesRemote>>();
@@ -910,14 +1005,16 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     const key = JSON.stringify([intent.region, intent.category, intent.query, page]);
     let pending = prefetchedKeywords.get(key);
     if (!pending) {
-      pending = searchKakaoPlacesRemote({ region: intent.region, category: intent.category, query: intent.query, page });
+      pending = searchKakaoPlacesRemote({ region: intent.region,
+        category: researchActive ? providerCategoryForResearchIntent(intent) : intent.category,
+        query: intent.query, page });
       prefetchedKeywords.set(key, pending);
     }
     return pending;
   };
   // The explicit activity searches are known before the discovery model runs.
   // Reuse these promises if its brief asks for the same query.
-  for (const intent of searchIntents(state)) {
+  for (const intent of primarySearchIntents(researchActive, researchPlan, selectedRegions[0], searchIntents(state))) {
     void keywordSearch(intent, 1);
     void keywordSearch(intent, 2);
   }
@@ -925,7 +1022,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   const areaSearchesPromise = Promise.all(selectedRegions.map(region => searchKakaoPlacesRemote({ query: region, page: 1 })));
   const leadStartedAt = performance.now();
   let leadDoneAt = leadStartedAt;
-  const venueLeadsPromise = discoverVenueLeads(state).then(leads => { leadDoneAt = performance.now(); return leads; });
+  const venueLeadsPromise = (researchActive ? Promise.resolve([]) : discoverVenueLeads(state))
+    .then(leads => { leadDoneAt = performance.now(); return leads; });
   // Venue design only needs the brief. Account context can be fetched during
   // that model call instead of extending the critical path afterward.
   const [discoveryBrief, [{ places: saved }, insight, archives]] = await Promise.all([
@@ -949,23 +1047,47 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     timeSpecified: time.specified || Object.keys(explicitTripWindows).length > 0,
   };
   const recentlyVisited = [...recentPlaceNames(archives.dates)];
-  const keywordIntents: DateSearchIntent[] = [...discoveryBrief.queries, ...searchIntents(state)]
+  const keywordIntents: DateSearchIntent[] = primarySearchIntents(researchActive, researchPlan,
+    selectedRegions[0], [...discoveryBrief.queries, ...searchIntents(state)])
     .filter((intent, index, all) => all.findIndex(other => other.region === intent.region && other.query === intent.query && ("category" in other ? other.category : undefined) === ("category" in intent ? intent.category : undefined)) === index)
     .slice(0, 20);
-  const geoIntents = activitySearchIntents(state);
+  const researchComparison = researchPlan ? compareResearchSearches(researchPlan, selectedRegions[0],
+    [...discoveryBrief.queries, ...searchIntents(state)],
+    observedContextSnapshot.current?.experiencePlan?.qualitativeNeeds) : null;
+  const legacyOpenPool = researchPlan ? openSearchPool({ message, areas: selectedRegions,
+    stayKind: state.stayKind, timeWindow: state.timeWindow,
+    notes: state.conversationNotes }) : [];
+  if (process.env.NODE_ENV === "development" && researchPlan) console.info("date_research_plan", JSON.stringify({
+    mode: researchMode, legacyOpenPool, legacySearchIntents: searchIntents(state),
+    needs: researchPlan.needs.map(need => ({ id: need.id, kind: need.kind,
+      category: need.category, qualities: need.qualities, evidenceNeeded: need.evidenceNeeded,
+      priority: need.priority, dayIndex: need.dayIndex })),
+    legacyOnlySearches: researchComparison?.legacyOnlySearches,
+    researchOnlySearches: researchComparison?.researchOnlySearches,
+    qualitativeNeedLostCount: researchComparison?.qualitativeNeedLostCount,
+    unnecessaryLegacySupportSearchCount: researchComparison?.unnecessaryLegacySupportSearchCount,
+  }));
+  const geoIntents = researchActive ? [] : activitySearchIntents(state);
   const allowHarsh = applyTasteHarshAllow(allowsHarshDateMeal(message, state.cuisine), message, avoidFoods);
-  const searchKeyword = (page: number) => Promise.all(keywordIntents.map(intent => keywordSearch(intent, page)));
+  const searchKeyword = (page: number) => executeResearchIntents(keywordIntents, page, keywordSearch);
+  const tourIntents = researchActive && isTourApiConfigured()
+    ? researchIntents.filter(intent => intent.category === "tourist").slice(0, 4) : [];
+  const tourResearchPromise = tourIntents.length
+    ? Promise.all(tourIntents
+      .map(intent => searchTourPlacesRemote({ category: "tourist", region: intent.region,
+        query: intent.query, page: 1 }))) : Promise.resolve([]);
   const shortlist = (state.shownPlaces ?? [])
     .filter(name => !directQueries.includes(name) && !state.excludedPlaces.includes(name))
     .slice(0, 6);
   // Editorial lead search is slower than Kakao search. Let it continue while
   // we locate anchors and fetch nearby venues; only resolution needs its result.
-  const [explicitSearches, areaSearches, intentSearches, intentSearches2, shortlistSearches] = await Promise.all([
+  const [explicitSearches, areaSearches, intentSearches, intentSearches2, shortlistSearches, tourResearch] = await Promise.all([
     explicitSearchesPromise,
     areaSearchesPromise,
     searchKeyword(1),
     searchKeyword(2),
     Promise.all(shortlist.map(query => searchKakaoPlacesRemote({ query, region: searchRegions.at(-1), page: 1 }))),
+    tourResearchPromise,
   ]);
   const baseSearchDone = performance.now();
 
@@ -1038,14 +1160,21 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   }
   ingestKeyword(intentSearches);
   ingestKeyword(intentSearches2);
+  for (const [index, result] of tourResearch.entries()) {
+    if (!result.ok) continue;
+    for (const candidate of result.places.slice(0, 15)) remember(candidate, tourIntents[index].region);
+  }
   const preferredSaved = preferredSavedNames(saved);
   const discovery = discoveryActivities(state);
+  const researchedCategories = new Set(researchPlan?.needs.filter(need => need.kind === "venue" || need.kind === "relation")
+    .map(need => need.category).filter(Boolean) ?? []);
   for (const place of saved) {
     if (["dislike", "not_interested"].includes(place.userStatus) || ["dislike", "not_interested"].includes(place.partnerStatus)) continue;
     const candidate = placeToCandidate(place);
     if (!candidate) continue;
     const preferred = preferredSaved.has(place.name);
-    const wanted = isExclusiveCrawl(state) ? state.activities : discovery;
+    if (researchActive && !preferred && !researchedCategories.has(candidate.category)) continue;
+    const wanted = isExclusiveCrawl(state) ? state.activities : researchActive ? [] : discovery;
     if (!preferred && wanted.length && !wanted.some(activity => matchesActivity(candidate, activity))) continue;
     remember(candidate, searchRegions[0], true);
   }
@@ -1070,7 +1199,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
         radius,
         page,
       }))),
-      ...(includeFestival && isTourApiConfigured()
+      ...(!researchActive && includeFestival && isTourApiConfigured()
         ? [searchTourPlacesRemote({
           category: "festival",
           region: selectedRegions[0],
@@ -1079,7 +1208,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
           radius: festivalRadius,
         })]
         : []),
-      ...(isTravelPlan(state) && isTourApiConfigured()
+      ...(!researchActive && isTravelPlan(state) && isTourApiConfigured()
         ? [searchTourPlacesRemote({
           category: "tourist", region: selectedRegions[0],
           x: anchors[0].coordinates[0], y: anchors[0].coordinates[1], radius: Math.max(radius, 6000), page,
@@ -1139,7 +1268,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       ? [...unique.values()].filter(candidate => state.requiredPlaces.some(name => matchesTerm(candidate, name)) || anchors.some(anchor => {
         const hop = distanceMeters(anchor.coordinates, candidate.coordinates);
         return hop <= (candidate.category === "festival" ? Math.max(radius, 4000) : radius);
-      }))
+      }) || researchActive && isTravelPlan(state)
+        && selectedRegions.some(region => `${candidate.address} ${candidate.roadAddress}`.includes(region)))
       : [...unique.values()]);
     candidatePoolSnapshot = buildDateCandidatePool(scoped, state, preferredSavedNames(saved), admit);
     if (sessionCapture) sessionCapture.records = candidatePoolSnapshot.records;
@@ -1149,7 +1279,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   const wantedSlots = discovery;
   const poolSlots = () => new Set(pool.map(candidateActivitySlot));
   const attemptedResearch = new Set(keywordIntents.map(intent => `${intent.region}:${intent.query}`));
-  const taskPlan = await runDateTaskPlanner({
+  const taskPlan = researchActive ? { objectives: dateTaskObjectives(state), steps: [],
+    stopReason: "satisfied" as const, unresolvedActivities: [] } : await runDateTaskPlanner({
     state, regions: selectedRegions, attempted: attemptedResearch,
     canVerifyPerformances: Boolean(process.env.KOPIS_SERVICE_KEY?.trim()),
     canInspectPlaces: true,
@@ -1180,7 +1311,45 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     },
   });
   let agentToolCalls = taskPlan.steps.reduce((sum, step) => sum + step.calls.length, 0);
-  if (pool.length < 8 || missingWantedSlots(poolSlots(), wantedSlots).length) {
+  if (researchActive) {
+    try {
+      const eligibleForResearch = (candidatePoolSnapshot as ReturnType<typeof buildDateCandidatePool> | null)?.eligible ?? pool;
+      const enriched = await enrichResearchNeedEvidence(eligibleForResearch, state, researchPlan!.needs);
+      for (const candidate of enriched) {
+        const key = dateCandidateKey(candidate);
+        const previous = unique.get(key);
+        if (previous) unique.set(key, { ...previous, evidence: candidate.evidence ?? previous.evidence });
+      }
+      pool = currentPool();
+      researchPlan!.needs.filter(need => need.kind === "evidence").forEach(need => searchedResearchNeeds.add(need.id));
+    } catch {
+      // An enrichment outage still cannot make stale observations usable.
+      for (const [key, candidate] of unique) unique.set(key, freshResearchCandidateEvidence(candidate));
+      pool = currentPool();
+    }
+    const eligibleForCoverage = (candidatePoolSnapshot as ReturnType<typeof buildDateCandidatePool> | null)?.eligible ?? pool;
+    researchCoverage = evaluateResearchCoverage(researchPlan!, eligibleForCoverage, searchedResearchNeeds);
+    const coverageFallback = researchCoverageFallbackReason(researchPlan!, researchCoverage);
+    if (coverageFallback) {
+      researchFallbackReason = coverageFallback;
+      const fallbackIntents = [...discoveryBrief.queries, ...searchIntents(state)];
+      const fallbackSearches = await Promise.all(fallbackIntents.flatMap(intent => [1, 2].map(page => keywordSearch(intent, page))));
+      for (const result of fallbackSearches) {
+        if (!result.ok) continue;
+        for (const candidate of result.places.slice(0, 15)) remember(candidate, selectedRegions[0]);
+      }
+      const geoFallback = await Promise.all(anchors.flatMap(anchor => activitySearchIntents(state).map(intent =>
+        searchKakaoPlacesRemote({ category: intent.category, query: intent.query,
+          x: anchor.coordinates[0], y: anchor.coordinates[1], radius, page: 1 }))));
+      for (const result of geoFallback) {
+        if (!result.ok) continue;
+        for (const candidate of result.places.slice(0, 15)) remember(candidate, selectedRegions[0]);
+      }
+      pool = currentPool();
+    }
+  }
+  if (!researchActive || researchFallbackReason) {
+    if (pool.length < 8 || missingWantedSlots(poolSlots(), wantedSlots).length) {
     const extras = await Promise.all(selectedRegions.flatMap(region => (
       rescueSearchQueries(region, wantedSlots).map(query => searchKakaoPlacesRemote({ query, page: 1 }))
     )));
@@ -1189,8 +1358,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       for (const candidate of result.places) remember(candidate, selectedRegions[0]);
     }
     pool = currentPool();
-  }
-  if (pool.length < 2) {
+    }
+    if (pool.length < 2) {
     const extras = await Promise.all(selectedRegions.flatMap(region => (
       rescueSearchQueries(region, wantedSlots).map(query => searchKakaoPlacesRemote({ query, page: 2 }))
     )));
@@ -1199,6 +1368,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       for (const candidate of result.places) remember(candidate, selectedRegions[0]);
     }
     pool = currentPool();
+    }
   }
   const poolReady = performance.now();
   const rankContext = {
@@ -1246,8 +1416,26 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     understandingComparison: shadowSnapshot.current?.comparison,
     executionPlan: executionPlanSnapshot.current?.plan,
     executionPlanComparison: executionPlanSnapshot.current?.comparison,
+    experiencePlan: observedContextSnapshot.current?.experiencePlan,
+    experiencePlanComparison: observedContextSnapshot.current?.experiencePlanComparison,
+    researchPlan, researchPlanMode: researchMode, researchCoverage, researchFallbackReason,
     observations: [...(shadowSnapshot.current?.observations ?? []),
-      ...(executionPlanSnapshot.current ? [executionPlanSnapshot.current.observation] : [])],
+      ...(executionPlanSnapshot.current ? [executionPlanSnapshot.current.observation] : []),
+      ...(observedContextSnapshot.current?.observations.filter(item => item.type === "experience_plan") ?? []),
+      ...(researchPlan ? [{ type: "research_plan" as const, source: "date_research_plan" as const,
+        timestamp: new Date().toISOString(), data: {
+          mode: researchMode, needCount: researchPlan.needs.length,
+          requiredNeedCount: researchPlan.needs.filter(need => need.priority === "required").length,
+          sufficientCount: researchCoverage.filter(row => row.status === "sufficient").length,
+          insufficientCount: researchCoverage.filter(row => row.status === "insufficient").length,
+          qualitativeNeedCount: researchPlan.needs.filter(need => need.qualities.length).length,
+          qualitativeNeedLostCount: researchComparison?.qualitativeNeedLostCount ?? 0,
+          fallbackReason: researchFallbackReason,
+          legacyOpenPool,
+          legacyOnlySearchCount: researchComparison?.legacyOnlySearches.length ?? 0,
+          researchOnlySearchCount: researchComparison?.researchOnlySearches.length ?? 0,
+          unnecessaryLegacySupportSearchCount: researchComparison?.unnecessaryLegacySupportSearchCount ?? 0,
+        } }] : [])],
     candidatePool: candidatePoolSnapshot, observedAt: new Date().toISOString(),
     sessionCandidates: sessionCapture?.previous,
   });
@@ -1285,6 +1473,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     state,
     recentlyVisited,
     memory,
+    researchPlanActive: researchActive && !researchFallbackReason,
     conversation: input.conversation,
     currentCourse: previousStops,
     ...(hasSemanticPlanningHints(semanticPlanningHints) ? { semanticPlanningHints } : {}),
@@ -1300,7 +1489,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     },
   });
   const agentRun = await runDateAgentCourse({
-    candidates, propose: proposeCourse, allowResearchRepair: !state.foodAllergy,
+    candidates, propose: proposeCourse,
+    allowResearchRepair: !state.foodAllergy && (!researchActive || Boolean(researchFallbackReason)),
     researchAfterFailure: async (issues, existing) => {
       const calls = (await planNextDateResearch({ state, candidates: existing,
         regions: selectedRegions, missing: missingWantedSlots(new Set(existing.map(candidateActivitySlot)), discoveryBrief.requiredActivities),
@@ -1371,6 +1561,10 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     candidateCount: agentRun.candidates.length, cachedEvidenceCandidates: evidencePool.filter(candidate => candidate.evidence?.length).length,
     candidateObservations: dateContext.observations.length,
     agentToolCalls,
+    researchMode, researchNeedCount: researchPlan?.needs.length ?? 0,
+    researchCoverage: researchCoverage.map(item => ({ needId: item.needId, status: item.status,
+      candidateCount: item.candidateCount, evidenceCoverage: item.evidenceCoverage })),
+    researchFallbackReason,
     agentAttempts: agentRun.attempts, agentRepairCandidates: agentRun.newCandidatesOnRepair,
     verifierIssueCount: agentRun.verifierIssues.length,
     taskPlanStop: taskPlan.stopReason, taskObjectives: taskPlan.objectives.map(objective => objective.id),
@@ -1396,13 +1590,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
         : mutationProblems.includes("새 카페의 공간 근거 부족")
           ? "기존 코스는 그대로 두었어요. 새 카페의 공간 분위기를 확인할 근거가 없어 교체하지 않았어요. 다른 동네까지 넓혀 찾거나 원하시는 카페 이름을 알려 주세요."
         : "기존 코스는 그대로 유지했어요. 요청한 변경을 만족하는 새 장소와 동선을 아직 확보하지 못했어요. 원하는 음식이나 활동을 알려 주시면 그 조건으로 다시 찾아볼게요."
-      : recommendation.design?.rejectionReasons?.some(reason => reason.includes("여행 핵심 장소 근거 부족"))
-        ? "여행지의 핵심 장소에서 무엇을 경험할 수 있는지 확인할 근거를 확보하지 못했어요. 검증되지 않은 장소로 1박2일 코스를 확정하지 않았어요. 잠시 뒤 다시 조사하거나, 꼭 가고 싶은 장소를 알려 주세요."
-        : recommendation.design?.rejectionReasons?.some(reason => reason.includes("알레르기 안전성 미확인"))
-          ? "음식 알레르기 안전성을 확인할 자료가 없어 식당을 포함한 코스를 확정하지 않았어요. 이용 가능한 식당을 알려 주시면 그 장소를 기준으로 이어서 짜드릴게요."
-        : recommendation.design?.rejectionReasons?.some(reason => reason.includes("실제 보행 경로와 지정한 시간의 충돌"))
-          ? "실제 보행 경로로 확인하니 알려주신 시간 안에 이동과 체류를 마치기 어려워요. 종료 시간을 늦추거나 장소를 한 곳 줄여서 다시 짤 수 있어요."
-        : "원하신 장소 구성과 동선을 함께 만족하는 코스를 충분히 확인하지 못했어요. 꼭 가고 싶은 곳 한 곳을 정하거나 탐색할 동네를 조금 넓혀 볼까요?";
+      : planningFailureMessage(state, recommendation.design?.rejectionReasons);
     return withLimitedTasks(() => chatResult({ headline: "", lines: [text] },
       editingExisting ? input.currentPlan!.state : state), state);
   }

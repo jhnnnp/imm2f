@@ -1,3 +1,8 @@
+import { blocksCourse, legacyPlanningIssue, partitionPlanningIssues, planningIssue, type PlanningIssue, type PlanningIssueScope, type PlanningIssueSeverity, type PlanningQualitySignal, type PLANNING_POLICIES } from "./planningPolicy";
+import { planningEvidenceProfile, requiredOpeningTime } from "./planningEvidence";
+import { resolveCuisineRequirement, resolveRequiredActivities } from "./planningRequirementProvenance";
+import { tripLocalWindows } from "./planningSupport";
+import { tracePlanningTransformation, type PlanningTransformation } from "./planningTransformations";
 import type { AIPlannerState } from "@/features/planning/types/plan";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import { distanceMeters } from "@/features/places/geo";
@@ -8,7 +13,8 @@ import { candidateFoodConflict } from "./dateIntent";
 import { evidenceConfidence } from "./dateEvidence";
 
 export type CourseProposal = { theme: string; rows: DateCourseRow[] };
-export type CourseEvaluation = CourseProposal & { score: number; meters: number; longestHop: number; evidenceCount: number; problems: string[];
+export type CourseEvaluation = CourseProposal & { score: number; meters: number; longestHop: number; evidenceCount: number; problems: string[]; issues: PlanningIssue[];
+  hardIssues: PlanningIssue[]; softIssues: PlanningIssue[]; qualitySignals: PlanningQualitySignal[]; transformations: PlanningTransformation[];
   scoreBreakdown?: { venues: number; evidence: number; diversity: number; route: number; flow: number; pacing: number; schedule: number; violations: number } };
 /** A verified deterministic seed is the stable baseline; an LLM alternative
  * must improve venue/experience quality enough to displace it. Walking detour
@@ -96,8 +102,9 @@ function genericChainCafe(candidate: DiscoverCandidate) {
   return candidateActivitySlot(candidate) === "cafe" && CHAIN_CAFE.test(candidate.name);
 }
 
+/** Legacy string API; structured callers use issues and blocksCourse. */
 export function hardCourseProblems(problems: string[]) {
-  return problems.filter(problem => /검색으로 확인되지|같은 장소 중복|요청에 맞지 않는 장소 수|일차 누락|일차 일정 부족|일차 장소 과밀|여행일 핵심 경험 누락|여행일 식사 누락|여행 핵심 장소 근거 부족|축제 날짜 불일치|공연 날짜 불일치|유지할 장소 누락|제외 요청한 장소 포함|요청 활동 누락|음식 종류 불일치|제외 음식이 포함된 장소|알레르기 안전성 미확인|확인된 비용이 예산 초과|유지할 순서 불일치|방문일 공연 회차 미확인|지정한 시간|이동 부담|도보 부담|기준 동네에서 먼 장소|카페 중복|식사 중복|추가 경험 중복|카페 공간 근거 부족|매력 근거 없는 프랜차이즈/.test(problem));
+  return problems.filter(problem => legacyPlanningIssue(problem).severity === "hard");
 }
 
 export function venueScoreBreakdown(candidate: DiscoverCandidate, state: AIPlannerState, saved = new Set<string>()) {
@@ -299,114 +306,168 @@ function optimizeDay(rows: DateCourseRow[], byId: Map<string, DiscoverCandidate>
   return best ?? rows;
 }
 
-export function evaluateCourse(proposal: CourseProposal, candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>): CourseEvaluation {
+/** Explicit legacy preparation. Keep this outside validation so a future planner
+ * can inspect its own ordering without silently applying the legacy optimizer. */
+export function prepareCourseForEvaluation(proposal: CourseProposal, candidates: DiscoverCandidate[], state: AIPlannerState) {
   const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
-  const problems: string[] = [];
-  const ids = proposal.rows.map(row => row.id);
-  if (ids.some(id => !id || !byId.has(id))) problems.push("검색으로 확인되지 않은 장소");
-  if (new Set(ids).size !== ids.length) problems.push("같은 장소 중복");
   const valid = proposal.rows.filter(row => row.id && byId.has(row.id));
+  const rows = Array.from({ length: courseSize(state).days }, (_, day) =>
+    optimizeDay(valid.filter(row => (row.day_index ?? 0) === day), byId, state)).flat();
+  return { rows, transformations: [
+    ...tracePlanningTransformation("evaluation_candidate_filter", proposal.rows, valid),
+    ...tracePlanningTransformation("evaluation_day_optimization", valid, rows),
+  ] };
+}
+
+/** Compatibility facade: preserves the original prepare → evaluate → default
+ * sequence and all legacy return fields. Structured metadata stays internal. */
+export function evaluateCourse(proposal: CourseProposal, candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>): CourseEvaluation {
+  const prepared = prepareCourseForEvaluation(proposal, candidates, state);
+  const evaluated = evaluatePreparedCourse(proposal, prepared.rows, candidates, state, saved);
+  const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
+  const rows = evaluated.rows.map(row => ({ ...row,
+    duration_minutes: row.duration_minutes ?? defaultDuration(byId.get(row.id!)!, state.pace) }));
+  return { ...evaluated, rows, transformations: [...prepared.transformations,
+    ...tracePlanningTransformation("evaluation_duration_defaults", evaluated.rows, rows)] };
+}
+
+/** Read-only evaluation of already prepared rows. No reorder, insertion, or
+ * duration rewrite occurs here; schedule feasibility is checked without applying
+ * its output. The original proposal remains the authority for invalid IDs. */
+export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: DateCourseRow[], candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>): CourseEvaluation {
+  const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
+  const issues: PlanningIssue[] = [];
+  const report = (code: keyof typeof PLANNING_POLICIES, message: string, scope: PlanningIssueScope = {},
+    effectiveSeverity?: PlanningIssueSeverity, effectiveOrigin?: PlanningIssue["origin"]) =>
+    issues.push(planningIssue(code, message, scope, effectiveSeverity, effectiveOrigin));
+  const ids = proposal.rows.map(row => row.id);
+  if (ids.some(id => !id || !byId.has(id))) report("unknown_candidate", "검색으로 확인되지 않은 장소",
+    { candidateId: ids.find(id => !id || !byId.has(id)) });
+  if (new Set(ids).size !== ids.length) report("duplicate_place", "같은 장소 중복",
+    { candidateId: ids.find((id, index) => ids.indexOf(id) !== index) });
   const days = courseSize(state).days;
-  let rows = Array.from({ length: days }, (_, day) => optimizeDay(valid.filter(row => (row.day_index ?? 0) === day), byId, state)).flat();
+  const rows = preparedRows;
   const selected = rows.map(row => byId.get(row.id!)!);
   const max = Math.max(state.discovery?.maxStops ?? courseSize(state).max, courseSize(state).min);
   if (rows.length < Math.max(courseSize(state).min, state.discovery?.minStops ?? 2)
-    || rows.length > Math.max(max, state.requiredPlaces.length)) problems.push("요청에 맞지 않는 장소 수");
-  for (let day = 0; day < days; day++) if (!rows.some(row => (row.day_index ?? 0) === day)) problems.push(`${day + 1}일차 누락`);
+    || rows.length > Math.max(max, state.requiredPlaces.length)) report("stop_count", "요청에 맞지 않는 장소 수");
+  const explicitCount = (state.userRequests?.at(-1) ?? "").match(/(?:정확히|딱|반드시|꼭)\s*(\d{1,2})\s*(?:곳|개|장소)/);
+  if (explicitCount && rows.length !== Number(explicitCount[1]))
+    report("explicit_stop_count", "명시한 장소 수 불일치", { constraint: explicitCount[1] });
+  for (let day = 0; day < days; day++) if (!rows.some(row => (row.day_index ?? 0) === day)) report("missing_day", `${day + 1}일차 누락`, { dayIndex: day });
   const travel = isTravelPlan(state);
   const tripThemeException = isExclusiveCrawl(state)
     || /먹방|미식|호캉스|숙소.{0,8}(?:휴식|쉬)|휴양/.test(state.userRequests?.at(-1) ?? "");
-  const needsDailyMeal = travel && days > 1 && !isExclusiveCrawl(state)
+  const explicitDailyMeal = /매일.{0,16}(?:저녁|식사|맛집)|(?:저녁|식사|맛집).{0,16}(?:매일|날마다)/
+    .test(state.userRequests?.at(-1) ?? "");
+  const needsDailyMeal = travel && days > 1 && (explicitDailyMeal || !isExclusiveCrawl(state)
     && !/식사.{0,8}(?:빼|제외|없이)|음식.{0,8}(?:빼|제외|없이)/.test(state.userRequests?.at(-1) ?? "")
-    && candidates.filter(candidate => candidateActivitySlot(candidate) === "meal").length >= days;
+    && candidates.filter(candidate => candidateActivitySlot(candidate) === "meal").length >= days);
   if (travel) for (let day = 0; day < days; day++) {
     const dayRows = rows.filter(row => (row.day_index ?? 0) === day);
-    if (dayRows.length > 4) problems.push(`${day + 1}일차 장소 과밀`);
+    if (dayRows.length > 4) report("dense_day", `${day + 1}일차 장소 과밀`, { dayIndex: day });
     if (days > 2 && dayRows.length < (day === 0 || day === days - 1 ? 2 : 3))
-      problems.push(`${day + 1}일차 일정 부족`);
+      report("sparse_day", `${day + 1}일차 일정 부족`, { dayIndex: day });
     if (needsDailyMeal && dayRows.length && !dayRows.some(row => candidateActivitySlot(byId.get(row.id!)!) === "meal"))
-      problems.push(`${day + 1}일차 여행일 식사 누락`);
+      report("missing_daily_meal", `${day + 1}일차 여행일 식사 누락`, { dayIndex: day },
+        explicitDailyMeal ? "hard" : undefined);
     if (dayRows.length && !tripThemeException && !dayRows.some(row => meaningfulTripExperience(byId.get(row.id!)!))) {
-      problems.push(`${day + 1}일차 여행일 핵심 경험 누락`);
+      report("missing_daily_experience", `${day + 1}일차 여행일 핵심 경험 누락`, { dayIndex: day });
     }
     if (dayRows.length && !tripThemeException && !dayRows.some(row => {
       const candidate = byId.get(row.id!)!;
       return meaningfulTripExperience(candidate) && hasRequestedVenueEvidence(candidate, state);
-    })) problems.push(`${day + 1}일차 여행 핵심 장소 근거 부족`);
+    })) report("missing_experience_evidence", `${day + 1}일차 여행 핵심 장소 근거 부족`, { dayIndex: day });
     if (dayRows.some(row => {
       const candidate = byId.get(row.id!)!;
       return candidate.category === "festival" && !festivalPeriodCoversYmd(candidate.openingHours, tripDayYmd(state, day));
-    })) problems.push(`${day + 1}일차 축제 날짜 불일치`);
+    })) report("festival_date_mismatch", `${day + 1}일차 축제 날짜 불일치`, { dayIndex: day });
     if (dayRows.some(row => {
       const event = byId.get(row.id!)!.performanceEvent;
       return event && event.dateYmd !== tripDayYmd(state, day);
-    })) problems.push(`${day + 1}일차 공연 날짜 불일치`);
+    })) report("performance_date_mismatch", `${day + 1}일차 공연 날짜 불일치`, { dayIndex: day });
   }
-  for (const name of state.requiredPlaces) if (!selected.some(candidate => matchesTerm(candidate, name))) problems.push(`유지할 장소 누락: ${name}`);
-  if (selected.some(candidate => state.excludedPlaces.some(name => matchesTerm(candidate, name)))) problems.push("제외 요청한 장소 포함");
+  for (const name of state.requiredPlaces) if (!selected.some(candidate => matchesTerm(candidate, name))) report("required_place_missing", `유지할 장소 누락: ${name}`, { constraint: name });
+  if (selected.some(candidate => state.excludedPlaces.some(name => matchesTerm(candidate, name)))) report("excluded_place", "제외 요청한 장소 포함");
   if (state.addStop && state.pinOrder.length) {
     const previousSlots = new Set(selected.filter(candidate => state.pinOrder.some(name => matchesTerm(candidate, name))).map(candidateActivitySlot));
     const added = selected.filter(candidate => !state.pinOrder.some(name => matchesTerm(candidate, name)));
     if (added.some(candidate => {
       const slot = candidateActivitySlot(candidate);
       return slot !== "other" && previousSlots.has(slot) && !requestedRepeat(state, slot);
-    })) problems.push("추가 경험 중복");
+    })) report("repeated_added_experience", "추가 경험 중복");
   }
-  const requested = state.discovery?.requiredActivities ?? state.activities;
-  for (const activity of requested) if (!selected.some(candidate => matchesActivity(candidate, activity))) problems.push(`요청 활동 누락: ${activity}`);
+  const requested = resolveRequiredActivities(state);
+  for (const { activity, origin, explicit } of requested) if (!selected.some(candidate => matchesActivity(candidate, activity)))
+    report("required_activity_missing", `요청 활동 누락: ${activity}`, { constraint: activity },
+      explicit ? "hard" : "soft", origin);
   const latestRequest = state.userRequests?.at(-1) ?? "";
   const eventDate = state.dateLabel?.replace(/\D/g, "").slice(0, 8);
   if (state.intent !== "modify" && eventDate && /공연(?!장)|연극|뮤지컬|콘서트/.test(latestRequest)
     && !selected.some(candidate => candidate.performanceEvent
       && Array.from({ length: days }, (_, day) => tripDayYmd(state, day)).includes(candidate.performanceEvent.dateYmd))) {
-    problems.push("방문일 공연 회차 미확인");
+    report("performance_time_unverified", "방문일 공연 회차 미확인");
   }
-  if (selected.some(candidate => candidateActivitySlot(candidate) === "meal" && !matchesCuisine(candidate, state.cuisine) && !state.requiredPlaces.some(name => matchesTerm(candidate, name)))) problems.push("요청한 음식 종류 불일치");
+  const cuisineRequirement = resolveCuisineRequirement(state);
+  if (selected.some(candidate => candidateActivitySlot(candidate) === "meal"
+    && !matchesCuisine(candidate, cuisineRequirement.cuisine)
+    && !state.requiredPlaces.some(name => matchesTerm(candidate, name))))
+    report("cuisine_mismatch", "요청한 음식 종류 불일치", {},
+      cuisineRequirement.explicit ? "hard" : "soft", cuisineRequirement.origin);
   if (selected.some(candidate => candidateFoodConflict(`${candidate.name} ${candidate.detailedCategory ?? ""} ${candidate.dishes ?? ""} ${(candidate.evidence ?? []).filter(fact => fact.attribute === "menu").map(fact => fact.text).join(" ")}`, state.excludedFoods ?? []))) {
-    problems.push("제외 음식이 포함된 장소");
+    report("excluded_food", "제외 음식이 포함된 장소");
   }
   if (state.foodAllergy && selected.some(candidate => candidateActivitySlot(candidate) === "meal")) {
     // Search-reported menus cannot establish ingredient or cross-contact safety.
-    problems.push("알레르기 안전성 미확인");
+    report("allergy_unverified", "알레르기 안전성 미확인");
+  }
+  const requiredTime = requiredOpeningTime(state);
+  if (requiredTime) for (const row of rows) {
+    const candidate = byId.get(row.id!)!;
+    const profile = planningEvidenceProfile(candidate, requiredTime, tripDayYmd(state, row.day_index ?? 0));
+    if (profile.openingAtRequiredTime !== "confirmed_open")
+      report("required_opening_unverified", "요청한 영업시간 확인 불가",
+        { candidateId: row.id, dayIndex: row.day_index ?? 0, constraint: requiredTime });
   }
   if (state.budgetWon && selected.reduce((sum, candidate) => sum + (candidate.expectedCostTwo ?? 0), 0) > state.budgetWon) {
-    problems.push("확인된 비용이 예산 초과");
+    report("budget_exceeded", "확인된 비용이 예산 초과");
   }
   if (selected.some(candidate => genericChainCafe(candidate) && !usefulVenueEvidence(candidate, state)
     && !state.requiredPlaces.some(name => matchesTerm(candidate, name))
     && candidates.some(other => dateCandidateKey(other) !== dateCandidateKey(candidate) && candidateActivitySlot(other) === "cafe"
       && !genericChainCafe(other) && distanceMeters(candidate.coordinates, other.coordinates) < 2200))) {
-    problems.push("매력 근거 없는 프랜차이즈 카페");
+    report("generic_chain", "매력 근거 없는 프랜차이즈 카페");
   }
   if (wantsCafeAtmosphere(state) && selected.some(candidate => candidateActivitySlot(candidate) === "cafe"
     && !state.requiredPlaces.some(name => matchesTerm(candidate, name)) && !hasCafeSpaceEvidence(candidate)
     && candidates.some(other => candidateActivitySlot(other) === "cafe" && hasCafeSpaceEvidence(other)
       && distanceMeters(candidate.coordinates, other.coordinates) < 2200))) {
-    problems.push("카페 공간 근거 부족");
+    report("cafe_space_evidence_missing", "카페 공간 근거 부족");
   }
-  if (!sequenceAllowed(rows, byId, state)) problems.push("유지할 순서 불일치");
+  if (!sequenceAllowed(rows, byId, state)) report("required_order_mismatch", "유지할 순서 불일치", {},
+    state.preserveExistingPlaces && state.pinOrder.length > 1 ? "hard" : "soft");
   for (let day = 0; day < days; day++) {
     const slots = rows.filter(row => row.day_index === day).map(row => candidateActivitySlot(byId.get(row.id!)!));
-    if (!isExclusiveCrawl(state) && slots.length > 1 && new Set(slots).size < 2) problems.push(`${day + 1}일차 경험이 한 종류로 반복`);
-    if (!experienceTour(state, "cafe") && slots.filter(slot => slot === "cafe").length > 1) problems.push("카페 중복");
-    if (!experienceTour(state, "meal") && slots.filter(slot => slot === "meal").length > 1) problems.push("식사 중복");
+    if (!isExclusiveCrawl(state) && slots.length > 1 && new Set(slots).size < 2) report("low_variety", `${day + 1}일차 경험이 한 종류로 반복`, { dayIndex: day });
+    if (!experienceTour(state, "cafe") && slots.filter(slot => slot === "cafe").length > 1) report("repeated_cafe", "카페 중복", { dayIndex: day });
+    if (!experienceTour(state, "meal") && slots.filter(slot => slot === "meal").length > 1) report("repeated_meal", "식사 중복", { dayIndex: day });
   }
   const route = routeCost(rows, byId);
   if (!travel && selectedAreas(state).length === 1 && state.areaScope !== "nearby"
     && selected.some(candidate => typeof candidate.distanceMeters === "number"
       && candidate.distanceMeters > (state.areaScope === "core" ? 1200 : 1600)
       && !state.requiredPlaces.some(name => matchesTerm(candidate, name)))) {
-    problems.push("기준 동네에서 먼 장소");
+    report("outside_area", "기준 동네에서 먼 장소", {}, state.areaScope === "core" ? "hard" : undefined);
   }
   const mode = state.discovery?.transport ?? (travel ? "transit" : "walk");
   const maxHop = travel ? mode === "drive" ? 45000 : mode === "walk" ? 4500 : 25000
     : state.walkingPreference === "short" ? 900
       : state.areaScope === "nearby" || mode === "drive" ? 4500
         : state.areaScope === "core" ? 1200 : 1800;
-  if (route.longestHop > maxHop) problems.push("한 구간의 이동 부담이 너무 큼");
-  if (mode === "walk" && route.meters > (state.walkingPreference === "short" ? 2200 : 5500) * days) problems.push("전체 도보 부담이 너무 큼");
+  if (route.longestHop > maxHop) report("long_hop", "한 구간의 이동 부담이 너무 큼");
+  if (mode === "walk" && route.meters > (state.walkingPreference === "short" ? 2200 : 5500) * days) report("walking_burden", "전체 도보 부담이 너무 큼");
   const timedRows = rows.length ? assignStartTimes(rows, candidates, state) : [];
-  if (rows.length && !timedRows.length) problems.push("지정한 시간 안에 이동과 체류를 배치할 수 없음");
+  if (rows.length && !timedRows.length) report("schedule_infeasible", "지정한 시간 안에 이동과 체류를 배치할 수 없음");
   const evidenceCount = selected.filter(candidate => hasRequestedVenueEvidence(candidate, state)).length;
   const provenance = selected.length ? selected.reduce((sum, candidate) => sum + Math.max(
     evidenceConfidence(candidate, "space"), evidenceConfidence(candidate, "menu"),
@@ -424,6 +485,7 @@ export function evaluateCourse(proposal: CourseProposal, candidates: DiscoverCan
     .map(row => byId.get(row.id!)!)
     .find(candidate => meaningfulTripExperience(candidate) && hasRequestedVenueEvidence(candidate, state)))
     .filter((candidate): candidate is DiscoverCandidate => Boolean(candidate)) : [];
+  const problems = issues.map(issue => issue.message);
   const scoreBreakdown = {
     venues: averageQuality,
     evidence: coverage * 20 + provenance * 6,
@@ -433,11 +495,38 @@ export function evaluateCourse(proposal: CourseProposal, candidates: DiscoverCan
     flow: experienceFlowScore(selected, state) * 3,
     pacing: -Math.max(0, selected.length - (travel ? 4 * days : 3)) * 2,
     schedule: rows.length && timedRows.length ? 4 : 0,
-    violations: -problems.length * 100,
+    violations: -issues.filter(issue => issue.severity === "hard").length * 100
+      - issues.filter(issue => issue.severity === "soft").length * 8,
   };
   const score = Object.values(scoreBreakdown).reduce((sum, value) => sum + value, 0);
-  rows = rows.map(row => ({ ...row, duration_minutes: row.duration_minutes ?? defaultDuration(byId.get(row.id!)!, state.pace) }));
-  return { ...proposal, rows, score, scoreBreakdown, ...route, evidenceCount, problems: [...new Set(problems)] };
+  const distinctIssues = issues.filter((issue, index) => issues.findIndex(other => other.code === issue.code
+    && other.message === issue.message && JSON.stringify(other.scope) === JSON.stringify(issue.scope)) === index);
+  const { hardViolations, softWarnings } = partitionPlanningIssues(distinctIssues);
+  const qualitySignals: PlanningQualitySignal[] = Object.entries(scoreBreakdown)
+    .filter(([dimension]) => dimension !== "violations")
+    .map(([dimension, value]) => ({ dimension, value }));
+  return { ...proposal, rows, score, scoreBreakdown, ...route, evidenceCount, problems: [...new Set(problems)],
+    issues: distinctIssues, hardIssues: hardViolations, softIssues: softWarnings, qualitySignals,
+    transformations: [] };
+}
+
+/** Guidance only. Keep every requested day, while short arrival/departure days
+ * and a relaxed pace can use fewer stops. Fixed courseSize.min stays observable
+ * as a soft density warning and never becomes a feasibility floor. */
+export function planningStopGuidance(state: AIPlannerState) {
+  const size = courseSize(state);
+  return { min: Math.max(size.days, state.requiredPlaces.length), max: size.max };
+}
+
+function softStopTarget(state: AIPlannerState) {
+  const days = courseSize(state).days;
+  if (days === 1) return state.timeWindow === "evening" || state.timeWindow === "night" ? 2 : 3;
+  const windows = tripLocalWindows(state.userRequests ?? [], days);
+  const lateFirstDay = Boolean(windows[0]?.start && windows[0].start >= "18:00");
+  const lastDayEnd = windows[days - 1]?.end;
+  const earlyLastDay = Boolean(lastDayEnd && lastDayEnd <= "15:00");
+  const relaxed = state.pace === "relaxed" || /여유|휴양|쉬엄/.test(state.userRequests?.at(-1) ?? "");
+  return Math.max(days, (relaxed ? days : days * 2) - Number(lateFirstDay) - Number(earlyLastDay));
 }
 
 /** Bounded beam search is an explicit degraded path, not a substitute for editorial judgment. */
@@ -446,8 +535,9 @@ export function buildFallbackCourse(candidates: DiscoverCandidate[], state: AIPl
   const ranked = candidates.filter(candidate => !state.excludedPlaces.some(name => matchesTerm(candidate, name))).sort((a, b) => venueQuality(b, state, saved) - venueQuality(a, state, saved));
   const required = [...new Set(state.requiredPlaces.flatMap(name => ranked.find(candidate => matchesTerm(candidate, name)) ?? []))];
   const wanted = state.discovery?.requiredActivities ?? state.activities;
-  const target = Math.min(Math.max(state.discovery?.maxStops ?? 12, courseSize(state).min),
-    Math.max(courseSize(state).min, required.length, wanted.length, state.discovery?.minStops ?? 3));
+  const target = Math.min(Math.max(state.discovery?.maxStops ?? 12, days, required.length),
+    Math.max(softStopTarget(state), required.length, wanted.length,
+      state.addStop && state.pinOrder.length ? state.pinOrder.length + 1 : 0));
   const catalog = discoveryCatalog(ranked, state, saved, 54);
   const qualityById = new Map(catalog.map(candidate => [dateCandidateKey(candidate), venueQuality(candidate, state, saved)]));
   const scorePath = (path: DiscoverCandidate[]) => {
@@ -475,7 +565,7 @@ export function buildFallbackCourse(candidates: DiscoverCandidate[], state: AIPl
       ? Math.min(days, counts.get("meal") ?? 0) * 35 : 0;
     const anchorVariety = isTravelPlan(state) && days > 1
       ? tripAnchorVariety(path.filter(meaningfulTripExperience).slice(0, days)) : 0;
-    return coverage + quality - violations * 1000 - (repeats + unrequestedRepeats) * 1000
+    return coverage + quality - violations * 1000 - (repeats + unrequestedRepeats) * 25
       - route / (isTravelPlan(state) ? 5000 : 350) + counts.size * 8 + tripAnchors + tripMeals + anchorVariety;
   };
   let beams: DiscoverCandidate[][] = [required];
@@ -514,7 +604,8 @@ export function buildFallbackCourse(candidates: DiscoverCandidate[], state: AIPl
       id: dateCandidateKey(candidate), day_index, duration_minutes: defaultDuration(candidate, state.pace),
     }))) };
   });
-  return proposals.map(proposal => evaluateCourse(proposal, candidates, state, saved)).sort((a, b) => a.problems.length - b.problems.length || b.score - a.score)[0] ?? { theme: "", rows: [] };
+  return proposals.map(proposal => evaluateCourse(proposal, candidates, state, saved))
+    .sort((a, b) => a.hardIssues.length - b.hardIssues.length || b.score - a.score)[0] ?? { theme: "", rows: [] };
 }
 
 /** Different anchor neighborhoods produce feasible alternatives before LLM curation. */
@@ -526,7 +617,7 @@ export function feasibleCourseSeeds(candidates: DiscoverCandidate[], state: AIPl
   ))].map(pool => evaluateCourse(buildFallbackCourse(pool, state, saved), candidates, state, saved));
   const seen = new Set<string>();
   return proposals.filter(course => {
-    if (hardCourseProblems(course.problems).length) return false;
+    if (blocksCourse(course.issues, "deterministic_seed")) return false;
     const key = course.rows.map(row => row.id).sort().join("|");
     if (seen.has(key)) return false;
     seen.add(key);

@@ -54,7 +54,7 @@ export type VenueObservation = {
   /** The exact provider place to which the observation was attributed. */
   venueId?: string;
   branchName?: string;
-  attribute?: "space" | "menu" | "experience";
+  attribute?: "space" | "menu" | "experience" | "hours";
   /** Search-reported excerpt; not independently retrieved or verified. */
   sourceExcerpt?: string;
   sourceVenueName?: string;

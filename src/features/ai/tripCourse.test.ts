@@ -16,12 +16,13 @@ const trip = () => ({ ...withAreas(emptyDateBrief(), ["군산"]), stayKind: "ove
     transport: "transit" as const, requiredActivities: [], activityOrder: [], minStops: 4, maxStops: 8 } });
 
 describe("traveler's itinerary checks", () => {
-  it("rejects a sparse three-day trip even if discovery asked for only four stops", () => {
+  it("warns about a sparse three-day trip even if discovery asked for only four stops", () => {
     const state = { ...trip(), nights: 2, discovery: { ...trip().discovery, minStops: 4, maxStops: 4 } };
     const venues = [place("attraction", "tourist"), place("lunch", "restaurant", 1),
       place("cafe", "cafe", 2), place("dinner", "restaurant", 3)];
     const rows = venues.map((venue, index) => ({ id: `kakao:${venue.externalPlaceId}`, day_index: index < 2 ? 0 : index === 2 ? 1 : 2 }));
-    const problems = hardCourseProblems(evaluateCourse({ theme: "", rows }, venues, state, new Set()).problems);
+    const result = evaluateCourse({ theme: "", rows }, venues, state, new Set());
+    const problems = result.softIssues.map(issue => issue.message);
     expect(courseSize(state).min).toBe(8);
     expect(problems).toContain("요청에 맞지 않는 장소 수");
     expect(problems).toContain("2일차 일정 부족");
@@ -72,7 +73,7 @@ describe("traveler's itinerary checks", () => {
     const venues = [place("a", "tourist"), place("b", "restaurant", 1), place("c", "cafe", 2),
       place("d", "nature", 3), place("e", "photo", 4), place("f", "tourist", 5)];
     const rows = venues.map((venue, index) => ({ id: `kakao:${venue.externalPlaceId}`, day_index: index < 5 ? 0 : 1 }));
-    expect(hardCourseProblems(evaluateCourse({ theme: "", rows }, venues, trip(), new Set()).problems))
+    expect(evaluateCourse({ theme: "", rows }, venues, trip(), new Set()).softIssues.map(issue => issue.message))
       .toContain("1일차 장소 과밀");
   });
 
@@ -80,7 +81,7 @@ describe("traveler's itinerary checks", () => {
     const venues = [place("landmark", "tourist"), place("meal1", "restaurant", 1),
       place("meal2", "restaurant", 2), place("cafe", "cafe", 3)];
     const rows = venues.map((venue, index) => ({ id: `kakao:${venue.externalPlaceId}`, day_index: index < 2 ? 0 : 1 }));
-    expect(hardCourseProblems(evaluateCourse({ theme: "", rows }, venues, trip(), new Set()).problems))
+    expect(evaluateCourse({ theme: "", rows }, venues, trip(), new Set()).softIssues.map(issue => issue.message))
       .toContain("2일차 여행일 핵심 경험 누락");
     expect(evaluateCourse({ theme: "", rows }, venues, { ...trip(), userRequests: ["군산 미식 여행"] }, new Set()).problems)
       .not.toContain("2일차 여행일 핵심 경험 누락");
@@ -90,7 +91,7 @@ describe("traveler's itinerary checks", () => {
     const venues = [place("landmark1", "tourist"), place("meal", "restaurant", 1),
       place("landmark2", "nature", 2), place("cafe", "cafe", 3)];
     const rows = venues.map((venue, index) => ({ id: `kakao:${venue.externalPlaceId}`, day_index: index < 2 ? 0 : 1 }));
-    const problems = hardCourseProblems(evaluateCourse({ theme: "", rows }, venues, trip(), new Set()).problems);
+    const problems = evaluateCourse({ theme: "", rows }, venues, trip(), new Set()).softIssues.map(issue => issue.message);
     expect(problems).toEqual(expect.arrayContaining([
       "1일차 여행 핵심 장소 근거 부족", "2일차 여행 핵심 장소 근거 부족",
     ]));
@@ -139,7 +140,7 @@ describe("traveler's itinerary checks", () => {
     const poor = { theme: "", rows: [venues[0], venues[2], venues[1], venues[4]].map((candidate, index) => ({
       id: `kakao:${candidate.externalPlaceId}`, day_index: index < 2 ? 0 : 1,
     })) };
-    expect(hardCourseProblems(evaluateCourse(poor, venues, trip(), new Set()).problems)).toContain("2일차 여행일 식사 누락");
+    expect(evaluateCourse(poor, venues, trip(), new Set()).softIssues.map(issue => issue.message)).toContain("2일차 여행일 식사 누락");
     const fallback = buildFallbackCourse(venues, trip(), new Set());
     expect(hardCourseProblems(evaluateCourse(fallback, venues, trip(), new Set()).problems)).toEqual([]);
     for (const day of [0, 1]) expect(fallback.rows.filter(row => row.day_index === day)

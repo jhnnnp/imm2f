@@ -10,7 +10,7 @@ import type {
   DateTimeWindow,
 } from "@/features/planning/types/plan";
 import { koreaTodayYmd } from "@/lib/tourapi/festivalSchedule";
-import { explicitlyDislikedActivities } from "./dateIntent";
+import { explicitlyDislikedActivities } from "./dateActivityExclusions";
 
 export const DATE_ACTIVITY_OPTIONS: ReadonlyArray<{ id: DateActivityId; label: string }> = [
   { id: "cafe", label: "카페" },
@@ -611,7 +611,9 @@ export function withAreas(state: AIPlannerState, areas: string[]): AIPlannerStat
 }
 
 export function withActivities(state: AIPlannerState, labels: string[]): AIPlannerState {
-  return { ...state, activities: uniqueActivities(labels.map(label => activityIdFromLabel(label) ?? "")) };
+  const activities = uniqueActivities(labels.map(label => activityIdFromLabel(label) ?? ""));
+  return { ...state, activities, explicitPlanningSelections: {
+    ...state.explicitPlanningSelections, activities } };
 }
 
 export function withStayKind(state: AIPlannerState, label: string): AIPlannerState {
@@ -633,7 +635,8 @@ export function withAreaScope(state: AIPlannerState, label: string): AIPlannerSt
 
 export function withCuisine(state: AIPlannerState, label: string): AIPlannerState {
   const cuisine = asCuisineChoice(label);
-  return cuisine ? { ...state, cuisine } : state;
+  return cuisine ? { ...state, cuisine, explicitPlanningSelections: {
+    ...state.explicitPlanningSelections, cuisine } } : state;
 }
 
 export function extractActivitiesFromText(message: string): DateActivityId[] {

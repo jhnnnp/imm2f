@@ -33,12 +33,14 @@ export function DatePlanner({
   initialDrafts = [],
   today,
   tasteSeed = null,
+  candidateExplorationActive = false,
 }: {
   initialPlan: CouplePlan;
   initialArchives: ArchivedDatePlan[];
   initialDrafts?: DateDaySnapshot[];
   today: string;
   tasteSeed?: TasteDateSeed | null;
+  candidateExplorationActive?: boolean;
 }) {
   const landed = landingDateDay({ plan: initialPlan, drafts: initialDrafts, today });
   const router = useRouter();
@@ -247,7 +249,8 @@ export function DatePlanner({
     <>
       {panel === "ai" && (
         <ContextPanel>
-          <AIPlanEditor kind="date" items={items} startDate={startDate} onApply={apply} onReplace={replace} onKeep={keepCourse} tasteSeed={tasteSeed} />
+          <AIPlanEditor kind="date" items={items} startDate={startDate} onApply={apply} onReplace={replace}
+            onKeep={keepCourse} tasteSeed={tasteSeed} candidateExplorationActive={candidateExplorationActive} />
         </ContextPanel>
       )}
       <div className="page-title-row date-planner-header">

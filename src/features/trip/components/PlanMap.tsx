@@ -10,6 +10,7 @@ import { cinematicBearing } from "../planRoute";
 import { MapRouteOverlay } from "@/features/map/components/MapRouteOverlay";
 import { useRoadRoute } from "@/features/map/routing/useRoadRoute";
 import { planItemsWithCoordinates, syncPlanMapRoadRoute, syncPlanMapRoute } from "./planMapRoute";
+import { dayRoutes } from "./dayRoute";
 
 const MAP_PITCH = 44;
 
@@ -96,7 +97,13 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
-  const located = useMemo(() => planItemsWithCoordinates(items), [items]);
+  const routes = useMemo(() => dayRoutes(items), [items]);
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const activeDay = selectedDay !== null && routes.some(route => route.dayIndex === selectedDay)
+    ? selectedDay : routes[0]?.dayIndex ?? 0;
+  const activeItems = useMemo(() => items.filter(item => item.dayIndex === activeDay)
+    .sort((a, b) => a.order - b.order), [items, activeDay]);
+  const located = useMemo(() => planItemsWithCoordinates(activeItems), [activeItems]);
   const routeKey = useMemo(
     () => located.map(item => `${item.id}:${item.placeName}:${item.coordinates[0]},${item.coordinates[1]}`).join("|"),
     [located],
@@ -245,6 +252,12 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
   }, [ready, routeKey, roadPath, error]);
 
   return <section className={`planner-map${expanded ? " is-expanded" : ""}`} aria-label={`${dayLabel ?? "여행"} 지도`}>
+    {routes.length > 1 && <div className="plan-map-days" role="tablist" aria-label="지도 날짜 선택">
+      {routes.map(route => <button key={route.dayIndex} type="button" role="tab"
+        aria-selected={activeDay === route.dayIndex}
+        className={activeDay === route.dayIndex ? "is-active" : ""}
+        onClick={() => setSelectedDay(route.dayIndex)}>{route.dayIndex + 1}일차</button>)}
+    </div>}
     <div ref={container} className="maplibre-canvas" />
     <MapRouteOverlay
       map={mapInstance}
@@ -255,6 +268,6 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
     {!located.length && <div className="map-unavailable is-overlay"><div><b>표시할 좌표가 없어요</b><span>장소를 담으면 실제 지도와 동선이 보여요.</span></div></div>}
     {located.length > 0 && !ready && !error && <div className="map-loading"><span>여행 지도를 펼치고 있어요.</span><i /></div>}
     {located.length > 0 && error && <div className="map-error"><b>지도를 불러오지 못했어요</b><span>장소와 일정은 그대로 저장되어 있어요.</span><button type="button" className="outline-button" onClick={() => setAttempt(value => value + 1)}>지도 다시 열기</button></div>}
-    {located.length > 0 && <div className="map-summary"><span>{dayLabel ?? "DAY 1"}</span><b>{located.length}곳</b><small>번호 순서대로 동선이 이어져요</small></div>}
+    {located.length > 0 && <div className="map-summary"><span>{routes.length > 1 ? `${activeDay + 1}일차` : dayLabel ?? "DAY 1"}</span><b>{located.length}곳</b><small>번호 순서대로 동선이 이어져요</small></div>}
   </section>;
 }

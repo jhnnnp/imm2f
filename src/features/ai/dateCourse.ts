@@ -1,3 +1,5 @@
+import { tracePlanningTransformation, type PlanningTransformation, type PlanningTransformationStage } from "./planningTransformations";
+import { resolveCuisineRequirement } from "./planningRequirementProvenance";
 import { fitSchedule, scheduleGapMinutes } from "./schedule";
 import { tripLocalWindows } from "./planningSupport";
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
@@ -904,11 +906,26 @@ function ensureDateSpine(
   return next.slice(0, size.max);
 }
 
-export function validateModelRows(
+/** Compatibility name retained for callers. This performs legacy rewriting,
+ * not validation; use rewriteLegacyModelRows to inspect the transformations.
+ * Final eligibility and itinerary verification remain separate authorities. */
+export function validateModelRows(rows: DateCourseRow[], candidates: DiscoverCandidate[], state: AIPlannerState): DateCourseRow[] {
+  return rewriteLegacyModelRows(rows, candidates, state).rows;
+}
+
+/** Existing rewrite algorithm, with observational stage boundaries only. */
+export function rewriteLegacyModelRows(
   rows: DateCourseRow[],
   candidates: DiscoverCandidate[],
   state: AIPlannerState,
-): DateCourseRow[] {
+): { rows: DateCourseRow[]; transformations: PlanningTransformation[] } {
+  const transformations: PlanningTransformation[] = [];
+  let previousRows = [...rows];
+  const checkpoint = (stage: PlanningTransformationStage, next: DateCourseRow[], code: string,
+    origin: PlanningTransformation["origin"] = "legacy_heuristic") => {
+    transformations.push(...tracePlanningTransformation(stage, previousRows, next, { code, origin }));
+    previousRows = [...next];
+  };
   const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
   const seen = new Set<string>();
   const selected: DateCourseRow[] = [];
@@ -938,6 +955,7 @@ export function validateModelRows(
     keep(row);
   }
 
+  checkpoint("legacy_candidate_filter", selected, "legacy_candidate_eligibility");
   if (wanted.includes("meal") && state.cuisine && state.cuisine !== "any") {
     const mealIndex = selected.findIndex(row => {
       const candidate = candidateOf(row);
@@ -954,6 +972,7 @@ export function validateModelRows(
     }
   }
 
+  checkpoint("legacy_cuisine_replacement", selected, "cuisine_mismatch", resolveCuisineRequirement(state).origin);
   const present = () => selected.map(candidateOf).filter((item): item is DiscoverCandidate => Boolean(item));
   for (const place of state.requiredPlaces) {
     if (present().some(candidate => matchesTerm(candidate, place))) continue;
@@ -961,6 +980,7 @@ export function validateModelRows(
     if (found) keep({ id: dateCandidateKey(found), duration_minutes: defaultDuration(found, state.pace), reasons: ["꼭 들르고 싶다고 한 장소를 코스에 넣었어요."] }, 0);
   }
 
+  checkpoint("legacy_required_place_insertion", selected, "required_place_missing", "explicit_constraint");
   const size = courseSize(state);
   const slotCountByDay = new Map<string, number>();
   const festivalsByDay = new Map<number, number>();
@@ -985,6 +1005,7 @@ export function validateModelRows(
     return bump(`${day}:${slot}`) <= slotCapPerDay(state, slot);
   });
   const next = limited.slice(0, size.max);
+  checkpoint("legacy_slot_limits", next, "legacy_slot_cap");
   while (next.length < size.min) {
     const fillPriority = wanted.filter(activity => !next.some(row => {
         const candidate = candidateOf(row);
@@ -1036,9 +1057,14 @@ export function validateModelRows(
       reasons: ["하루 길이에 맞춰 걸어갈 곳을 하나 더 이었어요."],
     });
   }
+  checkpoint("legacy_minimum_fill", next, "stop_count");
   const filled = ensureDateSpine(next, candidates, state, candidateOf, allowHarsh);
+  checkpoint("legacy_activity_spine", filled, "legacy_activity_spine");
   const shaped = spreadConsecutiveStops(capLongHops(filled, candidates, state.requiredPlaces, isTravelPlan(state) ? 8000 : 1400), candidates, state.requiredPlaces);
-  return assignStartTimes(honorPinOrder(shaped, candidates, state).slice(0, size.max), candidates, state);
+  checkpoint("legacy_route_shape", shaped, "long_hop");
+  const scheduled = assignStartTimes(honorPinOrder(shaped, candidates, state).slice(0, size.max), candidates, state);
+  checkpoint("legacy_order_and_schedule", scheduled, "legacy_order_or_schedule");
+  return { rows: scheduled, transformations };
 }
 
 export function honorPinOrder(

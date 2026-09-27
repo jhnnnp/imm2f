@@ -143,10 +143,10 @@ describe("date engine fixed regression corpus", () => {
     expect(decisionUsefulVenueObservation(venue("1", "동네 카페", "cafe", "카페 > 커피전문점"), observation)).toBe(useful);
   });
 
-  it("course judge rejects a repeated meal although it increases the stop count", () => {
+  it("course judge warns about a repeated meal although it increases the stop count", () => {
     const candidates = [venue("1", "칼국수집", "restaurant", "음식점 > 한식"), venue("2", "정원카페", "cafe", "카페 > 커피전문점"), venue("3", "냉면집", "restaurant", "음식점 > 한식")];
     const state = { ...emptyDateBrief(), addStop: true, pinOrder: ["칼국수집", "정원카페"], requiredPlaces: ["칼국수집", "정원카페"], userRequests: ["일정추가"] };
     const proposal = { theme: "", rows: candidates.map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
-    expect(hardCourseProblems(evaluateCourse(proposal, candidates, state, new Set()).problems)).toContain("식사 중복");
+    expect(evaluateCourse(proposal, candidates, state, new Set()).softIssues.map(issue => issue.message)).toContain("식사 중복");
   });
 });

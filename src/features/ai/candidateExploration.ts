@@ -1,0 +1,305 @@
+import type { AIPlannerState, DateActivityId } from "@/features/planning/types/plan";
+import type { DiscoverCandidate, PlaceCategoryId } from "@/features/places/types/place";
+import type { ExperiencePlan } from "./experiencePlan";
+import type { ResearchNeed, ResearchPlan } from "./researchPlan";
+import { dateCandidateKey } from "./dateCourse";
+import { researchEvidenceFresh } from "./researchPlan";
+import type { SessionCandidateContext } from "./sessionCandidates";
+import type { DateCandidateRecord } from "./dateCandidatePool";
+
+export const MAX_EXPLORATION_CANDIDATES = 8;
+export type ExplorationActivity = "beach" | "culture" | "shopping" | "meal" | "cafe"
+  | "nightview" | "experience" | "nature";
+export type PreferenceProvenance = "user_selected" | "explicit_text" | "inferred" | "legacy_default";
+type CafeQuality = "aesthetic" | "view" | "spacious" | "traditional" | "dessert";
+type PreferenceKey = ExplorationActivity | "cuisine" | "pace" | "shoppingKind" | "cultureKind"
+  | `cafe:${CafeQuality}`;
+export type CandidateExplorationPreferences = {
+  activities: ExplorationActivity[];
+  cafeQualities: CafeQuality[];
+  cuisine: string | null;
+  shoppingKind: "outlet" | "department" | "market" | "select_shop" | null;
+  cultureKind: "art_museum" | "museum" | "media_art" | "exhibit" | null;
+  pace: "relaxed" | "balanced" | "active";
+  provenance: Partial<Record<PreferenceKey, PreferenceProvenance>>;
+};
+export type ExplorationCard = { candidateId: string; name: string; area: string;
+  category: string; image?: string; mapUrl: string; address: string; badges: string[];
+  reason: string; evidenceUrls: string[] };
+export type CandidateGroup = { id: ExplorationActivity; title: string; description: string;
+  needIds: string[]; cards: ExplorationCard[]; availableCount: number };
+export type CandidateExplorationState = { experiencePlan: ExperiencePlan | null;
+  researchPlan: ResearchPlan; groups: CandidateGroup[]; selectedCandidateIds: string[];
+  rejectedCandidateIds: string[]; shownCandidateIds: string[] };
+export type ItineraryPlanningInput = { experiencePlan: ExperiencePlan | null;
+  researchPlan: ResearchPlan; selectedCandidateIds: string[]; rejectedCandidateIds: string[];
+  /** Existing signed session candidate snapshot, not a new candidate source of truth. */
+  candidatePool: SessionCandidateContext | null; candidateGraph?: never };
+
+export const EXPLORATION_ACTIVITIES: Array<{ id: ExplorationActivity; label: string }> = [
+  { id: "beach", label: "바다/산책" }, { id: "culture", label: "전시/문화" },
+  { id: "shopping", label: "쇼핑" }, { id: "meal", label: "맛집" },
+  { id: "cafe", label: "카페" }, { id: "nightview", label: "야경" },
+  { id: "experience", label: "체험" }, { id: "nature", label: "자연/휴식" },
+];
+export const CAFE_CHOICES = [
+  { value: "aesthetic", label: "예쁜 공간" }, { value: "view", label: "오션뷰/전망" },
+  { value: "spacious", label: "대형 카페" }, { value: "traditional", label: "한옥/전통" },
+  { value: "dessert", label: "디저트" },
+] as const;
+export const CUISINE_CHOICES = ["한식", "양식", "일식", "중식", "고기", "해산물", "면/국수", "지역 음식"] as const;
+export const SHOPPING_CHOICES = [
+  { value: "outlet", label: "아울렛" }, { value: "department", label: "백화점" },
+  { value: "market", label: "시장" }, { value: "select_shop", label: "소품샵/편집샵" },
+] as const;
+export const CULTURE_CHOICES = [
+  { value: "art_museum", label: "미술관" }, { value: "museum", label: "박물관" },
+  { value: "media_art", label: "미디어아트" }, { value: "exhibit", label: "전시" },
+] as const;
+
+const activityCategory: Record<ExplorationActivity, PlaceCategoryId> = {
+  beach: "nature", culture: "photo", shopping: "tourist", meal: "restaurant",
+  cafe: "cafe", nightview: "tourist", experience: "photo", nature: "nature",
+};
+const activityQuery: Record<ExplorationActivity, string> = {
+  beach: "해수욕장", culture: "전시", shopping: "쇼핑", meal: "식당",
+  cafe: "카페", nightview: "야경 전망대", experience: "체험", nature: "공원",
+};
+const qualityEvidence: Record<string, string[]> = {
+  aesthetic: ["space", "interior", "architecture"], view: ["view", "terrace", "window"],
+  spacious: ["space", "seating"], traditional: ["architecture", "interior"],
+  dessert: ["menu"], quiet: ["noise", "crowd"], atmosphere: ["space", "interior", "ambience"],
+  value_for_money: ["menu", "price"], local_feel: [],
+};
+const qualityLabel: Record<string, string> = { aesthetic: "예쁜 공간", view: "전망 근거",
+  spacious: "넓은 공간", traditional: "전통 공간", dessert: "디저트", quiet: "조용함",
+  atmosphere: "분위기", value_for_money: "가격 근거" };
+
+export function initialExplorationPreferences(message: string, state: AIPlannerState): CandidateExplorationPreferences {
+  const activities: ExplorationActivity[] = [];
+  const add = (id: ExplorationActivity) => { if (!activities.includes(id)) activities.push(id); };
+  const explicit = `${message} ${(state.userRequests ?? []).join(" ")}`;
+  if (/바다|해변|해수욕|산책/.test(explicit)) add("beach");
+  if (/전시|미술관|박물관|문화/.test(explicit)) add("culture");
+  if (/쇼핑|아울렛|백화점|시장|소품샵/.test(explicit)) add("shopping");
+  if (/맛집|식사|식당|먹|파스타|국밥|해산물|회/.test(explicit)) add("meal");
+  if (/카페|커피|디저트/.test(explicit)) add("cafe");
+  if (/야경|밤바다/.test(explicit)) add("nightview");
+  if (/체험|공방|액티비티/.test(explicit)) add("experience");
+  if (/자연|휴식|숲|공원/.test(explicit)) add("nature");
+  const cafeQualities: CandidateExplorationPreferences["cafeQualities"] = [];
+  if (/예쁜|이쁜|감성/.test(explicit)) cafeQualities.push("aesthetic");
+  if (/오션뷰|전망|뷰\s*좋/.test(explicit)) cafeQualities.push("view");
+  if (/대형|넓은/.test(explicit)) cafeQualities.push("spacious");
+  if (/한옥|전통/.test(explicit)) cafeQualities.push("traditional");
+  if (/디저트|케이크/.test(explicit)) cafeQualities.push("dessert");
+  const cuisine = /돼지국밥/.test(explicit) ? "돼지국밥" : /파스타/.test(explicit) ? "파스타"
+    : /해산물/.test(explicit) ? "해산물" : /(?:^|\s)회(?:\s|$)/.test(explicit) ? "회"
+      : state.cuisine && state.cuisine !== "any" ? state.cuisine : null;
+  const shoppingKind = /아울렛|아웃렛/.test(explicit) ? "outlet" : /백화점/.test(explicit) ? "department"
+    : /시장|마켓/.test(explicit) ? "market" : /소품샵|편집샵/.test(explicit) ? "select_shop" : null;
+  const cultureKind = /미디어아트/.test(explicit) ? "media_art" : /미술관/.test(explicit) ? "art_museum"
+    : /박물관/.test(explicit) ? "museum" : /전시/.test(explicit) ? "exhibit" : null;
+  const pace = /여유롭|느긋|쉬엄쉬엄/.test(explicit) ? "relaxed"
+    : /많이 둘러|활동적|빡빡/.test(explicit) ? "active" : state.pace;
+  return { activities, cafeQualities, cuisine, shoppingKind, cultureKind, pace,
+    provenance: Object.fromEntries([...activities.map(id => [id, "explicit_text"]),
+      ...cafeQualities.map(quality => [`cafe:${quality}`, "explicit_text"]),
+      ...(cuisine ? [["cuisine", /돼지국밥|파스타|해산물|(?:^|\s)회(?:\s|$)|한식|양식|일식|중식/.test(explicit)
+        ? "explicit_text" : "inferred"]] : []),
+      ...(shoppingKind ? [["shoppingKind", "explicit_text"]] : []),
+      ...(cultureKind ? [["cultureKind", "explicit_text"]] : []),
+      ...(pace !== "balanced" ? [["pace", "explicit_text"]] : [])]) as CandidateExplorationPreferences["provenance"] };
+}
+
+export function validExplorationPreferences(value: CandidateExplorationPreferences): boolean {
+  const ids = new Set(EXPLORATION_ACTIVITIES.map(item => item.id));
+  return Array.isArray(value.activities) && value.activities.length <= ids.size
+    && value.activities.every(id => ids.has(id)) && new Set(value.activities).size === value.activities.length
+    && Array.isArray(value.cafeQualities) && value.cafeQualities.length <= 5
+    && value.cafeQualities.every(q => CAFE_CHOICES.some(option => option.value === q))
+    && (value.cuisine === null || typeof value.cuisine === "string" && value.cuisine.length <= 40)
+    && [null, ...SHOPPING_CHOICES.map(item => item.value)].includes(value.shoppingKind)
+    && [null, ...CULTURE_CHOICES.map(item => item.value)].includes(value.cultureKind)
+    && ["relaxed", "balanced", "active"].includes(value.pace);
+}
+
+export function explorationPrompt(message: string, preferences: CandidateExplorationPreferences) {
+  const labels = preferences.activities.map(id => EXPLORATION_ACTIVITIES.find(item => item.id === id)?.label).filter(Boolean);
+  const cafe = preferences.activities.includes("cafe") ? preferences.cafeQualities
+    .map(q => CAFE_CHOICES.find(item => item.value === q)?.label).filter(Boolean) : [];
+  // Phrase checked qualities as explicit user choices so P2's narrow input
+  // parser retains them instead of dropping them as a generic "cafe" category.
+  const cafePhrases: Record<CandidateExplorationPreferences["cafeQualities"][number], string> = {
+    aesthetic: "예쁜 카페", view: "오션뷰 카페", spacious: "넓은 카페",
+    traditional: "한옥 카페", dessert: "디저트 카페",
+  };
+  const explicitCafe = preferences.activities.includes("cafe")
+    ? preferences.cafeQualities.map(quality => cafePhrases[quality]) : [];
+  const cuisine = preferences.activities.includes("meal") && preferences.cuisine ? [preferences.cuisine] : [];
+  const shopping = preferences.activities.includes("shopping") && preferences.shoppingKind
+    ? SHOPPING_CHOICES.find(item => item.value === preferences.shoppingKind)?.label ?? "" : "";
+  const culture = preferences.activities.includes("culture") && preferences.cultureKind
+    ? CULTURE_CHOICES.find(item => item.value === preferences.cultureKind)?.label ?? "" : "";
+  const pace = preferences.pace === "relaxed" ? "여유롭게" : preferences.pace === "active" ? "많이 둘러보기" : "적당히";
+  return `${message.slice(0, 500)}\n사용자가 선택한 활동: ${labels.join(", ")}. 카페 조건: ${cafe.join(", ")}.
+선택한 카페 경험: ${explicitCafe.join(", ")}. 식사 종류: ${cuisine.join(", ")}. 쇼핑 종류: ${shopping}. 문화 종류: ${culture}. 일정 스타일: ${pace}.`.slice(0, 800);
+}
+
+/** Only explicitly chosen categories become exploration groups; P2 may add supporting needs. */
+export function explorationResearchPlan(plan: ResearchPlan | null, preferences: CandidateExplorationPreferences,
+  area: string): ResearchPlan {
+  const needs: ResearchNeed[] = preferences.activities.map(id => {
+    const category = activityCategory[id];
+    const base = plan?.needs.find(need => need.kind === "venue" && need.category === category);
+    const qualities = id === "cafe" ? preferences.cafeQualities : [];
+    const qualityList = [...new Set([...(base?.qualities ?? []), ...qualities])];
+    const query = id === "meal" && preferences.cuisine && preferences.cuisine !== "지역 음식"
+      ? `${preferences.cuisine} 식당` : id === "shopping" && preferences.shoppingKind
+        ? `${SHOPPING_CHOICES.find(item => item.value === preferences.shoppingKind)?.label ?? "쇼핑"}`
+        : id === "culture" && preferences.cultureKind
+          ? `${CULTURE_CHOICES.find(item => item.value === preferences.cultureKind)?.label ?? "전시"}`
+          : activityQuery[id];
+    return { id: `explore-${id}`, kind: "venue", purpose: `${query} 방문 경험`, category,
+      geographicFocus: base?.geographicFocus ?? area, qualities: qualityList,
+      evidenceNeeded: [...new Set(qualityList.flatMap(q => qualityEvidence[q] ?? []))],
+      supportingRole: "primary", priority: "required" };
+  });
+  for (const need of [...needs]) if (need.evidenceNeeded.length)
+    needs.push({ ...need, id: `${need.id}-evidence`, kind: "evidence", priority: "important" });
+  return { needs, unresolved: [], source: plan?.source ?? "legacy_fallback" };
+}
+
+export function refineExplorationNeed(plan: ResearchPlan, groupId: ExplorationActivity, text: string): ResearchPlan {
+  const next = plan.needs.map(need => ({ ...need, qualities: [...need.qualities], evidenceNeeded: [...need.evidenceNeeded] }));
+  const words = text.toLowerCase();
+  const additions: string[] = [];
+  if (/바다|오션뷰|전망|뷰/.test(words)) additions.push("view");
+  if (/예쁜|이쁜|감성/.test(words)) additions.push("aesthetic");
+  if (/조용|한적/.test(words)) additions.push("quiet");
+  if (/덜 비싼|저렴|가성비/.test(words)) additions.push("value_for_money");
+  if (/현지 느낌|로컬/.test(words)) additions.push("local_feel");
+  if (/분위기/.test(words)) additions.push("atmosphere");
+  for (const need of next.filter(item => item.id === `explore-${groupId}` || item.id === `explore-${groupId}-evidence`)) {
+    need.qualities = [...new Set([...need.qualities, ...additions])];
+    need.evidenceNeeded = [...new Set(need.qualities.flatMap(q => qualityEvidence[q] ?? []))];
+  }
+  return { ...plan, needs: next };
+}
+
+/** A generic follow-up belongs to the last group the user touched, if known. */
+export function refinementGroupForMessage(groups: CandidateGroup[], message: string,
+  activeGroup: ExplorationActivity | null): ExplorationActivity | null {
+  const named: ExplorationActivity | null = /카페|커피|디저트/.test(message) ? "cafe"
+    : /식당|맛집|음식|밥|해산물|파스타/.test(message) ? "meal"
+      : /바다|해변|해수욕|산책/.test(message) ? "beach"
+        : /전시|미술관|박물관/.test(message) ? "culture"
+          : /쇼핑|아울렛|백화점|시장/.test(message) ? "shopping"
+            : /야경/.test(message) ? "nightview"
+              : /체험|공방/.test(message) ? "experience"
+                : /공원|숲|자연/.test(message) ? "nature" : null;
+  if (named) return groups.some(group => group.id === named) ? named : null;
+  if (activeGroup && groups.some(group => group.id === activeGroup)) return activeGroup;
+  return groups.length === 1 ? groups[0].id : null;
+}
+
+const liveEvidence = (candidate: DiscoverCandidate) => (candidate.evidence ?? []).filter(fact =>
+  (!fact.venueId || fact.venueId === dateCandidateKey(candidate)) && researchEvidenceFresh(fact));
+export function candidateQualityBadges(candidate: DiscoverCandidate, need: ResearchNeed): string[] {
+  const facts = liveEvidence(candidate).filter(fact => fact.verification === "source_checked");
+  return need.qualities.flatMap(quality => {
+    if (quality === "value_for_money" || quality === "local_feel") return [];
+    const supported = (qualityEvidence[quality] ?? []).some(attribute => facts.some(fact => {
+      const text = `${fact.attribute} ${fact.text}`.toLowerCase();
+      if (/없음|없다|안\s*보|좁|시끄럽|붐비/.test(text) && quality !== "dessert") return false;
+      if (quality === "view") return /오션뷰|바다\s*전망|전망이\s*좋|탁\s*트인\s*전망|sea view|ocean view/.test(text);
+      if (quality === "traditional") return /한옥|전통|architecture|건축/.test(text);
+      if (quality === "spacious") return /넓|대형|넉넉한\s*좌석|spacious/.test(text);
+      if (quality === "aesthetic") return /예쁜|이쁜|아름다운|감각적|감성적|멋진\s*인테리어/.test(text);
+      if (quality === "quiet") return /조용|한적|고요|quiet/.test(text);
+      if (quality === "atmosphere") return /분위기\s*좋|아늑|멋진\s*공간|romantic/.test(text);
+      if (quality === "dessert") return /디저트|케이크|베이커리|마카롱/.test(text);
+      return text.includes(attribute);
+    }));
+    return supported && qualityLabel[quality] ? [qualityLabel[quality]] : [];
+  }).slice(0, 3);
+}
+
+function cuisineMatches(candidate: DiscoverCandidate, cuisine: string | null) {
+  if (!cuisine || cuisine === "지역 음식") return true;
+  const text = `${candidate.name} ${candidate.detailedCategory ?? ""} ${candidate.dishes ?? ""}
+    ${(candidate.evidence ?? []).filter(fact => fact.attribute === "menu" && researchEvidenceFresh(fact))
+      .map(fact => fact.text).join(" ")}`;
+  const terms: Record<string, RegExp> = { 한식: /한식|국밥|백반|한정식|갈비|찌개|불고기/,
+    양식: /양식|파스타|피자|스테이크|이탈리안|브런치/, 일식: /일식|초밥|스시|라멘|돈카츠|우동/,
+    중식: /중식|중국집|짜장|짬뽕|마라|딤섬/, 고기: /고기|삼겹|갈비|한우|소고기|바비큐/,
+    해산물: /해산물|해물|횟집|회센터|생선|조개|새우|굴|씨푸드/,
+    "면/국수": /면|국수|라멘|우동|파스타|냉면|칼국수/ };
+  return (terms[cuisine] ?? new RegExp(cuisine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).test(text);
+}
+
+function subtypeMatches(candidate: DiscoverCandidate, id: ExplorationActivity,
+  preferences: CandidateExplorationPreferences) {
+  const text = `${candidate.name} ${candidate.detailedCategory ?? ""} ${candidate.categoryLabel}`;
+  const shopping: Record<NonNullable<CandidateExplorationPreferences["shoppingKind"]>, RegExp> = {
+    outlet: /아울렛|아웃렛|outlet/i, department: /백화점|department/i,
+    market: /시장|마켓|market/i, select_shop: /소품샵|편집샵|셀렉트샵|잡화|라이프스타일/i };
+  const culture: Record<NonNullable<CandidateExplorationPreferences["cultureKind"]>, RegExp> = {
+    art_museum: /미술관|갤러리|아트센터/i, museum: /박물관|뮤지엄/i,
+    media_art: /미디어아트|미디어\s*전시|몰입형\s*전시/i, exhibit: /전시|갤러리|미술관/i };
+  return id === "shopping" && preferences.shoppingKind ? shopping[preferences.shoppingKind].test(text)
+    : id === "culture" && preferences.cultureKind ? culture[preferences.cultureKind].test(text) : true;
+}
+
+export function groupExplorationCandidates(input: { plan: ResearchPlan; preferences: CandidateExplorationPreferences;
+  candidates: DiscoverCandidate[]; session: SessionCandidateContext | null; shownIds?: string[];
+  rejectedIds?: string[]; records?: DateCandidateRecord[] }): CandidateGroup[] {
+  const hidden = new Set([...(input.session?.shownCandidateIds ?? []), ...(input.session?.selectedCandidateIds ?? []),
+    ...(input.session?.rejectedCandidateIds ?? []), ...(input.shownIds ?? []), ...(input.rejectedIds ?? [])]);
+  const baseScores = new Map((input.records ?? []).map(record => [record.id,
+    Object.values(record.scores).reduce((sum, value) => sum + value, 0)]));
+  return input.preferences.activities.map(id => {
+    const need = input.plan.needs.find(item => item.id === `explore-${id}`)!;
+    const seen = new Set<string>();
+    const ranked = input.candidates.filter(item => item.category === need.category && !hidden.has(dateCandidateKey(item)))
+      .filter(item => id !== "meal" || cuisineMatches(item, input.preferences.cuisine))
+      .filter(item => id !== "shopping" || /쇼핑|아울렛|백화점|시장|편집샵|소품샵/.test(`${item.name} ${item.detailedCategory ?? ""}`))
+      .filter(item => subtypeMatches(item, id, input.preferences))
+      .filter(item => { const key = `${item.name.replace(/\s/g, "").toLowerCase()}|${item.address.replace(/\s/g, "").toLowerCase()}`;
+        if (seen.has(key)) return false; seen.add(key); return true; })
+      .map(item => ({ item, badges: candidateQualityBadges(item, need),
+        focusFit: need.geographicFocus && `${item.district} ${item.address}`.includes(need.geographicFocus) ? 1 : 0,
+        baseScore: baseScores.get(dateCandidateKey(item)) ?? 0 }))
+      .sort((a, b) => b.focusFit - a.focusFit || b.badges.length - a.badges.length
+        || b.baseScore - a.baseScore || liveEvidence(b.item).length - liveEvidence(a.item).length
+        || a.item.name.localeCompare(b.item.name));
+    const cards = ranked.slice(0, MAX_EXPLORATION_CANDIDATES).map(({ item, badges }) => ({
+      candidateId: dateCandidateKey(item), name: item.name, area: item.district,
+      category: item.categoryLabel, image: item.image, mapUrl: item.mapUrl,
+      address: item.address || item.roadAddress, badges,
+      reason: badges.length ? `${badges.join(" · ")} 근거를 확인했어요.`
+        : `${item.district}의 ${item.categoryLabel} 후보예요. 세부 속성은 확인이 필요해요.`,
+      evidenceUrls: liveEvidence(item).filter(fact => fact.verification === "source_checked")
+        .map(fact => fact.url).slice(0, 3),
+    }));
+    const label = EXPLORATION_ACTIVITIES.find(item => item.id === id)?.label ?? id;
+    return { id, title: id === "cafe" && input.preferences.cafeQualities.length
+      ? `${input.preferences.cafeQualities.map(q => CAFE_CHOICES.find(item => item.value === q)?.label).filter(Boolean).join(" · ")} 카페`
+      : id === "meal" && input.preferences.cuisine ? `${input.preferences.cuisine} 맛집` : label,
+      description: need.qualities.length ? cards.some(card => card.badges.length)
+        ? "확인된 근거가 있는 속성만 배지로 표시했어요."
+        : "요청한 분위기와 속성은 아직 확인되지 않았어요. 장소 정보를 살펴보세요."
+        : "방문 가능한 장소 후보를 골랐어요.", needIds: [need.id], cards, availableCount: ranked.length };
+  });
+}
+
+export function explorationStateForActivities(state: AIPlannerState,
+  preferences: CandidateExplorationPreferences): AIPlannerState {
+  const mappings: Partial<Record<ExplorationActivity, DateActivityId>> = {
+    cafe: "cafe", meal: "meal", culture: "exhibit", nightview: "nightview", beach: "walk" };
+  const mapped = preferences.activities.flatMap(id => mappings[id] ? [mappings[id]!] : []);
+  return { ...state, activities: mapped, pace: preferences.pace,
+    explicitPlanningSelections: { ...state.explicitPlanningSelections,
+      activities: mapped, ...(preferences.cuisine && ["한식", "양식", "일식", "중식"].includes(preferences.cuisine)
+        ? { cuisine: preferences.cuisine as "한식" | "양식" | "일식" | "중식" } : {}) } };
+}

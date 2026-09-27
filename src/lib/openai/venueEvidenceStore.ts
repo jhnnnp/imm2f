@@ -39,7 +39,8 @@ export function storedVenueObservation(row: EvidenceRow, candidate: DiscoverCand
 function toInsert(candidate: DiscoverCandidate, observation: VenueObservation): EvidenceInsert | null {
   if (observation.venueId !== dateCandidateKey(candidate)
     || !observation.sourceExcerpt || !observation.sourceVenueName || !observation.sourceAddress
-    || !observation.attribute || !observation.verification || !observation.url.startsWith("https://")) return null;
+    || !observation.attribute || observation.attribute === "hours"
+    || !observation.verification || !observation.url.startsWith("https://")) return null;
   const address = candidate.roadAddress || candidate.address;
   if (!candidate.name || !address) return null;
   const id = createHash("sha256").update(`${dateCandidateKey(candidate)}\0${observation.url}\0${observation.text}`).digest("hex");

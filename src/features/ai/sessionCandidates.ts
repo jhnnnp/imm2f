@@ -309,7 +309,8 @@ export function mergeSessionCandidates(previous: SessionCandidateContext | null 
     selectedIds.add(row.candidateId);
     if (row.currentState !== "selected") addEvent(row, "selected", info, "current_plan");
   }
-  for (const row of records) if (row.currentState === "selected" && !selectedIds.has(row.candidateId))
+  for (const row of records) if (row.currentState === "selected" && !selectedIds.has(row.candidateId)
+    && row.events.some(event => event.type === "selected" && event.source === "current_plan"))
     addEvent(row, "replaced", info, "current_plan");
   const retained = prune(records);
   return { version: 1, sessionId: info.sessionId, turnCount: base.turnCount + 1,
@@ -321,6 +322,41 @@ export function mergeSessionCandidates(previous: SessionCandidateContext | null 
     rejectedCandidateIds: retained.filter(row => row.rejectedReasons.length > 0).map(row => row.candidateId),
     feedback: base.feedback ?? emptySessionFeedback(),
     lastUpdatedAt: info.observedAt };
+}
+
+/** Session-only user actions. IDs must already exist in the server-signed snapshot. */
+export function markExplorationCandidates(context: SessionCandidateContext, input: {
+  selectedIds?: string[]; rejectedIds?: string[]; shownIds?: string[];
+  turnId: string; observedAt: string;
+}): SessionCandidateContext {
+  const allowed = new Set(context.records.map(row => row.candidateId));
+  const selected = new Set((input.selectedIds ?? []).filter(id => allowed.has(id)));
+  const rejected = new Set((input.rejectedIds ?? []).filter(id => allowed.has(id) && !selected.has(id)));
+  const shown = new Set((input.shownIds ?? []).filter(id => allowed.has(id)));
+  const info: SessionCandidateMergeInfo = { sessionId: context.sessionId, observedAt: input.observedAt,
+    turnId: input.turnId };
+  const records = context.records.map(row => {
+    const next = { ...row, events: [...row.events], rejectedReasons: [...row.rejectedReasons] };
+    if (next.currentState === "selected" && !selected.has(next.candidateId)
+      && next.events.some(event => event.type === "selected" && event.source === "visible_result")
+      && !next.events.some(event => event.type === "selected" && event.source === "current_plan"))
+      addEvent(next, "shown", info, "visible_result");
+    if (shown.has(next.candidateId)) addEvent(next, "shown", info, "visible_result",
+      undefined, (input.shownIds ?? []).indexOf(next.candidateId));
+    if (rejected.has(next.candidateId)) {
+      if (!next.rejectedReasons.includes("exploration_rejected")) next.rejectedReasons.push("exploration_rejected");
+      addEvent(next, "rejected", info, "visible_result", "exploration_rejected");
+    }
+    if (selected.has(next.candidateId)) addEvent(next, "selected", info, "visible_result");
+    return next;
+  });
+  return { ...context, records,
+    selectedCandidateIds: records.filter(row => row.currentState === "selected").map(row => row.candidateId),
+    shownCandidateIds: records.filter(row => row.shownCount > 0).map(row => row.candidateId),
+    rejectedCandidateIds: records.filter(row => row.currentState === "rejected" || row.rejectedReasons.length > 0)
+      .map(row => row.candidateId),
+    shownBatchTurnIds: shown.size ? [...context.shownBatchTurnIds, input.turnId].slice(-8) : context.shownBatchTurnIds,
+    lastUpdatedAt: input.observedAt };
 }
 
 export function sessionShownPlaces(result: AIPlannerResult): Array<{ name: string; address?: string }> {

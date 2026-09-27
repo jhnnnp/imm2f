@@ -78,7 +78,7 @@ describe("course design", () => {
     expect(catalog.filter(candidate => candidate.category === "cafe").length).toBeGreaterThanOrEqual(3);
   });
 
-  it("rejects a generic added stop when it creates a second cafe", () => {
+  it("warns about a generic added stop when it creates a second cafe", () => {
     const candidates = [
       venue("m", "소문난맛함흥냉면전문점", "restaurant", 127.039),
       venue("c1", "봉순이네다락방", "cafe", 127.04),
@@ -87,7 +87,7 @@ describe("course design", () => {
     const state = { ...emptyDateBrief(), preserveExistingPlaces: true, addStop: true, pinOrder: candidates.slice(0, 2).map(candidate => candidate.name), requiredPlaces: candidates.slice(0, 2).map(candidate => candidate.name) };
     const proposal = { theme: "", rows: candidates.map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
     const result = evaluateCourse(proposal, candidates, state, new Set());
-    expect(hardCourseProblems(result.problems)).toContain("카페 중복");
+    expect(result.softIssues.map(issue => issue.message)).toContain("카페 중복");
   });
 
   it("does not let a model-authored cafe-tour note authorize an extra cafe", () => {
@@ -103,7 +103,7 @@ describe("course design", () => {
     expect(evaluateCourse(proposal, [meal, cafe, extra], state, new Set()).problems).toContain("카페 중복");
   });
 
-  it("rejects a second meal as a generic addition, even when both restaurants are nearby", () => {
+  it("warns about a second meal as a generic addition, even when both restaurants are nearby", () => {
     const candidates = [
       venue("m1", "꿩칼국수와 오리전문점", "restaurant", 127.039),
       venue("c", "봉순이네다락방", "cafe", 127.04),
@@ -112,7 +112,7 @@ describe("course design", () => {
     const state = { ...emptyDateBrief(), conversationNotes: ["일정 추가"], preserveExistingPlaces: true, addStop: true,
       pinOrder: candidates.slice(0, 2).map(candidate => candidate.name), requiredPlaces: candidates.slice(0, 2).map(candidate => candidate.name) };
     const proposal = { theme: "", rows: candidates.map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
-    expect(hardCourseProblems(evaluateCourse(proposal, candidates, state, new Set()).problems)).toContain("식사 중복");
+    expect(evaluateCourse(proposal, candidates, state, new Set()).softIssues.map(issue => issue.message)).toContain("식사 중복");
   });
 
   it("prefers a cafe with a sourced space detail, but permits an honest unknown when none exists", () => {
@@ -120,14 +120,14 @@ describe("course design", () => {
     const cafe = venue("c", "동네 카페", "cafe", 127.04);
     const state = { ...emptyDateBrief(), conversationNotes: ["예쁜 카페에서 쉬고 싶어"] };
     const proposal = { theme: "", rows: [meal, cafe].map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
-    expect(hardCourseProblems(evaluateCourse(proposal, [meal, cafe], state, new Set()).problems)).not.toContain("카페 공간 근거 부족");
+    expect(evaluateCourse(proposal, [meal, cafe], state, new Set()).softIssues.map(issue => issue.message)).not.toContain("카페 공간 근거 부족");
     const withSpace = { ...cafe, externalPlaceId: "c2", name: "테라스 카페", evidence: [{ id: "space", text: "이 지점에는 통창과 테라스 좌석이 있습니다.", url: "https://example.com/cafe", checkedAt: "2026-09-23" }] };
-    expect(hardCourseProblems(evaluateCourse(proposal, [meal, cafe, withSpace], state, new Set()).problems)).toContain("카페 공간 근거 부족");
+    expect(evaluateCourse(proposal, [meal, cafe, withSpace], state, new Set()).softIssues.map(issue => issue.message)).toContain("카페 공간 근거 부족");
     const better = { theme: "", rows: [meal, withSpace].map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
-    expect(hardCourseProblems(evaluateCourse(better, [meal, cafe, withSpace], state, new Set()).problems)).not.toContain("카페 공간 근거 부족");
+    expect(evaluateCourse(better, [meal, cafe, withSpace], state, new Set()).softIssues.map(issue => issue.message)).not.toContain("카페 공간 근거 부족");
   });
 
-  it("rejects an unrequested repeat of the existing activity when adding a stop", () => {
+  it("warns about an unrequested repeat of the existing activity when adding a stop", () => {
     const meal = venue("m", "파스타 식당", "restaurant", 127.039);
     const cafe = venue("c", "정원 카페", "cafe", 127.04);
     const hall = { ...venue("h", "소월아트홀", "photo", 127.041), categoryLabel: "공연장", detailedCategory: "문화,예술 > 공연장", kakaoCategoryGroupCode: "CT1" };
@@ -136,7 +136,7 @@ describe("course design", () => {
     const state = { ...emptyDateBrief(), conversationNotes: ["일정추가"], preserveExistingPlaces: true, addStop: true,
       pinOrder: [meal.name, cafe.name, hall.name], requiredPlaces: [meal.name, cafe.name, hall.name] };
     const proposal = { theme: "", rows: candidates.map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
-    expect(hardCourseProblems(evaluateCourse(proposal, candidates, state, new Set()).problems)).toContain("추가 경험 중복");
+    expect(evaluateCourse(proposal, candidates, state, new Set()).softIssues.map(issue => issue.message)).toContain("추가 경험 중복");
   });
 
   it("adds a new exhibit experience while preserving the existing meal, cafe and hall", () => {
@@ -155,13 +155,13 @@ describe("course design", () => {
     expect(seeds[0]?.problems).toEqual([]);
   });
 
-  it("prefers venue-specific evidence and rejects an unsupported chain cafe when a local cafe is nearby", () => {
+  it("prefers venue-specific evidence and warns about an unsupported chain cafe when a local cafe is nearby", () => {
     const meal = venue("m", "냉면집", "restaurant", 127.039);
     const chain = venue("chain", "할리스 소월아트홀점", "cafe", 127.04);
     const local = venue("local", "정원 다락", "cafe", 127.0405);
     const state = emptyDateBrief();
     const proposal = { theme: "", rows: [meal, chain].map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
-    expect(hardCourseProblems(evaluateCourse(proposal, [meal, chain, local], state, new Set()).problems))
+    expect(evaluateCourse(proposal, [meal, chain, local], state, new Set()).softIssues.map(issue => issue.message))
       .toContain("매력 근거 없는 프랜차이즈 카페");
     const researched = { ...chain, evidence: [
       { id: "generic", text: "전국에 500개 매장을 운영하는 프랜차이즈입니다.", url: "https://example.com/brand", checkedAt: "2026-09-23" },
@@ -184,14 +184,14 @@ describe("course design", () => {
     expect(usefulVenueEvidence(cafe, emptyDateBrief())).toBeUndefined();
   });
 
-  it("does not sacrifice local cohesion for a distant researched cafe on a short neighborhood date", () => {
+  it("warns about a distant researched cafe on a short neighborhood date", () => {
     const meal = venue("m", "왕십리 식당", "restaurant", 127.039);
     const distant = { ...venue("c", "멀리 있는 한옥 카페", "cafe", 127.064), evidence: [
       { id: "space", text: "한옥 공간에 정원 좌석이 있습니다.", url: "https://example.com/cafe", checkedAt: "2026-09-23" },
     ] };
     const state = { ...emptyDateBrief(), userRequests: ["왕십리에서 저녁 먹고 예쁜 카페"] };
     const proposal = { theme: "", rows: [meal, distant].map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
-    expect(hardCourseProblems(evaluateCourse(proposal, [meal, distant], state, new Set()).problems)).toContain("한 구간의 이동 부담이 너무 큼");
+    expect(evaluateCourse(proposal, [meal, distant], state, new Set()).softIssues.map(issue => issue.message)).toContain("한 구간의 이동 부담이 너무 큼");
   });
 
   it("scores distinctive sourced cafe features above weak or negative space descriptions", () => {
@@ -213,12 +213,12 @@ describe("course design", () => {
     expect(courseSelectionScore(betterModel, 800)).toBeGreaterThan(courseSelectionScore(seed, 800, true));
   });
 
-  it("rejects a different neighborhood even when each individual hop is short", () => {
+  it("warns about a different neighborhood unless the area scope is explicit and strict", () => {
     const meal = { ...venue("m", "왕십리 식당", "restaurant", 127.039), distanceMeters: 200 };
     const cafe = { ...venue("c", "창신동 카페", "cafe", 127.051), distanceMeters: 1950 };
     const hall = { ...venue("h", "창신동 소극장", "photo", 127.057), distanceMeters: 2350, categoryLabel: "공연장", detailedCategory: "문화,예술 > 공연장", kakaoCategoryGroupCode: "CT1" };
     const state = { ...emptyDateBrief(), areas: ["왕십리"], userRequests: ["왕십리에서 식당 카페 공연장 데이트"] };
     const proposal = { theme: "", rows: [meal, cafe, hall].map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
-    expect(hardCourseProblems(evaluateCourse(proposal, [meal, cafe, hall], state, new Set()).problems)).toContain("기준 동네에서 먼 장소");
+    expect(evaluateCourse(proposal, [meal, cafe, hall], state, new Set()).softIssues.map(issue => issue.message)).toContain("기준 동네에서 먼 장소");
   });
 });

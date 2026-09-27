@@ -6,6 +6,7 @@ import { evaluateCourse } from "@/features/ai/courseDesign";
 import { verifyDateItinerary } from "@/features/ai/dateVerifier";
 import { completeJson } from "./client";
 import { courseProposalMessages, recommendDatePlanWithOpenAi } from "./recommendDatePlan";
+import { enrichDateVenues } from "./enrichDateVenues";
 import type { SemanticPlanningHints } from "@/features/ai/semanticPlanningHints";
 
 vi.mock("./client", () => ({ completeJson: vi.fn() }));
@@ -45,6 +46,12 @@ beforeEach(() => vi.mocked(completeJson).mockReset().mockResolvedValue(modelCour
 afterEach(() => vi.restoreAllMocks());
 
 describe("course proposal semantic boundary", () => {
+  it("uses already researched P3 candidates without launching legacy role research", async () => {
+    vi.mocked(enrichDateVenues).mockClear();
+    await recommendDatePlanWithOpenAi({ prompt: "성수 카페 데이트", condition,
+      candidates, saved: [], state: state(), researchPlanActive: true });
+    expect(enrichDateVenues).not.toHaveBeenCalled();
+  });
   it("keeps the old message contract exactly when hints are absent", () => {
     const payload = { candidates: [{ id: "kakao:quiet" }], budgetWon: 100000 };
     const messages = courseProposalMessages(payload);
@@ -121,7 +128,9 @@ describe("course proposal semantic boundary", () => {
         order: result.items.map(item => item.placeName),
         score: Object.fromEntries(Object.entries(result.design?.scoreBreakdown ?? {})
           .map(([key, value]) => [key, Math.round(value * 10_000) / 10_000])),
-        verification });
+        verification: { ...verification, qualitySignals: verification.qualitySignals.map(signal => ({
+          ...signal, value: Math.round(signal.value * 10_000) / 10_000,
+        })) } });
     }
     // The mocked model returns one fixed proposal. Hints alone do not alter hard filtering,
     // deterministic scoring, or verification; model quality is a separate evaluation.

@@ -4,6 +4,7 @@ import { loadTasteSeed } from "@/features/taste/actions";
 import { DatePlanner } from "@/features/date/components/DatePlanner";
 import { listArchivedDatePlans, listDateDrafts, loadCouplePlan } from "@/features/planning/actions";
 import { seoulTodayIso } from "@/lib/dates";
+import { candidateExplorationMode } from "@/features/ai/candidateExplorationMode";
 
 export const metadata: Metadata = { title: "Date" };
 
@@ -32,6 +33,7 @@ async function DatePageContent({ searchParams }: { searchParams: Promise<{ from?
       initialArchives={archives.dates}
       initialDrafts={drafts}
       tasteSeed={tasteSeed}
+      candidateExplorationActive={candidateExplorationMode() === "active"}
     />
   );
 }

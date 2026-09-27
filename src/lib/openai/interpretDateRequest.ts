@@ -178,6 +178,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     },
     inferredPreferences: patch.inferredPreferences ?? (reset ? [] : base.inferredPreferences ?? []),
     memorySuggestions: base.memorySuggestions,
+    explicitPlanningSelections: reset ? undefined : base.explicitPlanningSelections,
     excludedFoods: reset ? [] : base.excludedFoods ?? [],
     foodAllergy: reset ? false : base.foodAllergy ?? false,
     intakeFocusDone: base.intakeFocusDone,

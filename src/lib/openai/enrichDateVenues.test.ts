@@ -35,6 +35,13 @@ describe("venue research allocation", () => {
   it("accepts supported branch metadata without claiming independent verification", () => {
     expect(acceptVenueObservation(venue, fact, [fact.sourceUrl])).toMatchObject({ verification: "search_report", sourceExcerpt: fact.sourceExcerpt });
   });
+  it("accepts a requested noise fact only with cited branch evidence", () => {
+    const noise = { ...fact, text: "실내 좌석의 소음이 적다고 안내합니다.",
+      sourceExcerpt: "이 지점은 실내 좌석의 소음이 적다고 안내합니다." };
+    expect(acceptVenueObservation(venue, noise, [fact.sourceUrl], ["noise"]))
+      .toMatchObject({ verification: "search_report", text: noise.text });
+    expect(acceptVenueObservation(venue, noise, [], ["noise"])).toBeNull();
+  });
   it("rejects fabricated URLs, missing excerpts and identity mismatches", () => {
     expect(acceptVenueObservation(venue, fact, [])).toBeNull();
     expect(acceptVenueObservation(venue, { ...fact, sourceExcerpt: "" }, [fact.sourceUrl])).toBeNull();

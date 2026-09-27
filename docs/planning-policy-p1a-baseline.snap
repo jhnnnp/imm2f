@@ -1,0 +1,180 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`P1-A pre-migration behavior > preserves busan_three_days 1`] = `
+{
+  "digest": "d4aa8267993344bed41c969ee1c56a76b92ea71b8246b6bad408d7e4611273ee",
+  "hardProblems": [
+    "요청에 맞지 않는 장소 수",
+    "3일차 여행일 식사 누락",
+  ],
+  "problems": [
+    "요청에 맞지 않는 장소 수",
+    "3일차 여행일 식사 누락",
+  ],
+  "rewrittenIds": [
+    "kakao:policy-0",
+    "kakao:policy-1",
+    "kakao:policy-8",
+    "kakao:policy-3",
+    "kakao:policy-4",
+    "kakao:policy-2",
+    "kakao:policy-6",
+    "kakao:policy-7",
+  ],
+  "score": -158.0384412377841,
+  "seedCount": 1,
+}
+`;
+
+exports[`P1-A pre-migration behavior > preserves cafe_tour 1`] = `
+{
+  "digest": "2a2867a8c850f45bf70a45e39dfd3cab575743b685896d7d4a5a3678613554d4",
+  "hardProblems": [],
+  "problems": [],
+  "rewrittenIds": [
+    "kakao:policy-2",
+    "kakao:policy-5",
+  ],
+  "score": 56.23391164072298,
+  "seedCount": 1,
+}
+`;
+
+exports[`P1-A pre-migration behavior > preserves daytrip 1`] = `
+{
+  "digest": "9837a02491342cd622b823b1842fb87bd9755fbd2645dcbd850d5c404958f8b5",
+  "hardProblems": [],
+  "problems": [],
+  "rewrittenIds": [
+    "kakao:policy-0",
+    "kakao:policy-4",
+    "kakao:policy-2",
+    "kakao:policy-6",
+  ],
+  "score": 55.85963996337478,
+  "seedCount": 1,
+}
+`;
+
+exports[`P1-A pre-migration behavior > preserves early_departure 1`] = `
+{
+  "digest": "b2b0d987b424c013a21aa260ad9e564fdf39016d1ec0227656f1b606f39aff08",
+  "hardProblems": [
+    "요청에 맞지 않는 장소 수",
+    "3일차 여행일 식사 누락",
+  ],
+  "problems": [
+    "요청에 맞지 않는 장소 수",
+    "3일차 여행일 식사 누락",
+  ],
+  "rewrittenIds": [
+    "kakao:policy-0",
+    "kakao:policy-1",
+    "kakao:policy-8",
+    "kakao:policy-3",
+    "kakao:policy-4",
+    "kakao:policy-2",
+    "kakao:policy-6",
+    "kakao:policy-7",
+  ],
+  "score": -158.0384412377841,
+  "seedCount": 1,
+}
+`;
+
+exports[`P1-A pre-migration behavior > preserves hard_constraints 1`] = `
+{
+  "digest": "2c7e595f988974d7e4bd1fc89a19b247d06999031251159b504ae583e60759ff",
+  "hardProblems": [
+    "유지할 장소 누락: 없는 필수 장소",
+    "제외 요청한 장소 포함",
+    "확인된 비용이 예산 초과",
+  ],
+  "problems": [
+    "유지할 장소 누락: 없는 필수 장소",
+    "제외 요청한 장소 포함",
+    "확인된 비용이 예산 초과",
+  ],
+  "rewrittenIds": [
+    "kakao:policy-1",
+    "kakao:policy-5",
+    "kakao:policy-3",
+  ],
+  "score": -243.76608835927703,
+  "seedCount": 0,
+}
+`;
+
+exports[`P1-A pre-migration behavior > preserves late_arrival 1`] = `
+{
+  "digest": "8418249bde97107f84bdc670dd08a6d0d58951d8094dc4d54ee3d9b1bb71ae6f",
+  "hardProblems": [
+    "요청에 맞지 않는 장소 수",
+    "3일차 여행일 식사 누락",
+  ],
+  "problems": [
+    "요청에 맞지 않는 장소 수",
+    "3일차 여행일 식사 누락",
+  ],
+  "rewrittenIds": [
+    "kakao:policy-0",
+    "kakao:policy-1",
+    "kakao:policy-8",
+    "kakao:policy-3",
+    "kakao:policy-4",
+    "kakao:policy-2",
+    "kakao:policy-6",
+    "kakao:policy-7",
+  ],
+  "score": -158.0384412377841,
+  "seedCount": 1,
+}
+`;
+
+exports[`P1-A pre-migration behavior > preserves rest_trip 1`] = `
+{
+  "digest": "b4857e3db8b25d8587b252633aff4ae7a961520f442f5a5bdc5b6ef2a6b42a40",
+  "hardProblems": [
+    "요청에 맞지 않는 장소 수",
+    "1일차 일정 부족",
+    "1일차 여행일 식사 누락",
+    "2일차 일정 부족",
+    "3일차 일정 부족",
+    "3일차 여행일 식사 누락",
+  ],
+  "problems": [
+    "요청에 맞지 않는 장소 수",
+    "1일차 일정 부족",
+    "1일차 여행일 식사 누락",
+    "2일차 일정 부족",
+    "3일차 일정 부족",
+    "3일차 여행일 식사 누락",
+  ],
+  "rewrittenIds": [
+    "kakao:policy-0",
+    "kakao:policy-1",
+    "kakao:policy-3",
+    "kakao:policy-4",
+    "kakao:policy-2",
+    "kakao:policy-8",
+    "kakao:policy-6",
+    "kakao:policy-7",
+  ],
+  "score": -543.6666666666666,
+  "seedCount": 1,
+}
+`;
+
+exports[`P1-A pre-migration behavior > preserves short_evening 1`] = `
+{
+  "digest": "fec94774aad99b9f3251baf1fcf8099110b56ac866b0fa6177911680a245eccf",
+  "hardProblems": [],
+  "problems": [],
+  "rewrittenIds": [
+    "kakao:policy-0",
+    "kakao:policy-4",
+  ],
+  "score": 52.94151665140568,
+  "seedCount": 1,
+}
+`;

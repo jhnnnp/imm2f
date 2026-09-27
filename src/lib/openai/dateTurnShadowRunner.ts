@@ -6,6 +6,7 @@ import {
   type DateTurnPayload, type UnderstandingComparison,
 } from "@/features/ai/dateTurnShadow";
 import { interpretDateTurnWithOpenAi, type DateTurnInterpreterInput } from "./dateTurnInterpreter";
+import { resolveRequiredActivities } from "@/features/ai/planningRequirementProvenance";
 
 export type DateTurnInterpreterMode = "off" | "shadow" | "assist";
 
@@ -54,7 +55,8 @@ export async function runDateTurnShadow(input: DateTurnInterpreterInput & {
         areas: input.state.areas, date: input.state.dateLabel, startTime: input.state.startTime,
         endTime: input.state.endTime, budgetWon: input.state.budgetWon ?? null,
         requiredPlaces: input.state.requiredPlaces, excludedPlaces: input.state.excludedPlaces,
-        excludedFoods: input.state.excludedFoods ?? [], requiredActivities: input.state.activities,
+        excludedFoods: input.state.excludedFoods ?? [],
+        requiredActivities: resolveRequiredActivities(input.state).filter(item => item.explicit).map(item => item.activity),
       },
       currentPlan: input.currentPlan, visiblePlaces: input.visiblePlaces,
     }) : null;

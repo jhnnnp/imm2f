@@ -27220,3 +27220,107 @@ html.is-toss-blur .toss-veil {
   overflow-wrap: anywhere;
   text-underline-offset: 3px;
 }
+
+/* Candidate exploration keeps eight cards readable in the AI workspace. */
+@media (min-width: 901px) {
+  .app-shell:has(.candidate-exploration) {
+    --shell-cols: minmax(78px, 1fr) minmax(0, 4fr) minmax(43rem, 10fr);
+  }
+}
+.candidate-exploration {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(69dvh, 850px);
+  overflow-y: auto;
+  padding: 20px;
+  margin: 4px 0 14px;
+  border: 1px solid #dfe6dd;
+  border-radius: 24px;
+  background: #fafbf8;
+  box-shadow: 0 16px 42px rgba(35, 59, 44, .08);
+  scrollbar-width: thin;
+}
+.candidate-intake-heading h3,
+.candidate-results-head h3 { margin: 4px 0 6px; font-size: clamp(1.3rem, 2vw, 1.8rem); line-height: 1.25; color: #243a2f; }
+.candidate-intake-heading p,
+.candidate-results-head p,
+.candidate-group-head p { margin: 0; color: #66756c; font-size: 13px; line-height: 1.5; }
+.candidate-pref-summary { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin: 20px 0 8px; }
+.candidate-pref-summary b { margin-right: 8px; color: #243a2f; font-size: 14px; }
+.candidate-pref-summary span { padding: 5px 9px; border-radius: 999px; background: #e7eee8; color: #466353; font-size: 12px; }
+.candidate-pref-field { border: 0; margin: 20px 0 0; padding: 0; }
+.candidate-pref-field legend { margin-bottom: 10px; font-size: 14px; font-weight: 750; color: #253e31; }
+.candidate-pref-field legend small { font-size: 11px; font-weight: 400; color: #819088; }
+.candidate-choice-grid { display: flex; gap: 8px; flex-wrap: wrap; }
+.candidate-choice-grid button,
+.candidate-results-head > button,
+.candidate-group-head > button,
+.candidate-refine button { padding: 9px 12px; border: 1px solid #d7e0d9; border-radius: 11px; background: #fff; color: #405a4a; font-size: 12px; font-weight: 650; cursor: pointer; }
+.candidate-choice-grid button.is-selected { border-color: #4e7860; background: #e6f0e9; color: #255438; box-shadow: inset 0 0 0 1px #4e7860; }
+.candidate-choice-grid button:hover,
+.candidate-results-head > button:hover,
+.candidate-group-head > button:hover { border-color: #72917a; }
+.candidate-primary { padding: 12px 18px; border: 0; border-radius: 12px; background: #315a42; color: white; font-weight: 750; font-size: 13px; cursor: pointer; }
+.candidate-primary:hover { background: #244b36; }
+.candidate-primary:disabled { opacity: .5; cursor: not-allowed; }
+.candidate-intake > .candidate-primary { width: 100%; margin-top: 22px; }
+.candidate-results-head,
+.candidate-group-head { display: flex; justify-content: space-between; align-items: start; gap: 14px; }
+.candidate-group { margin-top: 27px; }
+.candidate-group-head { margin-bottom: 13px; }
+.candidate-group-head h4 { margin: 3px 0 4px; font-size: 18px; color: #263d30; }
+.candidate-group-head h4 small { margin-left: 5px; color: #78897c; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.candidate-group-head > button { flex: none; }
+.candidate-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.candidate-card { min-width: 0; min-height: 226px; display: flex; flex-direction: column; padding: 17px 18px 15px; border: 1px solid #dce5dd; border-radius: 17px; background: #fff; box-shadow: 0 7px 22px rgba(28, 54, 36, .045); transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+.candidate-card:hover { border-color: #b8cbbd; box-shadow: 0 12px 26px rgba(28, 54, 36, .09); transform: translateY(-2px); }
+.candidate-card.is-selected { border-color: #39754c; background: linear-gradient(180deg, #f7fbf7 0%, #fff 42%); box-shadow: 0 0 0 2px rgba(57, 117, 76, .13), 0 9px 24px rgba(28, 54, 36, .08); }
+.candidate-card-topline { display: flex; align-items: center; gap: 9px; min-height: 26px; }
+.candidate-card-index { color: #72917c; font-size: 12px; font-weight: 800; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+.candidate-card-category { padding: 4px 8px; border-radius: 6px; background: #edf3ee; color: #456952; font-size: 11px; font-weight: 700; line-height: 1.2; }
+.candidate-selected-mark { margin-left: auto; color: #2b6940; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.candidate-card-main { min-width: 0; margin: 12px 0 14px; }
+.candidate-card-main h5 { margin: 0; color: #20382a; font-size: 20px; font-weight: 750; line-height: 1.3; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.candidate-card-location { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; margin: 5px 0 0; color: #78877c; font-size: 12px; line-height: 1.5; }
+.candidate-card-evidence { display: flex; align-items: center; gap: 10px; min-height: 39px; margin-top: auto; padding: 9px 11px; border: 1px solid #e8eee9; border-radius: 9px; background: #f8faf8; }
+.candidate-card-evidence-label { flex: none; color: #708177; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.candidate-card-badges { display: flex; gap: 5px; flex-wrap: wrap; min-width: 0; }
+.candidate-card-badges span { padding: 3px 7px; border-radius: 5px; background: #e7f0e8; color: #315e40; font-size: 10px; font-weight: 650; }
+.candidate-card-unknown { color: #87958a; font-size: 11px; }
+.candidate-card-actions { display: flex; align-items: center; gap: 7px; margin-top: 14px; }
+.candidate-card-actions button { border: 0; background: none; padding: 8px 7px; color: #52705b; font-size: 11px; font-weight: 650; white-space: nowrap; cursor: pointer; }
+.candidate-card-actions button:hover { color: #204d31; }
+.candidate-card-actions .candidate-select { min-width: 88px; border-radius: 8px; padding: 9px 13px; background: #315a42; color: #fff; font-weight: 750; }
+.candidate-card-actions .candidate-select:hover { background: #244b36; color: #fff; }
+.candidate-card.is-selected .candidate-select { background: #e6f0e8; color: #2b6741; }
+.candidate-card-actions .candidate-detail { margin-left: 2px; }
+.candidate-card-actions .candidate-reject { margin-left: auto; color: #89948b; }
+.candidate-card-actions .candidate-reject:hover { color: #6f514f; }
+.candidate-card-actions button:focus-visible { outline: 2px solid #39754c; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .candidate-card { transition: none; }
+  .candidate-card:hover { transform: none; }
+}
+.candidate-refine { display: flex; gap: 7px; margin-top: 12px; }
+.candidate-refine input { min-width: 0; flex: 1; padding: 10px 12px; border: 1px solid #dce4dc; border-radius: 10px; background: #fff; font-size: 12px; }
+.candidate-empty { padding: 20px; border: 1px dashed #cad7cd; border-radius: 12px; color: #637469; font-size: 12px; }
+.candidate-selection-summary { position: sticky; bottom: -20px; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 26px -20px -20px; padding: 13px 20px; border-top: 1px solid #dce5dd; background: rgba(250, 251, 248, .97); backdrop-filter: blur(10px); }
+.candidate-selection-summary b { display: block; margin-bottom: 6px; font-size: 13px; color: #2d4735; }
+.candidate-selection-summary div div { display: flex; flex-wrap: wrap; gap: 5px; }
+.candidate-selection-summary div div button { padding: 4px 8px; border: 0; border-radius: 8px; background: #e8f0e9; color: #41664d; font-size: 11px; cursor: pointer; }
+.candidate-selection-summary > .candidate-primary { flex: none; }
+.plan-map-days { position: absolute; z-index: 5; top: 12px; left: 12px; display: flex; gap: 5px; padding: 5px; border: 1px solid #dce4dc; border-radius: 12px; background: rgba(255, 255, 255, .94); box-shadow: 0 4px 14px #172a1d22; }
+.plan-map-days button { border: 0; border-radius: 8px; padding: 7px 11px; background: transparent; color: #496452; font-size: 12px; font-weight: 700; cursor: pointer; }
+.plan-map-days button.is-active { background: #315a42; color: #fff; }
+@media (max-width: 900px) {
+  .candidate-exploration { max-height: 62dvh; padding: 15px; }
+  .candidate-card-grid { grid-template-columns: minmax(0, 1fr); }
+  .candidate-selection-summary { margin: 22px -15px -15px; padding: 12px 15px; }
+}
+@media (max-width: 480px) {
+  .candidate-card { min-height: 207px; padding: 15px; }
+  .candidate-card-main h5 { font-size: 18px; }
+  .candidate-selection-summary { align-items: stretch; flex-direction: column; }
+  .candidate-selection-summary > .candidate-primary { width: 100%; }
+  .plan-map-days { max-width: calc(100% - 24px); overflow-x: auto; }
+}

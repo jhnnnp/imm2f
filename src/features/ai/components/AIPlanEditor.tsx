@@ -34,6 +34,15 @@ import type { TasteDateSeed } from "@/features/taste/types";
 import { CalendarMonth } from "@/components/shared/CalendarMonth";
 import { PlaceLocationMap } from "@/features/places/components/PlaceLocationMap";
 import { PlanMap } from "@/features/trip/components/PlanMap";
+import { CandidateExplorationPanel } from "./CandidateExplorationPanel";
+import { exploreCandidateGroups, prepareCandidateExploration,
+  updateCandidateExplorationChoices } from "../candidateExplorationActions";
+import type { CandidateExplorationPreferences, CandidateGroup, ExplorationActivity,
+  ExplorationCard, ItineraryPlanningInput } from "../candidateExploration";
+import { refinementGroupForMessage } from "../candidateExploration";
+import type { ExperiencePlan } from "../experiencePlan";
+import type { ResearchPlan } from "../researchPlan";
+import { selectedAreas } from "../dateBrief";
 import { kakaoPlaceUrl, naverPlaceSearchUrl } from "@/features/places/format";
 import { openPlaceMiniWindow } from "@/features/places/openPlaceMini";
 import { formatKoPicker, toIsoDate } from "@/lib/dates";
@@ -213,11 +222,13 @@ function AssistantCard({
             const open = openStopKey === key;
             const multiDay = card.stops?.some(item => (item.dayIndex ?? 0) > 0) ?? false;
             const showDay = multiDay && (index === 0 || (card.stops?.[index - 1]?.dayIndex ?? 0) !== (stop.dayIndex ?? 0));
+            const dayOrder = card.stops!.slice(0, index + 1)
+              .filter(item => (item.dayIndex ?? 0) === (stop.dayIndex ?? 0)).length;
             const kakaoUrl = stopKakaoUrl(stop);
             return (
               <li key={key}>
                 {showDay ? <p className="ai-stop-day">{(stop.dayIndex ?? 0) + 1}일차</p> : null}
-                {index > 0 && stop.distanceFromPreviousMeters != null ? (
+                {!showDay && index > 0 && stop.distanceFromPreviousMeters != null ? (
                   <p className="ai-route-distance"><span>↓</span>{formatHop(stop.distanceFromPreviousMeters, card.routeBasis)}</p>
                 ) : null}
                 <div className={`ai-stop-card${stop.image ? " has-photo" : ""}${open ? " is-open" : ""}`}>
@@ -229,7 +240,7 @@ function AssistantCard({
                     disabled={disabled}
                     onClick={() => onOpenStop?.(key, stop)}
                   >
-                    <em>{String(index + 1).padStart(2, "0")}</em>
+                    <em>{String(dayOrder).padStart(2, "0")}</em>
                     {stop.image ? <img className="ai-stop-thumb" src={stop.image} alt="" /> : null}
                     <span>
                       <strong>
@@ -294,6 +305,7 @@ export function AIPlanEditor({
   onKeep,
   startDate,
   tasteSeed = null,
+  candidateExplorationActive = false,
 }: {
   kind: PlanKind;
   items: PlanItem[];
@@ -303,6 +315,7 @@ export function AIPlanEditor({
   places?: Place[];
   startDate?: string;
   tasteSeed?: TasteDateSeed | null;
+  candidateExplorationActive?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>(kind === "date" ? "generate" : items.length ? "edit" : "generate");
   const [editPrompt, setEditPrompt] = useState(() => items.length <= 1 ? "이 장소에서 여유롭게 머물 수 있도록 체류 시간을 조정해줘." : EDIT_PROMPT);
@@ -328,6 +341,15 @@ export function AIPlanEditor({
   const [selectedChoices, setSelectedChoices] = useState<string[]>([]);
   const [peek, setPeek] = useState<{ key: string; stop: AIChatStop } | null>(null);
   const [shownStops, setShownStops] = useState<AIChatStop[]>([]);
+  const [exploration, setExploration] = useState<{ request: string;
+    preferences: CandidateExplorationPreferences; groups: CandidateGroup[] | null;
+    experiencePlan: ExperiencePlan | null; researchPlan: ResearchPlan | null } | null>(null);
+  const [explorationSelectedIds, setExplorationSelectedIds] = useState<string[]>([]);
+  const [explorationSelectedCards, setExplorationSelectedCards] = useState<ExplorationCard[]>([]);
+  const [explorationRejectedIds, setExplorationRejectedIds] = useState<string[]>([]);
+  const [activeExplorationGroup, setActiveExplorationGroup] = useState<ExplorationActivity | null>(null);
+  const [explorationBusy, setExplorationBusy] = useState(false);
+  const [pendingExplorationArea, setPendingExplorationArea] = useState("");
   const [pendingLabel, setPendingLabel] = useState("");
   const [error, setError] = useState("");
   const [keepStep, setKeepStep] = useState<KeepStep>("idle");
@@ -502,6 +524,12 @@ export function AIPlanEditor({
     setSelectedChoices([]);
     setPeek(null);
     setShownStops([]);
+    setExploration(null);
+    setExplorationSelectedIds([]);
+    setExplorationSelectedCards([]);
+    setExplorationRejectedIds([]);
+    setActiveExplorationGroup(null);
+    setPendingExplorationArea("");
     resetKeep();
     requestIdRef.current += 1;
   }
@@ -530,8 +558,93 @@ export function AIPlanEditor({
     setPhase("preview");
   }
 
-  async function runGenerate(nextState: AIPlannerState, message: string, displayText?: string) {
+  async function searchExploration(groupId?: ExplorationActivity, refinement?: string) {
+    if (!exploration || explorationBusy) return;
+    setExplorationBusy(true);
+    try {
+      const response = await exploreCandidateGroups({ message: exploration.request, state: plannerState,
+        preferences: exploration.preferences, planningSessionId, sessionCandidates: sessionCandidatesRef.current,
+        experiencePlan: exploration.experiencePlan, researchPlan: exploration.researchPlan,
+        groupId, refinement, selectedIds: explorationSelectedIds, rejectedIds: explorationRejectedIds });
+      if ("error" in response) throw new Error(response.error);
+      sessionCandidatesRef.current = response.sessionCandidates;
+      setExploration(current => current ? { ...current, experiencePlan: response.experiencePlan,
+        researchPlan: response.researchPlan,
+        groups: groupId && current.groups ? current.groups.map(group =>
+          group.id === groupId ? response.groups[0] ?? group : group) : response.groups } : current);
+    } catch {
+      setConversation(current => [...current, { role: "assistant", text: "후보를 불러오지 못했어요. 다시 시도해 주세요." }]);
+    } finally { setExplorationBusy(false); }
+  }
+
+  async function beginExploration(message: string, nextState: AIPlannerState) {
+    if (explorationBusy) return;
+    setExplorationBusy(true);
+    setConversation(current => [...current, { role: "user", text: message }]);
+    try {
+      const combined = pendingExplorationArea ? `${pendingExplorationArea} ${message}` : message;
+      const prepared = await prepareCandidateExploration({ message: combined, previousState: nextState });
+      if ("error" in prepared) throw new Error(prepared.error);
+      setPlannerState(prepared.state);
+      if (prepared.needsArea) {
+        setPendingExplorationArea(combined);
+        setConversation(current => [...current, { role: "assistant", text: "어느 지역에서 계획할까요? 지역만 알려 주세요." }]);
+        return;
+      }
+      setPendingExplorationArea("");
+      setExploration({ request: combined, preferences: prepared.preferences, groups: null,
+        experiencePlan: null, researchPlan: null });
+      setActiveExplorationGroup(null);
+      setConversation(current => [...current, { role: "assistant", text: "알려주신 조건은 반영했어요. 하고 싶은 것만 가볍게 확인해 주세요." }]);
+    } catch {
+      setConversation(current => [...current, { role: "assistant", text: "요청을 이해하지 못했어요. 지역과 기간을 다시 알려 주세요." }]);
+    } finally { setExplorationBusy(false); setGeneratePrompt(""); }
+  }
+
+  async function planSelectedCandidates() {
+    if (!exploration?.groups || !explorationSelectedIds.length || explorationBusy) return;
+    setExplorationBusy(true);
+    try {
+      const verified = await updateCandidateExplorationChoices({ planningSessionId,
+        sessionCandidates: sessionCandidatesRef.current,
+        selectedIds: explorationSelectedIds, rejectedIds: explorationRejectedIds });
+      if (!verified) throw new Error("unverified_session");
+      sessionCandidatesRef.current = verified;
+      const planningInput: ItineraryPlanningInput = { experiencePlan: exploration.experiencePlan,
+        researchPlan: exploration.researchPlan!, selectedCandidateIds: [...explorationSelectedIds],
+        rejectedCandidateIds: [...explorationRejectedIds], candidatePool: verified };
+      // Until P4, the existing itinerary path resolves these verified selections
+      // as required anchors; the contract above remains available to P4.
+      const state = { ...plannerState, requiredPlaces: verified.records
+        .filter(row => planningInput.selectedCandidateIds.includes(row.candidateId)).map(row => row.name) };
+      setExploration(null);
+      await runGenerate(state, `${exploration.request}\n선택한 장소를 포함해서 일정 짜줘`, undefined,
+        planningInput.selectedCandidateIds);
+    } catch {
+      setConversation(current => [...current, { role: "assistant",
+        text: "선택한 장소를 확인하지 못했어요. 다시 선택하거나 잠시 후 시도해 주세요." }]);
+    } finally { setExplorationBusy(false); }
+  }
+
+  async function runGenerate(nextState: AIPlannerState, message: string, displayText?: string,
+    selectedCandidateIds?: string[]) {
     const request = message.trim();
+    if (candidateExplorationActive && !selectedCandidateIds && !recommendation) {
+      if (exploration?.groups && request) {
+        const groupId = refinementGroupForMessage(exploration.groups, request, activeExplorationGroup);
+        if (groupId) {
+          setConversation(current => [...current, { role: "user", text: request }]);
+          await searchExploration(groupId, request);
+          setGeneratePrompt("");
+          return;
+        }
+        setConversation(current => [...current, { role: "user", text: request },
+          { role: "assistant", text: "어느 종류의 장소를 더 찾아볼까요? 카페나 맛집처럼 알려 주세요." }]);
+        setGeneratePrompt("");
+        return;
+      }
+      if (!exploration && request) { await beginExploration(request, nextState); return; }
+    }
     const intent = recommendation ? keepIntent(request) : null;
     if (intent) {
       handleKeepIntent(intent, displayText || request);
@@ -579,6 +692,7 @@ export function AIPlanEditor({
         dateLabel: startDate || undefined,
         conversation: nextTurns.map(turn => ({ role: turn.role, text: turn.text })),
         planningSessionId, sessionCandidates: sessionCandidatesRef.current,
+        selectedCandidateIds,
       });
       if (ticket !== requestIdRef.current) return;
       const result = response.result;
@@ -606,6 +720,7 @@ export function AIPlanEditor({
         return;
       }
       setRecommendation(result);
+      setExploration(null);
       setShownStops([]);
       resetKeep();
       setConversation(current => [
@@ -742,6 +857,37 @@ export function AIPlanEditor({
               </article>
             )}
           </div>
+          {exploration && <CandidateExplorationPanel area={selectedAreas(plannerState)[0] ?? "지역 미정"}
+            nights={plannerState.nights} preferences={exploration.preferences}
+            onPreferencesChange={preferences => setExploration(current => current
+              ? { ...current, preferences, experiencePlan: null, researchPlan: null } : current)}
+            groups={exploration.groups} selectedIds={explorationSelectedIds}
+            selectedCards={explorationSelectedCards}
+            rejectedIds={explorationRejectedIds} busy={explorationBusy}
+            onSearch={() => void searchExploration()}
+            onSelect={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
+              group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
+              setExplorationSelectedIds(current => current.includes(card.candidateId)
+              ? current.filter(id => id !== card.candidateId) : [...current, card.candidateId]);
+              setExplorationSelectedCards(current => current.some(item => item.candidateId === card.candidateId)
+                ? current.filter(item => item.candidateId !== card.candidateId) : [...current, card]); }}
+            onReject={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
+              group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
+              setExplorationRejectedIds(current => [...new Set([...current, card.candidateId])]);
+              setExplorationSelectedIds(current => current.filter(id => id !== card.candidateId));
+              setExplorationSelectedCards(current => current.filter(item => item.candidateId !== card.candidateId)); }}
+            onMore={id => { setActiveExplorationGroup(id); void searchExploration(id); }}
+            onRefine={(id, text) => { setActiveExplorationGroup(id); void searchExploration(id, text); }}
+            onDetail={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
+              group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
+              setPeek({ key: card.candidateId, stop: {
+              name: card.name, meta: `${card.area} · ${card.category}`, reason: card.reason,
+              image: card.image, mapUrl: card.mapUrl, address: card.address,
+              factSourceUrl: card.evidenceUrls[0],
+            } }); }}
+            onPlan={() => void planSelectedCandidates()}
+            onEdit={() => setExploration(current => current ? { ...current, groups: null,
+              experiencePlan: null, researchPlan: null } : current)} />}
           {peek ? <CoursePlacePeek key={peek.key} stop={peek.stop} onClose={() => setPeek(null)} /> : null}
           {recommendation ? (
             <div className="ai-course-preview">

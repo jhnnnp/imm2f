@@ -17,7 +17,7 @@ export type DateEvidenceFact = {
 export function candidateEvidenceFacts(candidate: DiscoverCandidate, now = Date.now()): DateEvidenceFact[] {
   const facts: DateEvidenceFact[] = (candidate.evidence ?? []).filter(observation =>
     (!observation.venueId || observation.venueId === dateCandidateKey(candidate))
-    && ["space", "menu", "experience"].includes(observation.attribute ?? ""))
+    && ["space", "menu", "experience", "hours"].includes(observation.attribute ?? ""))
     .map(observation => {
       const checked = Date.parse(observation.checkedAt);
       const ageDays = Number.isFinite(checked) ? Math.max(0, (now - checked) / 86_400_000) : 365;

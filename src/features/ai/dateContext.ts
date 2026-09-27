@@ -14,6 +14,8 @@ import type { SemanticSignalDecision } from "./dateTurnAssist";
 import type { DateExecutionPlan, ExecutionPlanComparison } from "./dateExecutionPlan";
 import type { SessionCandidateContext } from "./sessionCandidates";
 import type { SessionFeedbackContext } from "./sessionFeedback";
+import type { ExperiencePlan, ExperiencePlanComparison } from "./experiencePlan";
+import type { ResearchCoverage, ResearchPlan, ResearchPlanMode } from "./researchPlan";
 
 export type DateContext = {
   conversation: DateChatTurn[];
@@ -25,6 +27,13 @@ export type DateContext = {
   understandingComparison: UnderstandingComparison | null;
   executionPlan: DateExecutionPlan | null;
   executionPlanComparison: ExecutionPlanComparison | null;
+  /** Observational P2 plan; existing ChatRoute/dateSpine remain execution authority. */
+  experiencePlan: ExperiencePlan | null;
+  experiencePlanComparison: ExperiencePlanComparison | null;
+  researchPlan: ResearchPlan | null;
+  researchPlanMode: ResearchPlanMode;
+  researchCoverage: ResearchCoverage[];
+  researchFallbackReason: string | null;
   objective: DateIntent["objective"];
   hardConstraints: DateIntent["hardConstraints"];
   softPreferences: DateIntent["preferences"];
@@ -63,6 +72,12 @@ export function buildDateContext(input: {
   understandingComparison?: UnderstandingComparison | null;
   executionPlan?: DateExecutionPlan | null;
   executionPlanComparison?: ExecutionPlanComparison | null;
+  experiencePlan?: ExperiencePlan | null;
+  experiencePlanComparison?: ExperiencePlanComparison | null;
+  researchPlan?: ResearchPlan | null;
+  researchPlanMode?: ResearchPlanMode;
+  researchCoverage?: ResearchCoverage[];
+  researchFallbackReason?: string | null;
   tasteBoard?: TasteBoard | null;
   archives?: ArchivedDatePlan[];
   memory?: DateMemoryContext | null;
@@ -88,6 +103,12 @@ export function buildDateContext(input: {
     understandingComparison: input.understandingComparison ?? null,
     executionPlan: input.executionPlan ?? null,
     executionPlanComparison: input.executionPlanComparison ?? null,
+    experiencePlan: input.experiencePlan ?? null,
+    experiencePlanComparison: input.experiencePlanComparison ?? null,
+    researchPlan: input.researchPlan ?? null,
+    researchPlanMode: input.researchPlanMode ?? "off",
+    researchCoverage: [...(input.researchCoverage ?? [])],
+    researchFallbackReason: input.researchFallbackReason ?? null,
     objective: intent.objective,
     hardConstraints: intent.hardConstraints,
     softPreferences: { ...intent.preferences, vibe: [...intent.preferences.vibe] },

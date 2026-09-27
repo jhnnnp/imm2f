@@ -1,4 +1,6 @@
 import type { AIPlannerState } from "@/features/planning/types/plan";
+import { resolveRequiredActivities } from "./planningRequirementProvenance";
+export { explicitlyDislikedActivities } from "./dateActivityExclusions";
 
 export type DatePreferences = NonNullable<AIPlannerState["preferences"]>;
 export type InferredPreference = NonNullable<AIPlannerState["inferredPreferences"]>[number];
@@ -29,7 +31,8 @@ export function toDateIntent(state: AIPlannerState): DateIntent {
       areas: [...state.areas], date: state.dateLabel, startTime: state.startTime,
       endTime: state.endTime, budgetWon: state.budgetWon ?? null,
       requiredPlaces: [...state.requiredPlaces], excludedPlaces: [...state.excludedPlaces],
-      excludedFoods: [...(state.excludedFoods ?? [])], requiredActivities: [...state.activities],
+      excludedFoods: [...(state.excludedFoods ?? [])],
+      requiredActivities: resolveRequiredActivities(state).filter(item => item.explicit).map(item => item.activity),
     },
     preferences: state.preferences ?? { vibe: [] },
     inferredPreferences: state.inferredPreferences ?? [],
@@ -60,15 +63,6 @@ export function candidateFoodConflict(text: string, exclusions: string[]) {
     if (food === "견과류") return /땅콩|아몬드|호두|캐슈/.test(normalized);
     return false;
   });
-}
-
-export function explicitlyDislikedActivities(message: string): AIPlannerState["activities"] {
-  const patterns: Array<[AIPlannerState["activities"][number], RegExp]> = [
-    ["cafe", /(?:카페|커피|디저트)(?:는|가|를|도|만)?\s*.{0,8}(?:싫|별로|안\s*좋아|빼|제외)/],
-    ["meal", /(?:식사|식당|밥)(?:는|가|를|도|만)?\s*.{0,8}(?:싫|별로|안\s*좋아|빼|제외)/],
-    ["walk", /(?:산책|걷기)(?:는|가|를|도|만)?\s*.{0,8}(?:싫|별로|안\s*좋아|빼|제외)/],
-  ];
-  return patterns.filter(([, pattern]) => pattern.test(message)).map(([activity]) => activity);
 }
 
 /** A conservative local fallback when the model is unavailable. */

@@ -186,6 +186,8 @@ export type AIPlannerState = {
   /** Model hypotheses are never promoted to hard constraints. */
   inferredPreferences?: Array<{ value: string; confidence: number; evidence: string }>;
   memorySuggestions?: { activities: DateActivityId[]; cuisine: DateCuisineChoice | null };
+  /** Direct intake choices; inferred discovery values never receive this provenance. */
+  explicitPlanningSelections?: { activities?: DateActivityId[]; cuisine?: DateCuisineChoice };
   memorySignals?: Array<{ placeName: string; reaction: "crowded" | "liked" | "disliked"; confidence: number }>;
   excludedFoods?: string[];
   foodAllergy?: boolean;

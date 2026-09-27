@@ -31,10 +31,12 @@ export function TripPlanner({
   initialPlan,
   initialArchives,
   initialDay = 0,
+  candidateExplorationActive = false,
 }: {
   initialPlan: CouplePlan;
   initialArchives: ArchivedTripPlan[];
   initialDay?: number;
+  candidateExplorationActive?: boolean;
 }) {
   const router = useRouter();
   const plan = stripLegacyDemoPlan(initialPlan);
@@ -216,7 +218,8 @@ export function TripPlanner({
     <>
       {panel === "ai" && (
         <ContextPanel>
-          <AIPlanEditor kind="trip" items={dayItems.length ? dayItems : items} startDate={startDate} onApply={apply} onReplace={replace} onKeep={keepCourse} />
+          <AIPlanEditor kind="trip" items={dayItems.length ? dayItems : items} startDate={startDate} onApply={apply}
+            onReplace={replace} onKeep={keepCourse} candidateExplorationActive={candidateExplorationActive} />
         </ContextPanel>
       )}
       <div className="trip-header">
