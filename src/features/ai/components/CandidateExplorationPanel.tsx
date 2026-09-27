@@ -4,10 +4,23 @@ import { useState } from "react";
 import { CAFE_CHOICES, CULTURE_CHOICES, CUISINE_CHOICES, EXPLORATION_ACTIVITIES,
   SHOPPING_CHOICES, type CandidateExplorationPreferences, type CandidateGroup,
   type ExplorationActivity, type ExplorationCard } from "../candidateExploration";
+import { kakaoPlaceUrl } from "@/features/places/format";
+import { openPlaceMiniWindow } from "@/features/places/openPlaceMini";
+
+function candidateKakaoUrl(card: ExplorationCard) {
+  try {
+    const url = new URL(card.mapUrl);
+    if (["map.kakao.com", "place.map.kakao.com"].includes(url.hostname)
+      && ["http:", "https:"].includes(url.protocol)) return `https://${url.host}${url.pathname}${url.search}`;
+  } catch {
+    // Search by the verified candidate name when the provider URL is unavailable.
+  }
+  return kakaoPlaceUrl(card.name);
+}
 
 export function CandidateExplorationPanel({ area, nights, preferences, onPreferencesChange,
   groups, selectedIds, selectedCards, rejectedIds, busy, onSearch, onSelect, onReject, onMore,
-  onRefine, onDetail, onPlan, onEdit }: {
+  onRefine, onDetail, onPlan, onEdit, planned = false }: {
   area: string; nights: number; preferences: CandidateExplorationPreferences;
   onPreferencesChange: (next: CandidateExplorationPreferences) => void;
   groups: CandidateGroup[] | null; selectedIds: string[]; selectedCards: ExplorationCard[]; rejectedIds: string[];
@@ -15,6 +28,7 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
   onReject: (card: ExplorationCard) => void; onMore: (id: ExplorationActivity) => void;
   onRefine: (id: ExplorationActivity, text: string) => void;
   onDetail: (card: ExplorationCard) => void; onPlan: () => void; onEdit: () => void;
+  planned?: boolean;
 }) {
   const [refinements, setRefinements] = useState<Partial<Record<ExplorationActivity, string>>>({});
   const chosen = selectedCards.filter(card => selectedIds.includes(card.candidateId));
@@ -104,7 +118,8 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
     </div> : <div className="candidate-results">
       <header className="candidate-results-head"><div><span className="eyebrow">YOUR PLACE SHORTLIST</span>
         <h3>{area} · {nights > 0 ? `${nights}박${nights + 1}일` : "하루"}</h3>
-        <p>마음에 드는 곳만 골라 주세요. 모든 종류에서 고르지 않아도 됩니다.</p></div>
+        <p>{planned ? "선택한 장소를 반영한 일정을 아래에서 확인하세요. 후보는 여기서 다시 살펴볼 수 있어요."
+          : "마음에 드는 곳만 골라 주세요. 모든 종류에서 고르지 않아도 됩니다."}</p></div>
         <button type="button" onClick={onEdit}>조건 수정</button></header>
       {groups.map(group => <section className="candidate-group" key={group.id} aria-label={group.title}>
         <header className="candidate-group-head"><div><span className="eyebrow">CURATED PLACES</span>
@@ -119,7 +134,10 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
               <div className="candidate-card-topline">
                 <span className="candidate-card-index">{String(index + 1).padStart(2, "0")}</span>
                 <span className="candidate-card-category">{card.category}</span>
-                {selected && <span className="candidate-selected-mark">✓ 선택됨</span>}
+                <div className="candidate-card-status">
+                  {selected && <span className="candidate-selected-mark">✓ 선택됨</span>}
+                  <button type="button" className="candidate-reject" onClick={() => onReject(card)}>별로예요</button>
+                </div>
               </div>
               <div className="candidate-card-main">
                 <h5>{card.name}</h5>
@@ -135,8 +153,10 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
               </div>
               <div className="candidate-card-actions"><button type="button" className="candidate-select"
                 aria-pressed={selected} onClick={() => onSelect(card)}>{selected ? "선택 취소" : "장소 선택"}</button>
-                <button type="button" className="candidate-detail" onClick={() => onDetail(card)}>상세보기 <span aria-hidden="true">↗</span></button>
-                <button type="button" className="candidate-reject" onClick={() => onReject(card)}>별로예요</button></div>
+                <button type="button" className="candidate-detail" onClick={() => onDetail(card)}>상세보기</button>
+                <button type="button" className="candidate-map"
+                  onClick={() => openPlaceMiniWindow(candidateKakaoUrl(card), "kakao")}
+                  aria-label={`${card.name} 카카오맵에서 보기`}>카카오맵 <span aria-hidden="true">↗</span></button></div>
             </article>;
           })}
         </div>
@@ -152,7 +172,7 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
         <div>{chosen.map(card => <button type="button" key={card.candidateId} onClick={() => onSelect(card)}
           aria-label={`${card.name} 선택 취소`}>{card.name} ×</button>)}</div></div>
         <button type="button" className="candidate-primary" onClick={onPlan} disabled={busy || !selectedIds.length}>
-          선택한 장소로 일정 짜기</button></footer>
+          {busy ? "일정을 만들고 있어요…" : planned ? "선택한 장소로 다시 짜기" : "선택한 장소로 일정 짜기"}</button></footer>
     </div>}
   </section>;
 }

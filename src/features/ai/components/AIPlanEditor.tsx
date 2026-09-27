@@ -94,6 +94,7 @@ type ChatTurn = {
   text: string;
   card?: AIChatCard;
   explorationAnchorId?: string;
+  progressive?: boolean;
 };
 
 type Mode = "edit" | "generate";
@@ -192,6 +193,7 @@ function AssistantCard({
   onPick,
   onToggle,
   onSubmit,
+  progressive = false,
 }: {
   card?: AIChatCard;
   text: string;
@@ -203,16 +205,48 @@ function AssistantCard({
   onPick: (label: string) => void;
   onToggle?: (label: string) => void;
   onSubmit?: () => void;
+  progressive?: boolean;
 }) {
   const lines = (card?.lines?.length ? card.lines : text ? [text] : [])
     .flatMap(line => line.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean));
+  const totalCharacters = lines.reduce((sum, line) => sum + Array.from(line).length, 0);
+  const totalStops = card?.stops?.length ?? 0;
+  const [visibleCharacters, setVisibleCharacters] = useState(progressive ? 0 : Infinity);
+  const [visibleStops, setVisibleStops] = useState(progressive ? 0 : Infinity);
+  const newestStopRef = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (!progressive || (visibleCharacters >= totalCharacters && visibleStops >= totalStops)) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setVisibleCharacters(totalCharacters);
+      setVisibleStops(totalStops);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (visibleCharacters < totalCharacters) setVisibleCharacters(count => Math.min(totalCharacters, count + 9));
+      else setVisibleStops(count => Math.min(totalStops, count + 1));
+    }, visibleCharacters < totalCharacters ? 28 : 260);
+    return () => window.clearTimeout(timer);
+  }, [progressive, totalCharacters, totalStops, visibleCharacters, visibleStops]);
+  useEffect(() => {
+    if (!progressive || visibleStops === 0) return;
+    const frame = window.requestAnimationFrame(() => newestStopRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [progressive, visibleStops]);
+  let remainingCharacters = visibleCharacters;
+  const displayedLines = lines.map(line => {
+    const characters = Array.from(line);
+    const displayed = progressive ? characters.slice(0, Math.max(0, remainingCharacters)).join("") : line;
+    remainingCharacters -= characters.length;
+    return displayed;
+  }).filter(Boolean);
+  const writing = progressive && (visibleCharacters < totalCharacters || visibleStops < totalStops);
   const chips = options?.options?.length ? options.options : (card?.suggestions ?? []);
   const courseActions = chips.length > 0 && chips.every(chip => isCourseQuickAction(chip));
   return (
     <article className="ai-bubble is-assistant">
       {card?.headline ? <b>{card.headline}</b> : null}
-      {lines.map((line, index) => <p key={`${index}-${line}`} className="ai-bubble-paragraph">{line}</p>)}
-      {card?.sources?.length ? (
+      {displayedLines.map((line, index) => <p key={index} className="ai-bubble-paragraph">{line}</p>)}
+      {!writing && card?.sources?.length ? (
         <div className="ai-answer-sources" aria-label="답변 출처">
           {card.sources.map(source => (
             <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">
@@ -221,9 +255,9 @@ function AssistantCard({
           ))}
         </div>
       ) : null}
-      {card?.stops?.length ? (
+      {card?.stops?.length && visibleStops > 0 ? (
         <ol className="ai-bubble-stops">
-          {card.stops.map((stop, index) => {
+          {card.stops.slice(0, visibleStops).map((stop, index) => {
             const key = `${stop.name}-${index}`;
             const open = openStopKey === key;
             const multiDay = card.stops?.some(item => (item.dayIndex ?? 0) > 0) ?? false;
@@ -232,7 +266,7 @@ function AssistantCard({
               .filter(item => (item.dayIndex ?? 0) === (stop.dayIndex ?? 0)).length;
             const kakaoUrl = stopKakaoUrl(stop);
             return (
-              <li key={key}>
+              <li key={key} ref={index === Math.min(visibleStops, totalStops) - 1 ? newestStopRef : undefined}>
                 {showDay ? <p className="ai-stop-day">{(stop.dayIndex ?? 0) + 1}일차</p> : null}
                 {!showDay && index > 0 && stop.distanceFromPreviousMeters != null ? (
                   <p className="ai-route-distance"><span>↓</span>{formatHop(stop.distanceFromPreviousMeters, card.routeBasis)}</p>
@@ -278,7 +312,8 @@ function AssistantCard({
           })}
         </ol>
       ) : null}
-      {chips.length > 0 && (
+      {writing && <span className="ai-writing-indicator" role="status">답변을 작성하고 있어요<span aria-hidden="true">▍</span></span>}
+      {!writing && chips.length > 0 && (
         <div className={`ai-quick-replies${courseActions ? " is-course-actions" : ""}`} role="group" aria-label="바로 고르기">
           {chips.map(option => {
             const active = selectedChoices.includes(option);
@@ -357,6 +392,7 @@ export function AIPlanEditor({
   const [explorationBusy, setExplorationBusy] = useState(false);
   const [pendingExplorationRequest, setPendingExplorationRequest] = useState("");
   const [pendingLabel, setPendingLabel] = useState("");
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
   const [error, setError] = useState("");
   const [keepStep, setKeepStep] = useState<KeepStep>("idle");
   const [tripStartDate, setTripStartDate] = useState("");
@@ -367,6 +403,12 @@ export function AIPlanEditor({
   const requestIdRef = useRef(0);
 
   const keepDays = courseDayCount(recommendation?.items ?? [], plannerState.nights);
+
+  useEffect(() => {
+    if (phase !== "loading" && !explorationBusy) return;
+    const timer = window.setInterval(() => setLoadingSeconds(seconds => seconds + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [phase, explorationBusy]);
 
   useEffect(() => {
     const last = [...(chatLogRef.current?.children ?? [])]
@@ -576,6 +618,7 @@ export function AIPlanEditor({
   async function searchExploration(groupId?: ExplorationActivity, refinement?: string) {
     if (!exploration || explorationBusy) return;
     setExplorationBusy(true);
+    setLoadingSeconds(0);
     try {
       const response = await exploreCandidateGroups({ message: exploration.request, state: plannerState,
         preferences: exploration.preferences, planningSessionId, sessionCandidates: sessionCandidatesRef.current,
@@ -595,6 +638,7 @@ export function AIPlanEditor({
   async function beginExploration(message: string, nextState: AIPlannerState) {
     if (explorationBusy) return;
     setExplorationBusy(true);
+    setLoadingSeconds(0);
     setConversation(current => [...current, { role: "user", text: message }]);
     try {
       const combined = pendingExplorationRequest ? `${pendingExplorationRequest} ${message}` : message;
@@ -634,6 +678,7 @@ export function AIPlanEditor({
   async function planSelectedCandidates() {
     if (!exploration?.groups || !explorationSelectedIds.length || explorationBusy) return;
     setExplorationBusy(true);
+    setLoadingSeconds(0);
     try {
       const verified = await updateCandidateExplorationChoices({ planningSessionId,
         sessionCandidates: sessionCandidatesRef.current,
@@ -647,8 +692,7 @@ export function AIPlanEditor({
       // as required anchors; the contract above remains available to P4.
       const state = { ...plannerState, requiredPlaces: verified.records
         .filter(row => planningInput.selectedCandidateIds.includes(row.candidateId)).map(row => row.name) };
-      setExploration(null);
-      await runGenerate(state, `${exploration.request}\n선택한 장소를 포함해서 일정 짜줘`, undefined,
+      await runGenerate(state, `${exploration.request}\n선택한 장소를 포함해서 일정 짜줘`, "선택한 장소로 일정 짜기",
         planningInput.selectedCandidateIds);
     } catch {
       setConversation(current => [...current, { role: "assistant",
@@ -713,6 +757,7 @@ export function AIPlanEditor({
     const ticket = ++requestIdRef.current;
     setError("");
     setPhase("loading");
+    setLoadingSeconds(0);
     setPendingLabel(pendingLabelFor(request, Boolean(recommendation), nextState));
     setChoicePrompt(null);
     setSelectedChoices([]);
@@ -766,12 +811,11 @@ export function AIPlanEditor({
         return;
       }
       setRecommendation(result);
-      setExploration(null);
       setShownStops([]);
       resetKeep();
       setConversation(current => [
         ...current,
-        { role: "assistant", text: result.message, card: { ...result.card, followUp: undefined } },
+        { role: "assistant", text: result.message, card: { ...result.card, followUp: undefined }, progressive: true },
       ]);
     } catch {
       if (ticket !== requestIdRef.current) return;
@@ -826,6 +870,7 @@ export function AIPlanEditor({
             groups={exploration.groups} selectedIds={explorationSelectedIds}
             selectedCards={explorationSelectedCards}
             rejectedIds={explorationRejectedIds} busy={explorationBusy}
+            planned={Boolean(recommendation)}
             onSearch={() => void searchExploration()}
             onSelect={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
               group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
@@ -922,15 +967,23 @@ export function AIPlanEditor({
                   onPick={pickQuick}
                   onToggle={label => setSelectedChoices(current => label === "추천에 맡기기" ? [label] : current.includes(label) ? current.filter(item => item !== label) : [...current.filter(item => item !== "추천에 맡기기"), label])}
                   onSubmit={submitChoices}
+                  progressive={message.progressive}
                 />
                 {message.explorationAnchorId === exploration?.anchorId && explorationPanel}
                 </Fragment>
               );
             })}
-            {phase === "loading" && (
-              <article className="ai-bubble is-assistant is-typing" aria-label="답변하는 중">
-                <span><i /><i /><i /></span>
-                <p>{pendingLabel || "근처 장소를 찾고 동선을 맞추는 중입니다."}</p>
+            {(phase === "loading" || explorationBusy) && (
+              <article className="ai-bubble is-assistant is-assembling" aria-label="답변 준비 중">
+                <div className="ai-assembling-status" role="status"><span className="ai-assembling-orbit" aria-hidden="true" />
+                  <div><b>{phase === "loading" ? pendingLabel || "답변을 준비하고 있어요"
+                    : exploration?.groups ? "장소 후보를 확인하고 있어요" : "요청을 확인하고 있어요"}</b>
+                    <small>{loadingSeconds < 8 ? "장소와 일정 정보를 확인하는 중입니다." : `계속 확인하고 있어요 · ${loadingSeconds}초`}</small></div>
+                </div>
+                <div className="ai-answer-skeleton" aria-hidden="true">
+                  <span className="is-heading" /><span className="is-line" /><span className="is-line is-short" />
+                  <div><span /><span /></div>
+                </div>
               </article>
             )}
           </div>
