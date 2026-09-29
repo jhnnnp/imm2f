@@ -231,7 +231,10 @@ export const emptyDateBrief = (): AIPlannerState => ({
 });
 
 export function planDayYmd(state: Pick<AIPlannerState, "dateLabel">, now = new Date()) {
-  const digits = String(state.dateLabel ?? "").replace(/\D/g, "");
+  const label = String(state.dateLabel ?? "");
+  const separated = /(\d{4})\s*(?:년|[.\-/])\s*(\d{1,2})\s*(?:월|[.\-/])\s*(\d{1,2})/.exec(label);
+  if (separated) return `${separated[1]}${separated[2].padStart(2, "0")}${separated[3].padStart(2, "0")}`;
+  const digits = label.replace(/\D/g, "");
   if (digits.length >= 8) return digits.slice(0, 8);
   return koreaTodayYmd(now);
 }

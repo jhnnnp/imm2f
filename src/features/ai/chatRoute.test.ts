@@ -46,6 +46,18 @@ describe("chatRoute", () => {
     });
   });
 
+  it("routes direct shopping and festival questions to place discovery", () => {
+    expect(route("전주 쇼핑할 곳 추천해줘")).toMatchObject({
+      mode: "places", confident: true,
+      placeAsk: { kind: "shopping", area: "전주" },
+    });
+    expect(route("부산 축제 뭐가 있어?")).toMatchObject({
+      mode: "places", confident: true,
+      placeAsk: { kind: "festival", area: "부산" },
+    });
+    expect(route("전주 쇼핑하고 카페 가는 일정 짜줘").mode).toBe("course");
+  });
+
   it("keeps course requests in course mode", () => {
     expect(route("을지로 저녁 데이트 코스 짜줘")).toEqual({ mode: "course", confident: true });
     expect(route("성수에서 데이트하고 싶어")).toEqual({ mode: "course", confident: true });

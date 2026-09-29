@@ -8,6 +8,7 @@ import {
   matchesPlaceKind,
   placeAskHarshAllow,
   placeSearchPlans,
+  placeTourSearch,
   rankPlaceCandidates,
   sanitizePlacePicks,
 } from "./placeRecommend";
@@ -40,6 +41,39 @@ describe("placeRecommend", () => {
     expect(plans.some(plan => plan.page === 2)).toBe(true);
     expect(placeSearchPlans({ kind: "restaurant", query: "맛집", area: "을지로" })[0]).toMatchObject({ category: "restaurant", page: 1 });
     expect(placeSearchPlans({ kind: "bar", query: "와인", area: "연남" })[0].query).toBe("와인");
+  });
+
+  it("pairs direct requests with matching TourAPI content types", () => {
+    expect(placeTourSearch({ kind: "shopping", query: "쇼핑", area: "전주" })).toMatchObject({
+      region: "전주", tourContentTypeId: "38", query: "", page: 1,
+    });
+    expect(placeTourSearch({ kind: "festival", query: "축제", area: "부산" })).toMatchObject({
+      region: "부산", tourContentTypeId: "15", query: "축제", page: 1,
+    });
+    expect(placeTourSearch({ kind: "activity", query: "체험", area: "전주" })?.tourContentTypeId).toBe("28");
+    expect(placeTourSearch({ kind: "exhibit", query: "전시", area: "전주" })?.tourContentTypeId).toBe("14");
+    expect(placeTourSearch(pastaAsk)).toBeNull();
+  });
+
+  it("keeps source-classified shopping and events separate from unrelated venues", () => {
+    const mall = candidate({ externalPlaceId: "shop", name: "엔터식스 왕십리", category: "tourist",
+      kakaoCategoryGroupCode: "MT1", detailedCategory: "가정,생활 > 쇼핑 > 쇼핑몰" });
+    const department = candidate({ externalPlaceId: "department", name: "롯데백화점 전주점",
+      category: "tourist", categoryLabel: "롯데백화점", kakaoCategoryGroupCode: "",
+      detailedCategory: "가정,생활 > 백화점 > 롯데백화점" });
+    const market = candidate({ externalSource: "tourapi", externalPlaceId: "market", name: "전주남부시장",
+      category: "tourist", categoryLabel: "쇼핑", detailedCategory: "쇼핑", tourContentTypeId: "38" });
+    const restaurant = candidate({ externalPlaceId: "food", name: "시장국밥" });
+    const festival = candidate({ externalSource: "tourapi", externalPlaceId: "fest", name: "전주문화축제",
+      category: "festival", categoryLabel: "축제·행사", tourContentTypeId: "15", openingHours: "2026.10.01 ~ 2026.10.03" });
+    expect(filterPlaceCandidates([mall, department, market, restaurant, festival],
+      { kind: "shopping", query: "쇼핑", area: "전주" },
+      { allowHarsh: noAllow, exclude: [], violatesAvoid: () => false }).map(item => item.name))
+      .toEqual(["엔터식스 왕십리", "롯데백화점 전주점", "전주남부시장"]);
+    expect(filterPlaceCandidates([mall, market, restaurant, festival],
+      { kind: "festival", query: "축제", area: "전주" },
+      { allowHarsh: noAllow, exclude: [], violatesAvoid: () => false }).map(item => item.name))
+      .toEqual(["전주문화축제"]);
   });
 
   it("keeps only date-worthy venues of the asked kind", () => {

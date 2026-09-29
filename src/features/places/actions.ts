@@ -93,8 +93,9 @@ export const listPlaces = cache(async (): Promise<{ persist: boolean; places: Pl
   };
 });
 
-export async function loadTourPlaceDetail(contentId: string, category: PlaceCategoryId) {
-  return loadTourPlaceDetailRemote(contentId, category);
+export async function loadTourPlaceDetail(contentId: string, category: PlaceCategoryId,
+  tourContentTypeId?: string) {
+  return loadTourPlaceDetailRemote(contentId, category, tourContentTypeId);
 }
 
 export async function searchKakaoPlaces(input: KakaoSearchInput | string) {

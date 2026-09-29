@@ -25,6 +25,7 @@ import { applyRanking } from "@/lib/openai/rank";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
 import { isShoppingSearch } from "@/lib/kakao/placeClassification";
 import { searchTourPlacesRemote } from "@/lib/tourapi/client";
+import { tourContentTypeForIntent, tourDiscoveryQuery } from "@/lib/tourapi/discoveryTypes";
 import { isTourApiConfigured } from "@/lib/tourapi/env";
 import { festivalPeriodCoversYmd } from "@/lib/tourapi/festivalSchedule";
 import { attachKopisPerformances } from "@/lib/kopis/client";
@@ -101,6 +102,7 @@ import {
   matchesPlaceKind,
   placeAskHarshAllow,
   placeSearchPlans,
+  placeTourSearch,
   rankPlaceCandidates,
 } from "@/features/ai/placeRecommend";
 import type { AIChatCard, AIChatStop, AIPlannerClarification, AIPlannerResult, AIPlannerState, DateChatTurn, DateIntakeSlot, DatePreviousStop, PlaceAsk, PlanChange, PlanItem, PlanKind, PlanOption } from "@/features/planning/types/plan";
@@ -414,7 +416,10 @@ async function recommendPlacesForChat(input: {
     : ask.kind === "restaurant" || ask.kind === "bar" ? ["restaurant"]
       : ask.kind === "exhibit" ? ["photo"]
         : ask.kind === "spot" ? ["tourist", "nature"] : ["photo", "tourist", "nature"];
-  const researchSearches = researchPlan ? researchSearchIntents(researchPlan, area)
+  // Source-type requests have their own typed search. A generic research plan
+  // must not replace a shopping/event search with unrelated tourist places.
+  const typedRequest = ["shopping", "festival", "activity"].includes(ask.kind);
+  const researchSearches = researchPlan && !typedRequest ? researchSearchIntents(researchPlan, area)
     .filter(intent => intent.category && researchCategories.includes(intent.category)) : [];
   const activeResearch = researchSearches.length > 0;
   let researchFallback = false;
@@ -424,6 +429,9 @@ async function recommendPlacesForChat(input: {
   const baseState = withAreas(noteTurn(input.state, input.message), requestedAreas.length
     ? requestedAreas : uniqueStrings([area, ...selectedAreas(input.state)], 3));
 
+  const typedTourSearch = !input.skipSearch && isTourApiConfigured() ? placeTourSearch(ask) : null;
+  const tourSearchPromise = typedTourSearch
+    ? searchTourPlacesRemote(typedTourSearch).catch(() => null) : Promise.resolve(null);
   const [{ places: saved }, insight, ...searches] = await Promise.all([
     listPlaces(), loadLatestCoupleInsight(),
     ...(input.skipSearch ? [] : [
@@ -434,10 +442,11 @@ async function recommendPlacesForChat(input: {
       query: plan.query,
       category: activeResearch ? providerCategoryForResearchIntent(plan) : plan.category,
       page: plan.page,
-      includeShopping: isShoppingSearch(plan.query),
+      includeShopping: ask.kind === "shopping" || isShoppingSearch(plan.query),
       })),
     ]),
   ]);
+  const typedTourResult = await tourSearchPromise;
   const [anchorSearch, ...initialPlanSearches] = searches;
   let planSearches = initialPlanSearches;
   const anchor = anchorSearch?.ok
@@ -482,10 +491,12 @@ async function recommendPlacesForChat(input: {
   const geoDoneAt = performance.now();
 
   const pool: DiscoverCandidate[] = [...(input.seedCandidates ?? [])];
-  for (const result of [...planSearches, ...geoSearches]) {
+  for (const result of [...planSearches, ...geoSearches, ...(typedTourResult ? [typedTourResult] : [])]) {
     if (!result.ok) continue;
     for (const candidate of result.places.slice(0, PLACE_RESULTS_PER_SEARCH)) {
       if (!isDateCourseCandidate(candidate, [])) continue;
+      if (ask.kind === "festival" && candidate.externalSource === "tourapi"
+        && baseState.dateLabel && !festivalPeriodCoversYmd(candidate.openingHours, tripDayYmd(baseState, 0) ?? undefined)) continue;
       pool.push({
         ...candidate,
         searchRegion: area,
@@ -559,7 +570,10 @@ async function recommendPlacesForChat(input: {
     coupleTaste: coupleTasteBrief(input.tasteBoard, insight, input.avoidFoods),
     conversation: input.conversation,
     alreadyShown,
-    skipFactLookup: Boolean(input.skipSearch),
+    // The optional fact lookup is tuned to menus and restaurant reviews.
+    // Source-backed shopping, cultural, activity and event records already
+    // carry their provider identity; a food-focused lookup adds latency here.
+    skipFactLookup: Boolean(input.skipSearch) || ["shopping", "festival", "activity", "exhibit"].includes(ask.kind),
     sessionFeedbackSignals: input.sessionFeedbackSignals,
   });
   if (input.requireHardEligibility) {
@@ -581,6 +595,7 @@ async function recommendPlacesForChat(input: {
     hydrateMs: Math.round(hydrateDoneAt - geoDoneAt), selectMs: Math.round(pickedDoneAt - hydrateDoneAt),
     totalMs: Math.round(pickedDoneAt - startedAt), nearbyInitial, geoSearched: needGeoSearch,
     researchMode: activeResearch ? "active" : getResearchPlanMode(), researchFallback,
+    tourTyped: typedTourSearch?.tourContentTypeId ?? null, tourMatches: typedTourResult?.ok ? typedTourResult.places.length : 0,
     candidateCount: hydrated.length, shownCount: picked.shownPlaces.length, source: picked.source,
   }));
   if (picked.card.stops && picked.card.stops.length < Math.min(PLACE_PICK_MIN, hydrated.length) && !alreadyShown.length) {
@@ -1086,12 +1101,19 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   const geoIntents = researchActive ? [] : activitySearchIntents(state);
   const allowHarsh = applyTasteHarshAllow(allowsHarshDateMeal(message, state.cuisine), message, avoidFoods);
   const searchKeyword = (page: number) => executeResearchIntents(keywordIntents, page, keywordSearch);
-  const tourIntents = researchActive && isTourApiConfigured()
-    ? researchIntents.filter(intent => intent.category === "tourist").slice(0, 4) : [];
+  const tourIntents = isTourApiConfigured()
+    ? (researchActive ? researchIntents : keywordIntents)
+      .map(intent => ({ ...intent, tourType: tourContentTypeForIntent(intent) }))
+      .filter(intent => intent.tourType != null)
+      .sort((left, right) => Number(right.tourType !== "12") - Number(left.tourType !== "12"))
+      .filter((intent, index, all) => all.findIndex(other => other.region === intent.region
+        && other.tourType === intent.tourType) === index)
+      .slice(0, 4) : [];
   const tourResearchPromise = tourIntents.length
     ? Promise.all(tourIntents
-      .map(intent => searchTourPlacesRemote({ category: "tourist", region: intent.region,
-        query: intent.query, page: 1 }))) : Promise.resolve([]);
+      .map(intent => searchTourPlacesRemote({ category: intent.category, region: intent.region,
+        query: tourDiscoveryQuery(intent.tourType!, intent.query),
+        tourContentTypeId: intent.tourType!, page: 1 }))) : Promise.resolve([]);
   const shortlist = (state.shownPlaces ?? [])
     .filter(name => !directQueries.includes(name) && !state.excludedPlaces.includes(name))
     .slice(0, 6);

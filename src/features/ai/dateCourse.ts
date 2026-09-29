@@ -58,7 +58,8 @@ export type DateRankContext = {
 
 const HARSH_HOE = /회집|횟집|활어회|수산시장/;
 const HARSH_MEAT = /막창|대창|닭발|족발|보쌈/;
-const HARSH_BAR = /포차|호프|주점|실내포차/;
+const HARSH_BAR_NAME = /포차|호프|술집|이자카야|와인바|칵테일바/;
+const HARSH_BAR_CATEGORY = /(?:^|>)\s*(?:주점|호프|포차|실내포차)(?:\s*>|$)/;
 const HARSH_OTHER = /편의점|마트|슈퍼마켓|PC방|피시방|모텔|여관|병원|의원|약국|부동산|주차장|주유소|사주|타로|점집|신점|운세|철학관|작명/;
 const CHILD_ONLY = /키즈카페|유아\s*(?:전용|놀이터|체험)|어린이\s*(?:전용|놀이터|체험관)|우리\s*놀이터/;
 const DATE_JUNK = /분식|패스트푸드|패스트\s*푸드|도시락|김밥|컵밥|맥도날드|롯데리아|버거킹|맘스터치|서브웨이|노브랜드버거|\bKFC\b|테마카페|룸카페/;
@@ -87,7 +88,9 @@ export function isOffDateVenue(candidate: DiscoverCandidate, ctx?: { allowHarsh?
   const allow = ctx?.allowHarsh ?? { hoe: false, meat: false, bar: false };
   if (!allow.hoe && HARSH_HOE.test(blob)) return true;
   if (!allow.meat && HARSH_MEAT.test(blob)) return true;
-  if (!allow.bar && HARSH_BAR.test(blob)) return true;
+  // A branch ending in "전주점" or "광주점" contains "주점" by coincidence.
+  if (!allow.bar && (HARSH_BAR_NAME.test(candidate.name)
+    || HARSH_BAR_CATEGORY.test(candidate.detailedCategory ?? ""))) return true;
   return false;
 }
 
@@ -208,7 +211,7 @@ export function groundedStopReason(input: {
   bothWant?: boolean;
 }) {
   if (input.candidate.category === "festival" && input.candidate.openingHours) {
-    return `진행 중 · ${input.candidate.openingHours}`;
+    return `행사 기간 · ${input.candidate.openingHours}`;
   }
   const leaf = dateCategoryLabel(input.candidate);
   if (input.bothWant) return leaf ? `둘이 가고 싶다고 한 곳 · ${leaf}` : "둘이 가고 싶다고 한 곳";

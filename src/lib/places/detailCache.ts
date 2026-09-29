@@ -150,7 +150,8 @@ export async function hydrateDateCandidates(candidates: DiscoverCandidate[], sav
   const missingOther = merged.filter(candidate => candidate.externalSource === "tourapi"
     && candidate.category !== "tourist" && (!candidate.image || !candidate.openingHours)).slice(0, 4);
   await Promise.all(missingOther.map(async candidate => {
-    const detail = await loadTourPlaceDetail(candidate.externalPlaceId, candidate.category);
+    const detail = await loadTourPlaceDetail(candidate.externalPlaceId, candidate.category,
+      candidate.tourContentTypeId);
     if (!detail) return;
     candidate.image = candidate.image || detail.image;
     candidate.openingHours = candidate.openingHours || detail.openingHours || undefined;

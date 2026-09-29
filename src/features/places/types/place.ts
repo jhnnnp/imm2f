@@ -39,6 +39,8 @@ export type Place = {
   recommendReason?: string;
   detailedCategory?: string;
   kakaoCategoryGroupCode?: string;
+  /** TourAPI's source content type; preserves its taxonomy after UI mapping. */
+  tourContentTypeId?: string;
   searchRegion?: string;
   distanceMeters?: number;
   homepage?: string;
@@ -93,6 +95,8 @@ export type DiscoverCandidate = {
   image?: string;
   detailedCategory?: string;
   kakaoCategoryGroupCode?: string;
+  /** TourAPI's source content type; preserves its taxonomy after UI mapping. */
+  tourContentTypeId?: string;
   searchRegion?: string;
   distanceMeters?: number;
   openingHours?: string;

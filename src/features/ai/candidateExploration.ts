@@ -5,13 +5,13 @@ import type { ResearchNeed, ResearchPlan } from "./researchPlan";
 import { dateCandidateKey } from "./dateCourse";
 import { researchEvidenceFresh } from "./researchPlan";
 import { distanceMeters } from "@/features/places/geo";
-import { classifyKakaoPlace, classifyPlaceExperiences } from "@/lib/kakao/placeClassification";
+import { classifyDiscoveryIntents, classifyPlaceExperiences, shoppingSubtype } from "@/lib/kakao/placeClassification";
 import type { SessionCandidateContext } from "./sessionCandidates";
 import type { DateCandidateRecord } from "./dateCandidatePool";
 
 export const MAX_EXPLORATION_CANDIDATES = 8;
 export type ExplorationActivity = "beach" | "culture" | "shopping" | "meal" | "cafe"
-  | "nightview" | "experience" | "nature";
+  | "nightview" | "experience" | "nature" | "festival";
 export type PreferenceProvenance = "user_selected" | "explicit_text" | "inferred" | "legacy_default";
 type CafeQuality = "aesthetic" | "view" | "spacious" | "traditional" | "dessert";
 type ShoppingKind = "outlet" | "department" | "market" | "select_shop";
@@ -49,6 +49,7 @@ export const EXPLORATION_ACTIVITIES: Array<{ id: ExplorationActivity; label: str
   { id: "shopping", label: "쇼핑" }, { id: "meal", label: "맛집" },
   { id: "cafe", label: "카페" }, { id: "nightview", label: "야경" },
   { id: "experience", label: "체험" }, { id: "nature", label: "자연/휴식" },
+  { id: "festival", label: "축제/행사" },
 ];
 export const CAFE_CHOICES = [
   { value: "aesthetic", label: "공간이 예쁜 곳" }, { value: "dessert", label: "디저트" },
@@ -68,15 +69,19 @@ export const CULTURE_CHOICES = [
 const activityCategory: Record<ExplorationActivity, PlaceCategoryId> = {
   beach: "nature", culture: "photo", shopping: "tourist", meal: "restaurant",
   cafe: "cafe", nightview: "tourist", experience: "photo", nature: "nature",
+  festival: "festival",
 };
 const activityQuery: Record<ExplorationActivity, string> = {
   beach: "해수욕장", culture: "전시", shopping: "쇼핑", meal: "식당",
   cafe: "카페", nightview: "야경 전망대", experience: "체험", nature: "공원",
+  festival: "축제",
 };
 const explorationAlternates: Partial<Record<ExplorationActivity, string[]>> = {
   nightview: ["야경 명소", "전망대", "전망 공원"],
   beach: ["해변", "해안 산책로"],
   nature: ["수목원", "자연휴양림"],
+  experience: ["공방 체험", "원데이 클래스", "액티비티"],
+  festival: ["지역 축제", "문화 행사"],
 };
 
 export function explorationSearchQueries(id: ExplorationActivity, primary: string, area?: string) {
@@ -96,11 +101,14 @@ export const isBroadExplorationArea = (area: string) => BROAD_EXPLORATION_AREAS.
 export function explorationGroupMatch(candidate: DiscoverCandidate, id: ExplorationActivity,
   fromNeedSearch = false) {
   const experienceSignals = classifyPlaceExperiences(candidate);
+  const discoverySignals = classifyDiscoveryIntents(candidate);
   if (id === "shopping") {
-    const classification = classifyKakaoPlace({ name: candidate.name,
-      detailedCategory: candidate.detailedCategory, groupCode: candidate.kakaoCategoryGroupCode });
-    return candidate.category === "tourist" && classification.visitable && Boolean(classification.shoppingKind);
+    return discoverySignals.some(signal => signal.kind === "shopping");
   }
+  if (id === "festival") return discoverySignals.some(signal => signal.kind === "festival");
+  if (id === "experience") return discoverySignals.some(signal => signal.kind === "experience");
+  if (id === "culture") return discoverySignals.some(signal => signal.kind === "culture")
+    || candidate.category === "photo";
   if (id === "nightview") return ["tourist", "nature", "photo"].includes(candidate.category)
     && (experienceSignals.some(signal => signal.kind === "nightview") || fromNeedSearch);
   if (id === "beach") return ["nature", "tourist"].includes(candidate.category)
@@ -130,6 +138,7 @@ export function initialExplorationPreferences(message: string, state: AIPlannerS
   if (/카페|커피|디저트/.test(explicit)) add("cafe");
   if (/야경|밤바다/.test(explicit)) add("nightview");
   if (/체험|공방|액티비티/.test(explicit)) add("experience");
+  if (/축제|페스티벌|지역\s*행사/.test(explicit)) add("festival");
   if (/자연|휴식|숲|공원/.test(explicit)) add("nature");
   const cafeQualities: CandidateExplorationPreferences["cafeQualities"] = [];
   if (/예쁜|이쁜|감성/.test(explicit)) cafeQualities.push("aesthetic");
@@ -229,7 +238,8 @@ export function explorationResearchPlan(plan: ResearchPlan | null, preferences: 
     const terms: Record<ExplorationActivity, RegExp> = {
       cafe: /카페|커피|디저트/, meal: /식당|맛집|음식|식사|밥/, shopping: /쇼핑|가게|시장/,
       culture: /전시|문화|미술|박물관/, beach: /바다|해변|산책/, nightview: /야경/,
-      experience: /체험|공방/, nature: /자연|공원|숲|휴식/ };
+      experience: /체험|공방|액티비티/, nature: /자연|공원|숲|휴식/,
+      festival: /축제|페스티벌|행사/ };
     return terms[id].test(detail);
   });
   const target = named.length ? named : preferences.activities.length === 1 ? preferences.activities : [];
@@ -262,7 +272,8 @@ export function refinementGroupForMessage(groups: CandidateGroup[], message: str
         : /전시|미술관|박물관/.test(message) ? "culture"
           : /쇼핑|아울렛|백화점|시장/.test(message) ? "shopping"
             : /야경/.test(message) ? "nightview"
-              : /체험|공방/.test(message) ? "experience"
+              : /체험|공방|액티비티/.test(message) ? "experience"
+                : /축제|페스티벌|지역\s*행사/.test(message) ? "festival"
                 : /공원|숲|자연/.test(message) ? "nature" : null;
   if (named) return groups.some(group => group.id === named) ? named : null;
   if (activeGroup && groups.some(group => group.id === activeGroup)) return activeGroup;
@@ -341,8 +352,7 @@ function subtypeMatches(candidate: DiscoverCandidate, id: ExplorationActivity,
     art_museum: /미술관|갤러리|아트센터/i, museum: /박물관|뮤지엄/i,
     media_art: /미디어아트|미디어\s*전시|몰입형\s*전시/i, exhibit: /전시|갤러리|미술관/i };
   return id === "shopping" && preferences.shoppingKinds.length
-    ? preferences.shoppingKinds.includes(classifyKakaoPlace({ name: candidate.name,
-      detailedCategory: candidate.detailedCategory, groupCode: candidate.kakaoCategoryGroupCode }).shoppingKind as ShoppingKind)
+    ? preferences.shoppingKinds.includes(shoppingSubtype(candidate) as ShoppingKind)
     : id === "culture" && preferences.cultureKinds.length
       ? preferences.cultureKinds.some(kind => culture[kind].test(text)) : true;
 }
@@ -355,6 +365,7 @@ function matchStrength(candidate: DiscoverCandidate, id: ExplorationActivity) {
     .some(signal => signal.kind === experienceKind) ? 2 : 1;
   if (id === "culture") return /전시|미술관|박물관|갤러리|뮤지엄|미디어아트/.test(text) ? 2 : 1;
   if (id === "experience") return /체험|공방|액티비티|방탈출|놀이/.test(text) ? 2 : 1;
+  if (id === "festival") return candidate.externalSource === "tourapi" && candidate.openingHours ? 3 : 1;
   return 2;
 }
 
@@ -398,8 +409,8 @@ export function groupExplorationCandidates(input: { plan: ResearchPlan; preferen
         matchStrength: matchStrength(item, id),
         retrieval: retrievalSignals[dateCandidateKey(item)],
         sourceOrder: sourceOrder.get(dateCandidateKey(item)) ?? Number.MAX_SAFE_INTEGER,
-        shoppingFit: id === "shopping" && classifyKakaoPlace({ name: item.name,
-          detailedCategory: item.detailedCategory, groupCode: item.kakaoCategoryGroupCode }).shoppingKind ? 1 : 0,
+        shoppingFit: id === "shopping" && classifyDiscoveryIntents(item)
+          .some(signal => signal.kind === "shopping" && signal.source === "provider_category") ? 1 : 0,
         baseScore: baseScores.get(dateCandidateKey(item)) ?? 0 }))
       .sort((a, b) => b.nameFit - a.nameFit || a.nearbyMeters - b.nearbyMeters || b.shoppingFit - a.shoppingFit
         || b.focusFit - a.focusFit || b.badges.length - a.badges.length

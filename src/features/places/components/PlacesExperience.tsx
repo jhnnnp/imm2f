@@ -369,7 +369,8 @@ export function PlacesExperience({
     const place = [...discover, ...places].find(item => item.id === id);
     if (!place || place.externalSource !== "tourapi" || !place.externalPlaceId) return;
     if (place.tourDetailLoaded) return;
-    const detail = await loadTourPlaceDetail(place.externalPlaceId, place.category);
+    const detail = await loadTourPlaceDetail(place.externalPlaceId, place.category,
+      place.tourContentTypeId);
     setDiscover(current => current.map(item => (
       item.id === id
         ? detail

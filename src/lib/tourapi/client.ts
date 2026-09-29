@@ -10,15 +10,22 @@ const PAGE_SIZE = 15;
 const FESTIVAL_PAGE_SIZE = 30;
 const FESTIVAL_SKIP_EMPTY_PAGES = 2;
 
-const CONTENT_TYPE: Record<"tourist" | "festival" | "stay", string> = {
-  tourist: "12",
-  festival: "15",
-  stay: "32",
+/** KorService2 content types. Keep this identity on each candidate instead of
+ * flattening every non-festival result into a generic tourist attraction. */
+export type TourContentTypeId = "12" | "14" | "15" | "28" | "32" | "38";
+const CONTENT_TYPE: Record<"tourist" | "festival" | "stay", TourContentTypeId> = {
+  tourist: "12", festival: "15", stay: "32",
 };
+export type TourSearchInput = KakaoSearchInput & { tourContentTypeId?: TourContentTypeId };
+function supportedContentType(value: string | undefined): value is TourContentTypeId {
+  return ["12", "14", "15", "28", "32", "38"].includes(value ?? "");
+}
 
 type TourItem = {
   contentid?: number | string;
   contentId?: number | string;
+  contenttypeid?: number | string;
+  contentTypeId?: number | string;
   title?: string;
   addr1?: string;
   addr2?: string;
@@ -129,24 +136,31 @@ function serviceKey() {
   }
 }
 
-function contentTypeId(category: PlaceCategoryId | "all" | undefined) {
+function contentTypeId(category: PlaceCategoryId | "all" | undefined): TourContentTypeId {
   if (category === "festival") return CONTENT_TYPE.festival;
   if (category === "stay") return CONTENT_TYPE.stay;
   return CONTENT_TYPE.tourist;
 }
 
-function mappedCategory(category: PlaceCategoryId | "all" | undefined): PlaceCategoryId {
-  return category === "festival" || category === "stay" ? category : "tourist";
+function mappedCategory(typeId: TourContentTypeId): PlaceCategoryId {
+  if (typeId === "15") return "festival";
+  if (typeId === "32") return "stay";
+  if (typeId === "14") return "photo";
+  return "tourist";
 }
 
-function toCandidate(item: TourItem, category: PlaceCategoryId): DiscoverCandidate | null {
+function toCandidate(item: TourItem, typeId: TourContentTypeId): DiscoverCandidate | null {
+  const reportedType = String(item.contenttypeid ?? item.contentTypeId ?? "").trim();
+  if (reportedType && reportedType !== typeId) return null;
   const id = String(item.contentid ?? item.contentId ?? "").trim();
   const name = item.title?.trim() ?? "";
   const lng = Number(item.mapx ?? item.mapX);
   const lat = Number(item.mapy ?? item.mapY);
   if (!id || !name || !Number.isFinite(lng) || !Number.isFinite(lat)) return null;
   const address = item.addr1 ?? "";
-  const label = category === "festival" ? "축제" : category === "stay" ? "숙박" : "관광지";
+  const category = mappedCategory(typeId);
+  const label = { "12": "관광지", "14": "문화시설", "15": "축제·행사", "28": "레포츠",
+    "32": "숙박", "38": "쇼핑" }[typeId];
   const period = category === "festival" ? formatEventPeriod(festivalStart(item), festivalEnd(item)) : "";
   return {
     externalSource: "tourapi",
@@ -154,6 +168,7 @@ function toCandidate(item: TourItem, category: PlaceCategoryId): DiscoverCandida
     name,
     category,
     categoryLabel: label,
+    tourContentTypeId: typeId,
     district: districtFromAddress(address) || address,
     address,
     roadAddress: item.addr2 ?? "",
@@ -162,8 +177,7 @@ function toCandidate(item: TourItem, category: PlaceCategoryId): DiscoverCandida
     coordinates: [lng, lat],
     image: item.firstimage || item.firstimage2 || item.originimgurl || undefined,
     openingHours: period || undefined,
-    detailedCategory: category === "festival" ? (period ? `축제 > ${period}` : "축제")
-      : category === "stay" ? "숙박" : "관광명소",
+    detailedCategory: category === "festival" ? (period ? `축제 > ${period}` : "축제") : label,
   };
 }
 
@@ -183,7 +197,7 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
   });
 
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(7000) });
     const text = await response.text();
     if (response.status === 429) {
       return { ok: false, code: "rate_limited", error: "검색 한도를 잠시 넘었어요. 조금 뒤에 다시 시도해 주세요." };
@@ -207,10 +221,8 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
 
 /** List rows from searchFestival2 already use eventStartDate; skip per-item detailIntro2 on browse. */
 function discoverFestivalItems(items: TourItem[]) {
-  return items.filter(item => {
-    if (!festivalHasPeriod(item)) return true;
-    return !isEndedFestival(festivalStart(item), festivalEnd(item));
-  });
+  return items.filter(item => festivalHasPeriod(item)
+    && !isEndedFestival(festivalStart(item), festivalEnd(item)));
 }
 
 function haversineMeters(lng1: number, lat1: number, lng2: number, lat2: number) {
@@ -266,29 +278,39 @@ function festivalSearchTokens(input: KakaoSearchInput, region?: PlaceArea) {
   return [...new Set(text.split(/\s+/).map(part => part.trim()).filter(part => part.length >= 2))];
 }
 
-function festivalItemMatches(item: TourItem, tokens: string[], origin?: { x: number; y: number; radius: number }) {
+function festivalItemMatches(item: TourItem, tokens: string[], origin?: { x: number; y: number; radius: number },
+  region?: PlaceArea) {
   if (tokens.length) {
     const blob = `${item.title ?? ""} ${item.addr1 ?? ""} ${item.addr2 ?? ""}`;
     if (!tokens.every(token => blob.includes(token))) return false;
   }
-  if (!origin) return true;
   const lng = Number(item.mapx ?? item.mapX);
   const lat = Number(item.mapy ?? item.mapY);
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return false;
-  return haversineMeters(origin.x, origin.y, lng, lat) <= origin.radius;
+  if (origin && (!Number.isFinite(lng) || !Number.isFinite(lat)
+    || haversineMeters(origin.x, origin.y, lng, lat) > origin.radius)) return false;
+  // searchFestival2 scopes to a province. A city/neighborhood request needs a
+  // second check so a festival elsewhere in that province is not recommended.
+  if (region?.sigunguCode) {
+    const address = `${item.addr1 ?? ""} ${item.addr2 ?? ""}`;
+    const nearby = Number.isFinite(lng) && Number.isFinite(lat)
+      && haversineMeters(region.coordinates[0], region.coordinates[1], lng, lat)
+        <= Math.max((region.radius ?? 5000) * 2, 8000);
+    if (!address.includes(region.query) && !nearby) return false;
+  }
+  return true;
 }
 
 function withFestivalDistance(item: TourItem, origin?: { x: number; y: number; radius: number }): DiscoverCandidate | null {
-  const candidate = toCandidate(item, "festival");
+  const candidate = toCandidate(item, "15");
   if (!candidate || !origin) return candidate;
   candidate.distanceMeters = haversineMeters(origin.x, origin.y, candidate.coordinates[0], candidate.coordinates[1]);
   return candidate;
 }
 
-export async function searchTourPlacesRemote(input: KakaoSearchInput): Promise<KakaoSearchResult> {
+export async function searchTourPlacesRemote(input: TourSearchInput): Promise<KakaoSearchResult> {
   const requestedPage = Math.min(45, Math.max(1, input.page ?? 1));
-  const category = mappedCategory(input.category);
-  const typeId = contentTypeId(category);
+  const typeId = input.tourContentTypeId ?? contentTypeId(input.category);
+  const category = mappedCategory(typeId);
   const region = category === "festival" ? resolveFestivalRegion(input) : regionByQuery(input.region);
   const keyword = [input.region, input.query, input.mood].map(value => value?.trim() ?? "").filter(Boolean).join(" ").trim();
   const hasCoords = Number.isFinite(input.x) && Number.isFinite(input.y);
@@ -346,7 +368,7 @@ export async function searchTourPlacesRemote(input: KakaoSearchInput): Promise<K
   let totalCount = fetched.payload.response?.body?.totalCount ?? 0;
   let items = asItems(fetched.payload.response);
   if (category === "festival") {
-    items = discoverFestivalItems(items).filter(item => festivalItemMatches(item, tokens, origin));
+    items = discoverFestivalItems(items).filter(item => festivalItemMatches(item, tokens, origin, region));
     let skipped = 0;
     while (items.length === 0 && pageNo * rows < totalCount && skipped < FESTIVAL_SKIP_EMPTY_PAGES) {
       pageNo += 1;
@@ -354,13 +376,13 @@ export async function searchTourPlacesRemote(input: KakaoSearchInput): Promise<K
       fetched = await fetchPage(pageNo);
       if (!fetched.ok) break;
       totalCount = fetched.payload.response?.body?.totalCount ?? totalCount;
-      items = discoverFestivalItems(asItems(fetched.payload.response)).filter(item => festivalItemMatches(item, tokens, origin));
+      items = discoverFestivalItems(asItems(fetched.payload.response)).filter(item => festivalItemMatches(item, tokens, origin, region));
     }
     if (!fetched.ok) return fetched;
   }
 
   const places = items
-    .map(item => (category === "festival" ? withFestivalDistance(item, origin) : toCandidate(item, category)))
+    .map(item => (category === "festival" ? withFestivalDistance(item, origin) : toCandidate(item, typeId)))
     .filter((item): item is DiscoverCandidate => item !== null);
   return {
     ok: true,
@@ -371,12 +393,14 @@ export async function searchTourPlacesRemote(input: KakaoSearchInput): Promise<K
   };
 }
 
-export async function loadTourPlaceDetail(contentId: string, category: PlaceCategoryId): Promise<TourPlaceDetail | null> {
+export async function loadTourPlaceDetail(contentId: string, category: PlaceCategoryId,
+  tourContentTypeId?: string): Promise<TourPlaceDetail | null> {
   const id = contentId.trim();
   if (!id) return null;
+  const typeId = supportedContentType(tourContentTypeId) ? tourContentTypeId : contentTypeId(category);
   const [common, intro, images] = await Promise.all([
     tourFetch("detailCommon2", { contentId: id }),
-    tourFetch("detailIntro2", { contentId: id, contentTypeId: contentTypeId(category) }),
+    tourFetch("detailIntro2", { contentId: id, contentTypeId: typeId }),
     tourFetch("detailImage2", { contentId: id }),
   ]);
   const commonItem = common.ok ? asItems(common.payload.response)[0] : undefined;

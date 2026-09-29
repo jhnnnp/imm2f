@@ -38,7 +38,9 @@ export function researchSearchAuthority(mode: ResearchPlanMode, plan: ResearchPl
 const categoryTerms: Array<[RegExp, PlaceCategoryId, string]> = [
   [/카페|커피|디저트|베이커리|cafe/i, "cafe", "카페"],
   [/식사|음식|식당|맛집|레스토랑|파스타|브런치|meal/i, "restaurant", "식당"],
+  [/축제|페스티벌|지역\s*행사|festival/i, "festival", "축제"],
   [/쇼핑|아울렛|백화점|시장|shopping/i, "tourist", "쇼핑"],
+  [/체험|공방|원데이\s*클래스|액티비티|레포츠/i, "tourist", "체험"],
   [/전시|미술관|박물관|갤러리|exhibit/i, "photo", "전시"],
   [/해변|공원|산책|자연|숲|walk/i, "nature", "명소"],
   [/공연|영화|극장|performance|movie/i, "photo", "공연장"],

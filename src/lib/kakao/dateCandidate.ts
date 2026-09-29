@@ -3,7 +3,7 @@ import { classifyKakaoPlace } from "./placeClassification";
 
 const DATE_GROUP_CODES = new Set(["CE7", "FD6", "AT4", "CT1"]);
 
-const SAFE_UNGROUPED_CATEGORY = /(?:^|>)\s*(?:서점|책방|북카페|도서관|미술관|박물관|전시관|전시장|공연장|극장|영화관|수목원|식물원|동물원|아쿠아리움|테마파크|놀이공원|볼링장|방탈출카페|보드카페|보드게임카페|오락실|만화카페|노래방|VR카페)\s*(?:>|$)/;
+const SAFE_UNGROUPED_CATEGORY = /(?:^|>)\s*(?:서점|책방|북카페|도서관|미술관|박물관|전시관|전시장|공연장|극장|영화관|수목원|식물원|동물원|아쿠아리움|테마파크|놀이공원|볼링장|방탈출카페|보드카페|보드게임카페|오락실|만화카페|노래방|VR카페|공방|체험장|체험관|체험센터|레포츠|축제|페스티벌)\s*(?:>|$)/;
 const TRANSIT_GROUP_CODES = new Set(["SW8"]);
 const STATION_ONLY_NAME = /^[가-힣A-Za-z]{1,8}역$/;
 const ACCESS_NAME = /(?:입구|출구|진출입로|나들목|정류장)$/;
@@ -41,7 +41,7 @@ export function isDateCourseCandidate(candidate: KakaoPlaceCandidate, requiredPl
   if (looksLikeNonVenue(candidate) && !isExplicitParkAccess(candidate, requiredPlaces)) return false;
   if (candidate.externalSource === "tourapi" && candidate.category === "festival") return true;
   if (candidate.externalSource === "tourapi"
-    && ["tourist", "nature"].includes(candidate.category)
+    && ["tourist", "nature", "photo"].includes(candidate.category)
     && candidate.address && candidate.coordinates.every(Number.isFinite)) return true;
   const groupCode = candidate.kakaoCategoryGroupCode ?? "";
   if (DATE_GROUP_CODES.has(groupCode)) return true;

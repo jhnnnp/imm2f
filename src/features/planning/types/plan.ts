@@ -237,7 +237,8 @@ export type AIPlannerState = {
   placeAsk?: PlaceAsk | null;
 };
 
-export type PlaceAskKind = "restaurant" | "cafe" | "bar" | "dessert" | "exhibit" | "activity" | "spot";
+export type PlaceAskKind = "restaurant" | "cafe" | "bar" | "dessert" | "exhibit" | "activity"
+  | "shopping" | "festival" | "spot";
 
 export type PlaceAsk = {
   kind: PlaceAskKind;

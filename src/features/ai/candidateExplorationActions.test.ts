@@ -8,13 +8,15 @@ import type { CandidateExplorationPreferences } from "./candidateExploration";
 vi.mock("@/lib/openai/interpretDateRequest", () => ({ interpretDateRequest: vi.fn() }));
 vi.mock("@/lib/kakao/local", () => ({ searchKakaoPlacesRemote: vi.fn(), geocodeKakaoAddressRemote: vi.fn(async () => null) }));
 vi.mock("@/lib/tourapi/client", () => ({ searchTourPlacesRemote: vi.fn() }));
-vi.mock("@/lib/tourapi/env", () => ({ isTourApiConfigured: () => false }));
+vi.mock("@/lib/tourapi/env", () => ({ isTourApiConfigured: vi.fn(() => false) }));
 vi.mock("@/lib/openai/experiencePlan", () => ({ observeExperiencePlan: vi.fn(async () => null) }));
 vi.mock("@/lib/openai/enrichDateVenues", () => ({ enrichResearchNeedEvidence: vi.fn(async (rows: DiscoverCandidate[]) => rows) }));
 vi.mock("@/features/places/actions", () => ({ listPlaces: vi.fn(async () => ({ places: [] })) }));
 
 import { interpretDateRequest } from "@/lib/openai/interpretDateRequest";
 import { geocodeKakaoAddressRemote, searchKakaoPlacesRemote } from "@/lib/kakao/local";
+import { searchTourPlacesRemote } from "@/lib/tourapi/client";
+import { isTourApiConfigured } from "@/lib/tourapi/env";
 import { observeExperiencePlan } from "@/lib/openai/experiencePlan";
 import { enrichResearchNeedEvidence } from "@/lib/openai/enrichDateVenues";
 import { exploreCandidateGroups, prepareCandidateExploration,
@@ -32,6 +34,8 @@ const venue = (id: number): DiscoverCandidate => ({ externalSource: "kakao", ext
   mapUrl: `https://place.map.kakao.com/${id}`, coordinates: [129.16, 35.16], kakaoCategoryGroupCode: "CE7" });
 
 beforeEach(() => {
+  vi.mocked(isTourApiConfigured).mockReturnValue(false);
+  vi.mocked(searchTourPlacesRemote).mockReset();
   process.env.DATE_CANDIDATE_EXPLORATION_MODE = "active";
   process.env.SESSION_CANDIDATE_SIGNING_KEY = "candidate-exploration-test-secret";
   vi.mocked(interpretDateRequest).mockResolvedValue({ state, slot: null, reply: "" });
@@ -159,6 +163,43 @@ it("uses a citywide scope and provider outlet taxonomy for Jeonju shopping", asy
   if ("error" in result) throw new Error(result.error);
   expect(result.groups[0].cards.map(card => card.name)).toContain("서전주아울렛");
   expect(searchKakaoPlacesRemote).not.toHaveBeenCalledWith(expect.objectContaining({ query: "전주역 상가" }));
+});
+
+it("discovers typed shopping, leisure and dated festivals in a different region", async () => {
+  vi.mocked(isTourApiConfigured).mockReturnValue(true);
+  vi.mocked(searchKakaoPlacesRemote).mockResolvedValue({ ok: true, places: [],
+    isEnd: true, page: 1, totalCount: 0 });
+  const jeonju = { ...withAreas(emptyDateBrief(), ["전주"]), dateLabel: "2026년 10월 3일" };
+  const tourVenue = (id: string, name: string, typeId: string, category: DiscoverCandidate["category"]): DiscoverCandidate => ({
+    ...venue(Number(id)), externalSource: "tourapi", externalPlaceId: id, name,
+    category, categoryLabel: typeId === "38" ? "쇼핑" : typeId === "28" ? "레포츠" : "축제·행사",
+    tourContentTypeId: typeId, kakaoCategoryGroupCode: undefined,
+    district: "전주시 완산구", address: "전북 전주시 완산구", coordinates: [127.148, 35.824],
+  });
+  vi.mocked(searchTourPlacesRemote).mockImplementation(async input => ({ ok: true,
+    places: input.tourContentTypeId === "38" ? [tourVenue("381", "전주 남부시장", "38", "tourist")]
+      : input.tourContentTypeId === "28" ? [tourVenue("281", "전주 카약 체험", "28", "tourist")]
+        : input.tourContentTypeId === "15" ? [
+          { ...tourVenue("151", "전주 가을 축제", "15", "festival"), openingHours: "2026.10.03 – 2026.10.04" },
+          { ...tourVenue("152", "전주 지난 축제", "15", "festival"), openingHours: "2026.09.01 – 2026.09.03" },
+        ] : [],
+    isEnd: true, page: input.page ?? 1, totalCount: 2 }));
+  const preferences = { ...prefs, activities: ["shopping", "experience", "festival"] as const,
+    provenance: { shopping: "user_selected" as const, experience: "user_selected" as const,
+      festival: "user_selected" as const } };
+  const result = await exploreCandidateGroups({ message: "전주 쇼핑 체험 축제", state: jeonju,
+    preferences: { ...preferences, activities: [...preferences.activities] }, planningSessionId: sessionId });
+  if ("error" in result) throw new Error(result.error);
+  expect(result.groups.map(group => [group.id, group.cards.map(card => card.name)])).toEqual([
+    ["shopping", ["전주 남부시장"]], ["experience", ["전주 카약 체험"]],
+    ["festival", ["전주 가을 축제"]],
+  ]);
+  expect(searchTourPlacesRemote).toHaveBeenCalledWith(expect.objectContaining({
+    region: "전주", tourContentTypeId: "38", query: "" }));
+  expect(searchTourPlacesRemote).toHaveBeenCalledWith(expect.objectContaining({
+    region: "전주", tourContentTypeId: "28", query: "" }));
+  expect(searchTourPlacesRemote).toHaveBeenCalledWith(expect.objectContaining({
+    region: "전주", tourContentTypeId: "15", query: "축제" }));
 });
 
 it("combines agreement across research queries when ranking any eligible group", async () => {

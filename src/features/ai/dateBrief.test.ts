@@ -21,6 +21,7 @@ import {
   matchesIndoorType,
   matchesActivity,
   matchesTerm,
+  planDayYmd,
   missingSlot,
   expandedSearchRegions,
   searchIntents,
@@ -47,6 +48,10 @@ function candidate(overrides: Partial<DiscoverCandidate> = {}): DiscoverCandidat
 }
 
 describe("dateBrief", () => {
+  it("normalizes Korean dates with single digit months or days for event matching", () => {
+    expect(planDayYmd({ dateLabel: "2026년 10월 3일" })).toBe("20261003");
+    expect(planDayYmd({ dateLabel: "2026-10-03" })).toBe("20261003");
+  });
   it("does not read colloquial travel wording as a second district", () => {
     expect(extractAreasFromText("부산 여행가려구")).toEqual(["부산"]);
     expect(extractAreasFromText("부산여행가려구")).toEqual(["부산"]);

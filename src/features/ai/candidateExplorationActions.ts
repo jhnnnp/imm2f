@@ -6,12 +6,14 @@ import type { DiscoverCandidate } from "@/features/places/types/place";
 import { interpretDateRequest } from "@/lib/openai/interpretDateRequest";
 import { geocodeKakaoAddressRemote, searchKakaoPlacesRemote } from "@/lib/kakao/local";
 import { searchTourPlacesRemote } from "@/lib/tourapi/client";
+import { tourContentTypeForIntent, tourDiscoveryQuery } from "@/lib/tourapi/discoveryTypes";
+import { festivalPeriodCoversYmd } from "@/lib/tourapi/festivalSchedule";
 import { listPlaces } from "@/features/places/actions";
 import { placeToCandidate } from "@/features/places/discover";
 import { isTourApiConfigured } from "@/lib/tourapi/env";
 import { observeExperiencePlan } from "@/lib/openai/experiencePlan";
 import { enrichResearchNeedEvidence } from "@/lib/openai/enrichDateVenues";
-import { applyDateDefaults, extractAreasFromText, extractStay, selectedAreas, withAreas } from "./dateBrief";
+import { applyDateDefaults, courseSize, extractAreasFromText, extractStay, selectedAreas, tripDayYmd, withAreas } from "./dateBrief";
 import { explicitDateConstraints } from "./dateConstraints";
 import { explicitFoodExclusions } from "./dateIntent";
 import { buildDateContext } from "./dateContext";
@@ -229,8 +231,12 @@ export async function exploreCandidateGroups(input: {
     if ([...candidates.keys()].filter(id => !alreadyPresented.has(id)).length < 8) {
       searched = true;
       const intents = researchSearchIntents({ needs: [need], unresolved: [], source: researchPlan.source }, area);
-      const tourEligible = isTourApiConfigured() && ["tourist", "nature", "photo"].includes(need.category ?? "");
-      const tourBudget = tourEligible ? Math.min(2, Math.max(0, providerBudgetPerGroup - 3)) : 0;
+      const tourType = tourContentTypeForIntent({ category: need.category, query: need.purpose });
+      const tourEligible = isTourApiConfigured() && tourType != null
+        && !["nightview", "meal", "cafe"].includes(groupId);
+      // Reserve one typed TourAPI request even if Kakao already has eight hits.
+      // The two sources describe different venue inventories.
+      const tourBudget = tourEligible ? Math.min(2, Math.max(0, providerBudgetPerGroup - 2)) : 0;
       const kakaoBudget = providerBudgetPerGroup - tourBudget;
       const searches = intents.flatMap(intent => {
         const queries = explorationSearchQueries(groupId, intent.query,
@@ -243,7 +249,7 @@ export async function exploreCandidateGroups(input: {
           providerCalls++;
           return searchKakaoPlacesRemote({
           region: search.intent.region, query: search.query,
-          category: ["shopping", "nightview", "beach", "nature"].includes(groupId)
+          category: ["shopping", "nightview", "beach", "nature", "experience", "festival"].includes(groupId)
             ? undefined : providerCategoryForResearchIntent(search.intent),
           includeShopping: groupId === "shopping", page: search.page,
           });
@@ -256,23 +262,28 @@ export async function exploreCandidateGroups(input: {
             recordRetrieval(venue, `${search.intent.region}:${search.query}`,
               search.primary, (search.page - 1) * 15 + index);
           }
-      if (tourBudget && [...candidates.keys()].filter(id => !alreadyPresented.has(id)).length < 8) {
-        const tour = await Promise.all(intents.slice(0, tourBudget).map(intent => limitedProviderCall(() => {
+      if (tourBudget && tourType) {
+        const tourIntent = intents[0];
+        const tour = await Promise.all(Array.from({ length: tourBudget }, (_, index) => index + 1)
+          .map(page => limitedProviderCall(() => {
           providerCalls++;
           return searchTourPlacesRemote({
-          region: intent.region, query: intent.query, category: intent.category, page: 1,
+          region: tourIntent.region, query: tourDiscoveryQuery(tourType, tourIntent.query),
+          category: tourIntent.category, tourContentTypeId: tourType, page,
           });
         }).catch(() => null)));
-        for (const [intentIndex, response] of tour.entries()) if (response?.ok)
+        for (const [pageIndex, response] of tour.entries()) if (response?.ok)
           for (const [index, venue] of response.places.entries())
             if (explorationGroupMatch(venue, groupId, true)) {
               candidates.set(dateCandidateKey(venue), venue);
-              recordRetrieval(venue, `tour:${intents[intentIndex].region}:${intents[intentIndex].query}`,
-                true, index);
+              recordRetrieval(venue, `tour:${tourIntent.region}:${tourType}`,
+                true, pageIndex * 15 + index);
             }
       }
     }
-    const fresh = [...candidates.values()];
+    const tripDays = state.dateLabel ? Array.from({ length: courseSize(state).days }, (_, day) => tripDayYmd(state, day)) : [];
+    const fresh = [...candidates.values()].filter(venue => venue.category !== "festival"
+      || !tripDays.length || !venue.openingHours || tripDays.some(day => festivalPeriodCoversYmd(venue.openingHours, day)));
     // Choose a small evidence shortlist from several search variants before
     // quality facts can affect final ranking.
     const evidenceShortlist = [...fresh].sort((a, b) => {

@@ -25,6 +25,19 @@ const prefs = (activities: CandidateExplorationPreferences["activities"]): Candi
 });
 
 describe("P3.25 candidate exploration", () => {
+  it("recognizes festival requests and provider-specific experience and shopping types", () => {
+    expect(initialExplorationPreferences("전주 축제랑 체험하고 쇼핑하고 싶어", state).activities)
+      .toEqual(["shopping", "experience", "festival"]);
+    const typed = (typeId: string, category: DiscoverCandidate["category"]) => ({
+      ...venue(990, category), externalSource: "tourapi" as const,
+      tourContentTypeId: typeId, kakaoCategoryGroupCode: undefined,
+      categoryLabel: typeId === "38" ? "쇼핑" : typeId === "28" ? "레포츠" : "축제·행사",
+    });
+    expect(explorationGroupMatch(typed("38", "tourist"), "shopping")).toBe(true);
+    expect(explorationGroupMatch(typed("28", "tourist"), "experience")).toBe(true);
+    expect(explorationGroupMatch(typed("15", "festival"), "festival")).toBe(true);
+    expect(explorationGroupMatch(typed("12", "tourist"), "shopping", true)).toBe(false);
+  });
   it("keeps discovery interests separate from explicit itinerary requirements", () => {
     const initial = { ...state, explicitPlanningSelections: { activities: ["exhibit" as const] } };
     const interest = explorationStateForActivities(initial, prefs(["cafe", "meal"]));

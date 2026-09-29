@@ -13,6 +13,9 @@ import {
   type HarshMealAllow,
 } from "@/features/ai/dateCourse";
 import { publicPlaceFactLine } from "@/lib/openai/placeWebFacts";
+import { classifyDiscoveryIntents } from "@/lib/kakao/placeClassification";
+import type { TourSearchInput } from "@/lib/tourapi/client";
+import { tourDiscoveryQuery } from "@/lib/tourapi/discoveryTypes";
 
 export const PLACE_PICK_MIN = 3;
 export const PLACE_PICK_MAX = 5;
@@ -78,12 +81,36 @@ export function placeSearchPlans(ask: PlaceAsk): PlaceSearchPlan[] {
       push({ query: "보드게임카페", page: 1 });
       push({ query: "공방 체험", page: 1 });
     }
+  } else if (ask.kind === "shopping") {
+    push({ query: words.length ? words.join(" ") : "쇼핑몰", page: 1 });
+    push({ query: "백화점", page: 1 });
+    push({ query: "시장", page: 1 });
+    push({ query: "소품샵", page: 1 });
+  } else if (ask.kind === "festival") {
+    push({ query: words.length ? words.join(" ") : "축제", page: 1 });
+    push({ query: "지역 축제", page: 1 });
   } else {
     push({ query: words.length ? words.join(" ") : "명소", page: 1 });
     push({ query: "가볼만한곳", page: 1 });
     push({ category: "tourist", page: 1 });
   }
   return plans;
+}
+
+/** A direct chat request uses the same TourAPI source taxonomy as candidate exploration. */
+export function placeTourSearch(ask: PlaceAsk): TourSearchInput | null {
+  const typeId = ask.kind === "shopping" ? "38"
+    : ask.kind === "festival" ? "15"
+      : ask.kind === "activity" ? "28"
+        : ask.kind === "exhibit" ? "14" : null;
+  if (!typeId) return null;
+  return {
+    region: ask.area,
+    category: ask.kind === "festival" ? "festival" : ask.kind === "exhibit" ? "photo" : "tourist",
+    tourContentTypeId: typeId,
+    query: tourDiscoveryQuery(typeId, ask.query),
+    page: 1,
+  };
 }
 
 export function placeAskHarshAllow(message: string, ask: PlaceAsk, base: HarshMealAllow): HarshMealAllow {
@@ -97,12 +124,15 @@ export function placeAskHarshAllow(message: string, ask: PlaceAsk, base: HarshMe
 
 export function matchesPlaceKind(candidate: DiscoverCandidate, kind: PlaceAskKind) {
   const blob = venueBlob(candidate);
+  if (kind === "shopping" || kind === "festival") return classifyDiscoveryIntents(candidate)
+    .some(signal => signal.kind === kind);
   if (kind === "restaurant") return matchesActivity(candidate, "meal");
   if (kind === "cafe") return matchesActivity(candidate, "cafe") || /베이커리|디저트|빵/.test(blob);
   if (kind === "dessert") return matchesActivity(candidate, "cafe") || /베이커리|디저트|빵|케이크|아이스크림|젤라또|마카롱|도넛|와플/.test(blob);
   if (kind === "bar") return /주점|술집|바|이자카야|와인|칵테일|펍|호프|포차|맥주|하이볼|위스키|사케|막걸리|전통주/.test(blob) || matchesActivity(candidate, "meal");
   if (kind === "exhibit") return matchesActivity(candidate, "exhibit") || /팝업|공연|극장|영화/.test(blob);
-  if (kind === "activity") return matchesActivity(candidate, "indoor") || /공방|체험|클래스|피크닉|공원|산책|야경|전망|루프탑/.test(blob) || matchesActivity(candidate, "walk");
+  if (kind === "activity") return classifyDiscoveryIntents(candidate).some(signal => signal.kind === "experience")
+    || matchesActivity(candidate, "indoor") || /공방|체험|클래스|방탈출|볼링|보드게임/.test(blob);
   return true;
 }
 

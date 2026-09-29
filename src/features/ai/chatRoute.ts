@@ -26,6 +26,8 @@ export const PLACE_KIND_LABEL: Record<PlaceAskKind, string> = {
   dessert: "디저트",
   exhibit: "전시",
   activity: "놀거리",
+  shopping: "쇼핑 장소",
+  festival: "축제·행사",
   spot: "장소",
 };
 
@@ -39,6 +41,8 @@ const CAFE_NOUN = /카페|커피|디저트|베이커리|빵집|케이크|마카�
 const BAR_NOUN = /술집|와인바|와인|칵테일|루프탑바|이자카야|맥주|펍|포차|하이볼|사케|위스키|막걸리|전통주|한잔/;
 const EXHIBIT_NOUN = /전시|미술관|갤러리|박물관|팝업|팝업스토어|공연|연극|뮤지컬|영화관|미디어아트/;
 const ACTIVITY_NOUN = /놀거리|방탈출|보드게임|볼링|오락실|만화카페|VR|공방|클래스|체험|노래방|피크닉|공원|산책|야경|전망대|루프탑/;
+const SHOPPING_NOUN = /쇼핑|아울렛|아웃렛|백화점|전통시장|소품샵|편집샵|상점가/;
+const FESTIVAL_NOUN = /축제|페스티벌|지역\s*행사/;
 const ASK_VERB = /추천|알려|어디|어때|있어|있나|있을까|찾아|소개|골라|뭐가\s*좋|맛있는|유명한|괜찮은|잘\s*하는|핫한|인기|리스트|목록|어디가\s*좋|좋은\s*(?:곳|데)|갈만한|가볼만한|먹을\s*(?:곳|데|만한)|마실\s*(?:곳|데)|볼만한|어디\s*(?:갈|가)|몇\s*곳|몇\s*개/;
 const COURSE_WORD = /코스|일정|동선|짜\s*줘|짜줘|짜\s*봐|짜주|계획|플랜|하루\s*(?:를|을)?\s*(?:보내|채워)|데이트\s*(?:하고|할|하자|가자|짜)|여행\s*(?:가|하|짜|일정)|1박|2박|당일치기|오후부터|저녁부터|밤부터|스케줄|루트/;
 const QUESTION_WORD = /주차|영업\s*시간|몇\s*시(?:까지|부터|에)|언제\s*(?:열|닫|까지)|휴무|브레이크\s*타임|예약|웨이팅|줄\s*서|예산|얼마|가격|비싸|저렴|메뉴\s*(?:가|는|뭐|추천)|뭐가\s*유명|시그니처|대표\s*메뉴|왜\s*(?:골랐|추천|여기)|차이|비교|어느\s*(?:게|쪽)|둘\s*중|뭐가\s*(?:더|나)|비\s*오면|날씨|가는\s*법|어떻게\s*가|지하철|버스|택시|거리|멀어|가까워|걸어서|몇\s*분|소요|애견|반려|아이|유아|휠체어|콜키지|주류|와이파이|콘센트|노키즈|룸\s*있|단체|기념일|프로포즈|선물|뭐\s*입|옷/;
@@ -46,6 +50,8 @@ const MORE_WORD = /다른\s*(?:곳|데|집|가게)|더\s*(?:보여|알려|추천
 const PICK_FROM_SHOWN = /이\s*중(?:에서|에)?|여기\s*중|위\s*(?:에서|중)|이걸로|이거로|얘로|여기로|이\s*집(?:으로|들로)?|얘들로|이곳으로|여기랑|번(?:이랑|하고|과|,|\s)|번으로|번\s*(?:가|갈|넣)/;
 
 export function detectPlaceKind(message: string): PlaceAskKind | null {
+  if (FESTIVAL_NOUN.test(message)) return "festival";
+  if (SHOPPING_NOUN.test(message)) return "shopping";
   if (BAR_NOUN.test(message)) return "bar";
   if (CAFE_NOUN.test(message)) {
     return /디저트|케이크|마카롱|젤라또|아이스크림|와플|도넛|타르트|크로플/.test(message) && !/카페|커피/.test(message) ? "dessert" : "cafe";
@@ -70,6 +76,8 @@ export function placeQueryFromMessage(message: string, kind: PlaceAskKind) {
   if (kind === "dessert") return "디저트";
   if (kind === "exhibit") return "전시";
   if (kind === "activity") return "놀거리";
+  if (kind === "shopping") return "쇼핑";
+  if (kind === "festival") return "축제";
   return "명소";
 }
 

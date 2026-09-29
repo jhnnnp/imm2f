@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { classifyKakaoPlace, classifyPlaceExperiences, isShoppingSearch } from "./placeClassification";
+import { classifyDiscoveryIntents, classifyKakaoPlace, classifyPlaceExperiences,
+  isShoppingSearch, shoppingSubtype } from "./placeClassification";
 
 describe("shared Kakao place classification", () => {
   it.each([
@@ -41,5 +42,36 @@ describe("experience search signals", () => {
       .toEqual([]);
     expect(classifyPlaceExperiences({ name: "왕십리 쇼핑몰", detailedCategory: "가정,생활 > 쇼핑몰" }))
       .toEqual([]);
+  });
+});
+
+describe("cross-provider discovery classification", () => {
+  it("uses TourAPI's shopping, leisure, festival and culture source types", () => {
+    for (const [type, kind] of [["38", "shopping"], ["28", "experience"],
+      ["15", "festival"], ["14", "culture"]] as const) {
+      expect(classifyDiscoveryIntents({ externalSource: "tourapi", name: "지역 장소",
+        tourContentTypeId: type })).toContainEqual({ kind, source: "provider_category" });
+    }
+    expect(shoppingSubtype({ externalSource: "tourapi", name: "전주 남부시장",
+      tourContentTypeId: "38" })).toBe("market");
+  });
+
+  it("finds a Kakao workshop and design shop from taxonomy without a group code", () => {
+    expect(classifyDiscoveryIntents({ externalSource: "kakao", name: "도자기 작업실",
+      detailedCategory: "문화,예술 > 공방" })).toContainEqual({ kind: "experience", source: "provider_category" });
+    expect(classifyDiscoveryIntents({ externalSource: "kakao", name: "디자인문구 가게",
+      detailedCategory: "가정,생활 > 문구,사무용품 > 디자인문구" }))
+      .toContainEqual({ kind: "shopping", source: "provider_category" });
+  });
+
+  it("does not promote a search hit, supermarket or tour desk into a venue intent", () => {
+    expect(classifyDiscoveryIntents({ externalSource: "kakao", name: "쇼핑 여행 안내소",
+      detailedCategory: "여행 > 관광안내소" })).toEqual([]);
+    expect(classifyDiscoveryIntents({ externalSource: "kakao", name: "동네 슈퍼마켓",
+      detailedCategory: "가정,생활 > 슈퍼마켓", kakaoCategoryGroupCode: "MT1" })).toEqual([]);
+    expect(classifyDiscoveryIntents({ externalSource: "kakao", name: "지역 장소",
+      detailedCategory: "여행 > 관광명소" })).toEqual([]);
+    expect(classifyDiscoveryIntents({ externalSource: "tourapi", name: "전주시 농수산물도매시장",
+      tourContentTypeId: "38" })).toEqual([]);
   });
 });

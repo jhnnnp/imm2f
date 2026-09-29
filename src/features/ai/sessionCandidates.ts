@@ -181,6 +181,7 @@ function venueSnapshot(venue: DiscoverCandidate): DiscoverCandidate {
       sourceUrl: venue.performanceEvent.sourceUrl.slice(0, 500) } : undefined,
     image: short(venue.image, 500), detailedCategory: short(venue.detailedCategory, 180),
     kakaoCategoryGroupCode: venue.kakaoCategoryGroupCode,
+    tourContentTypeId: venue.tourContentTypeId,
     searchRegion: short(venue.searchRegion, 120), distanceMeters: venue.distanceMeters,
     openingHours: short(venue.openingHours, 180), rating: venue.rating,
     ratingCount: venue.ratingCount, dishes: short(venue.dishes, 180),

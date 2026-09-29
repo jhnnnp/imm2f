@@ -15,16 +15,16 @@ type RouterPayload = {
 };
 
 const MODES = new Set<ChatMode>(["course", "places", "question", "chat"]);
-const KINDS = new Set<PlaceAskKind>(["restaurant", "cafe", "bar", "dessert", "exhibit", "activity", "spot"]);
+const KINDS = new Set<PlaceAskKind>(["restaurant", "cafe", "bar", "dessert", "exhibit", "activity", "shopping", "festival", "spot"]);
 
 const ROUTER_PROMPT = [
   "You triage one turn of a Korean couple-date chat. Decide what the user wants right now. Return JSON only.",
   '{"mode":"course|places|question|chat","area":null,"placeKind":null,"query":null,"pickedPlaces":[],"edit":null}',
   "course: they want a whole date/trip itinerary built, rebuilt, or edited (add/swap/drop a stop, change pace, different course).",
-  "places: they want a list of specific venues of one kind (restaurants, cafes, bars, dessert, exhibitions, activities, spots) — recommend/알려줘/어디가 좋아/먹을 데. Not a full day.",
+  "places: they want a list of specific venues of one kind (restaurants, cafes, bars, dessert, exhibitions, activities, shopping, festivals, spots) — recommend/알려줘/어디가 좋아/먹을 데. Not a full day.",
   "question: they ask about the current course, a listed place, logistics (주차, 예약, 웨이팅, 영업시간, 예산, 거리, 비 오면), or want advice/comparison.",
   "chat: greeting, thanks, feedback without a concrete edit request, small talk, asking what you can do, or an unclear acknowledgement. Never generate or overwrite a course merely because the message is ambiguous.",
-  "area: only a city or neighborhood written in latestMessage, else null. placeKind: restaurant|cafe|bar|dessert|exhibit|activity|spot or null.",
+  "area: only a city or neighborhood written in latestMessage, else null. placeKind: restaurant|cafe|bar|dessert|exhibit|activity|shopping|festival|spot or null.",
   "query: the dish/cuisine/vibe words the user used for a places request (파스타, 한식, 와인, 조용한), else null.",
   "pickedPlaces: names from shownPlaces the user is choosing (by name or 1번/2번), else [].",
   "When currentCourse is non-empty and the message edits it, mode is course. When shownPlaces is non-empty and the message asks for more of the same, mode is places.",
