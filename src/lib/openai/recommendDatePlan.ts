@@ -10,7 +10,7 @@ import {
 } from "@/features/ai/dateCourse";
 import { completeJson } from "./client";
 import { enrichDateVenues } from "./enrichDateVenues";
-import { buildFallbackCourse, courseSelectionScore, discoveryCatalog, evaluateCourse, feasibleCourseSeeds, hasCafeSpaceEvidence, hasRequestedVenueEvidence, parseCourseProposals, planningStopGuidance, usefulVenueEvidence, wantsCafeAtmosphere, type CourseEvaluation } from "@/features/ai/courseDesign";
+import { buildFallbackCourse, courseSelectionScore, discoveryCatalog, evaluateCourse, evaluatePreparedCourse, feasibleCourseSeeds, hasCafeSpaceEvidence, hasRequestedVenueEvidence, parseCourseProposals, planningStopGuidance, usefulVenueEvidence, wantsCafeAtmosphere, type CourseEvaluation } from "@/features/ai/courseDesign";
 import { isOpenAiConfigured } from "./env";
 import { distanceMeters } from "@/features/places/geo";
 import { fetchFootRoute, type FootLeg, type FootRoute } from "@/lib/routing/footRoute";
@@ -23,6 +23,9 @@ import { buildCandidateGraph } from "@/features/ai/candidateGraph";
 import { affectedRepairDays, preservesUnchangedDays, repairAffectedStop } from "@/features/ai/targetedCourseRepair";
 import { hasSemanticPlanningHints, type SemanticPlanningHints } from "@/features/ai/semanticPlanningHints";
 import { itineraryOrderMatchesItems } from "@/features/trip/components/dayRoute";
+import type { ExperiencePlan } from "@/features/ai/experiencePlan";
+import type { ResearchPlan } from "@/features/ai/researchPlan";
+import type { CandidateExplorationPreferences } from "@/features/ai/candidateExploration";
 export { routeLegsFitSchedule } from "@/features/ai/dateVerifier";
 
 function hopBands(candidate: DiscoverCandidate, pool: DiscoverCandidate[]) {
@@ -243,7 +246,8 @@ const DESIGN_PROMPT = [
   "Dates are about the quality of venues, not filling every hour. Let arrival/departure windows and requested pace determine the number of stops, including one stop on a short travel day when feasible. Treat target.min as a day-coverage guide, not a mandatory venue quota. Respect explicit keepPlaces and cover every travel day. Do not add or remove stops merely to pad time.",
   "All selected IDs must exist in candidates. Each day_index must be 0..days-1. Include every requiredActivity and keepPlace. Never include excludedPlaces. Theme is a short Korean statement of the concept, not an unsupported claim about a venue.",
   "selectedAnchorIds are the user's chosen provider entities and must all appear by exact ID. Interest categories used during exploration are not mandatory itinerary activities. sameComplexGroups identify venues backed by provider names and addresses; place related stops on one day rather than revisiting the same complex on different days.",
-  "feasibleAlternatives are already checked against venue and straight-line distance constraints. You may select one using seedId instead of selected, and supply a thoughtful Korean theme based on its sourced observations. Search-linked observations have not been independently fact-checked. Prefer the alternative that best matches the couple, not merely the shortest route.",
+  "If experiencePlan, researchNeeds or explorationPreferences are supplied, use them to design the trip's day rhythm, search-supported experiences and pace. Their interests and research priorities are soft planning context; only dateIntent.hardConstraints, selectedAnchorIds and explicit keepPlaces are mandatory. Do not claim an unsupported venue quality merely because it appears in a preference.",
+  "Design the course yourself from candidates and return exact provider IDs. The validator checks venue identity, day coverage, schedule, route and user anchors after your proposal. Search-linked observations have not been independently fact-checked.",
   "planningPlaybook is curated advice on how to compare experiences. It is not evidence that any named venue is open, beautiful, tasty, or holding an event. User constraints and provider-verified facts always take precedence.",
   'Schema: {"courses":[{"theme":"short Korean course concept","selected":[{"id":"candidate ID","day_index":0,"duration_minutes":60}]}]}. No prose outside JSON.',
 ].join(" ");
@@ -281,6 +285,9 @@ export async function recommendDatePlanWithOpenAi(input: {
   semanticPlanningHints?: SemanticPlanningHints;
   /** ResearchPlan has already performed bounded quality research for this pool. */
   researchPlanActive?: boolean;
+  experiencePlan?: ExperiencePlan | null;
+  researchPlan?: ResearchPlan | null;
+  explorationPreferences?: CandidateExplorationPreferences;
 }): Promise<AIPlannerReply> {
   const startedAt = performance.now();
   const saved = preferredSavedNames(input.saved);
@@ -289,7 +296,6 @@ export async function recommendDatePlanWithOpenAi(input: {
     ...discoveryCatalog(input.candidates, input.state, saved, 54)
       .filter(candidate => !anchorIds.includes(dateCandidateKey(candidate)))];
   const candidateGraph = buildCandidateGraph(pool);
-  const constraints = { anchorIds, candidateGraph };
   const complexGroups = new Map<string, Set<string>>();
   for (const relation of candidateGraph.relations) {
     const members = complexGroups.get(relation.complexKey) ?? new Set<string>();
@@ -310,7 +316,6 @@ export async function recommendDatePlanWithOpenAi(input: {
     sourceUrl: candidate.factSourceUrl,
     neighbors: hopBands(candidate, pool),
   }));
-  const draftSeeds = feasibleCourseSeeds(pool, input.state, saved, constraints);
   const payload = {
     latestMessage: input.prompt.slice(0, 800), recentTurns: (input.conversation ?? []).slice(-10),
     brief: input.state.discovery, dateIntent: toDateIntent(input.state), areas: input.state.areas,
@@ -324,7 +329,29 @@ export async function recommendDatePlanWithOpenAi(input: {
     cuisine: input.state.cuisine, addStop: input.state.addStop,
     budgetWon: input.state.budgetWon, walkingPreference: input.state.walkingPreference,
     couple: input.coupleTaste, memory: input.memory, candidates: catalog,
-    feasibleAlternatives: draftSeeds.map((course, index) => ({ seedId: index, selected: course.rows, straightLineMeters: Math.round(course.meters) })),
+    explorationPreferences: input.explorationPreferences ? {
+      interests: input.explorationPreferences.activities,
+      cafeQualities: input.explorationPreferences.cafeQualities,
+      cuisines: input.explorationPreferences.cuisines,
+      shoppingKinds: input.explorationPreferences.shoppingKinds,
+      cultureKinds: input.explorationPreferences.cultureKinds,
+      additionalDetails: input.explorationPreferences.additionalDetails,
+      pace: input.explorationPreferences.pace,
+    } : undefined,
+    experiencePlan: input.experiencePlan ? {
+      objective: input.experiencePlan.objective,
+      overallPace: input.experiencePlan.overallPace,
+      strategy: input.experiencePlan.tripStrategy,
+      days: input.experiencePlan.days.map(day => ({ dayIndex: day.dayIndex, purpose: day.purpose,
+        density: day.density, geographicFocus: day.geographicFocus,
+        experiences: day.experienceBlocks.map(block => ({ purpose: block.purpose,
+          primaryExperience: block.primaryExperience, visitContext: block.visitContext,
+          supportingNeeds: block.supportingNeeds })) })),
+      qualitativeNeeds: input.experiencePlan.qualitativeNeeds,
+    } : undefined,
+    researchNeeds: input.researchPlan?.needs.map(need => ({ dayIndex: need.dayIndex,
+      kind: need.kind, purpose: need.purpose, category: need.category,
+      geographicFocus: need.geographicFocus, qualities: need.qualities })) ?? undefined,
   };
   let researchDoneAt = startedAt;
   let modelDoneAt = startedAt;
@@ -367,20 +394,21 @@ export async function recommendDatePlanWithOpenAi(input: {
   let winner: CourseEvaluation | undefined;
   let feasibleModels: CourseEvaluation[] = [];
   const rank = (raw: unknown) => {
-    const resolved = Array.isArray(raw) ? raw.map(value => {
-      if (!value || typeof value !== "object") return value;
-      const seed = Number.isInteger(value.seedId) ? draftSeeds[value.seedId] : undefined;
-      return seed ? { ...value, selected: seed.rows } : value;
-    }) : raw;
-    const proposals = parseCourseProposals(resolved, days);
+    const proposals = parseCourseProposals(raw, days);
     considered += proposals.length;
     if (!proposals.length) rejectionReasons.add("모델이 유효한 코스 구조를 반환하지 않음");
-    return proposals.map(proposal => {
-      const evaluated = evaluateCourse(proposal, grounded, input.state, saved, groundedConstraints);
+    const groundedIds = new Set(grounded.map(dateCandidateKey));
+    return proposals.flatMap(proposal => {
+      if (proposal.rows.some(row => !row.id || !groundedIds.has(row.id))) {
+        rejectionReasons.add("모델이 확인되지 않은 장소를 제안함");
+        return [];
+      }
+      // Keep the model's exact day and stop order. Validation must not silently optimize it.
+      const evaluated = evaluatePreparedCourse(proposal, proposal.rows, grounded, input.state, saved, groundedConstraints);
       evaluated.hardIssues.forEach(issue => rejectionReasons.add(issue.message));
       evaluated.issues.forEach(issue => observedIssueCodes.add(issue.code));
       if (evaluated.hardIssues.length) failedCourses.push(evaluated);
-      return evaluated;
+      return [evaluated];
     }).sort((a, b) => a.hardIssues.length - b.hardIssues.length || b.score - a.score);
   };
   if (isOpenAiConfigured() && grounded.length >= 2) {
@@ -407,10 +435,13 @@ export async function recommendDatePlanWithOpenAi(input: {
   let degraded = !winner;
   type RankedOption = { course: CourseEvaluation; deterministicSeed: boolean };
   const bySequence = new Map<string, RankedOption>();
-  for (const course of seeds) bySequence.set(course.rows.map(row => `${row.day_index}:${row.id}`).join("|"), { course, deterministicSeed: true });
   for (const course of feasibleModels) {
     const key = course.rows.map(row => `${row.day_index}:${row.id}`).join("|");
-    if (!bySequence.has(key)) bySequence.set(key, { course, deterministicSeed: false });
+    bySequence.set(key, { course, deterministicSeed: false });
+  }
+  for (const course of seeds) {
+    const key = course.rows.map(row => `${row.day_index}:${row.id}`).join("|");
+    if (!bySequence.has(key)) bySequence.set(key, { course, deterministicSeed: true });
   }
   for (const failed of failedCourses.slice(0, 3)) {
     const repaired = repairAffectedStop(failed, grounded, input.state, saved, groundedConstraints);
@@ -420,9 +451,11 @@ export async function recommendDatePlanWithOpenAi(input: {
   }
   const stableKey = (option: RankedOption) => option.course.rows.map(row => `${row.day_index}:${row.id}`).join("|");
   const rankedOptions = [...bySequence.values()].sort((a, b) =>
-    courseSelectionScore(b.course, undefined, b.deterministicSeed) - courseSelectionScore(a.course, undefined, a.deterministicSeed)
+    Number(a.deterministicSeed) - Number(b.deterministicSeed)
+    || courseSelectionScore(b.course) - courseSelectionScore(a.course)
     || stableKey(a).localeCompare(stableKey(b)));
   winner = rankedOptions[0]?.course;
+  degraded = rankedOptions[0]?.deterministicSeed ?? true;
   let walkingRoute: FootRoute | null = null;
   const routeOptions = rankedOptions.slice(0, 5);
   const wantsWalkingRoute = days === 1 && !isTravelPlan(input.state) && input.state.discovery?.transport !== "drive"
@@ -460,8 +493,9 @@ export async function recommendDatePlanWithOpenAi(input: {
         Boolean(item.route && item.verification.passed));
       if (valid.length) rejectionReasons.add("실제 경로 검증 후 코스를 다시 계획함");
     }
-    valid.sort((a, b) => courseSelectionScore(b.course, b.route.meters, b.deterministicSeed)
-      - courseSelectionScore(a.course, a.route.meters, a.deterministicSeed) || stableKey(a).localeCompare(stableKey(b)));
+    valid.sort((a, b) => Number(a.deterministicSeed) - Number(b.deterministicSeed)
+      || courseSelectionScore(b.course, b.route.meters)
+      - courseSelectionScore(a.course, a.route.meters) || stableKey(a).localeCompare(stableKey(b)));
     if (valid.length) {
       winner = valid[0].course;
       walkingRoute = valid[0].route;

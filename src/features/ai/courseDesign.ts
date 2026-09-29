@@ -19,11 +19,9 @@ export type CourseProposal = { theme: string; rows: DateCourseRow[] };
 export type CourseEvaluation = CourseProposal & { score: number; meters: number; longestHop: number; evidenceCount: number; problems: string[]; issues: PlanningIssue[];
   hardIssues: PlanningIssue[]; softIssues: PlanningIssue[]; qualitySignals: PlanningQualitySignal[]; transformations: PlanningTransformation[];
   scoreBreakdown?: { venues: number; evidence: number; diversity: number; route: number; flow: number; pacing: number; schedule: number; violations: number } };
-/** A verified deterministic seed is the stable baseline; an LLM alternative
- * must improve venue/experience quality enough to displace it. Walking detour
- * is charged only beyond the straight-line distance already in course.score. */
-export function courseSelectionScore(course: CourseEvaluation, walkingMeters?: number, deterministicSeed = false) {
-  return course.score + (deterministicSeed ? 6 : 0)
+/** Compare feasible courses without granting a source-based scoring bonus. */
+export function courseSelectionScore(course: CourseEvaluation, walkingMeters?: number) {
+  return course.score
     - Math.max(0, (walkingMeters ?? course.meters) - course.meters) / 350;
 }
 const finite = (n: unknown, fallback: number) => typeof n === "number" && Number.isFinite(n) ? n : fallback;
@@ -220,16 +218,20 @@ export function parseCourseProposals(value: unknown, days: number): CoursePropos
   return value.slice(0, 4).flatMap(raw => {
     if (!raw || typeof raw !== "object") return [];
     const object = raw as Record<string, unknown>;
-    if (!Array.isArray(object.selected)) return [];
-    const rows = object.selected.slice(0, Math.min(28, 4 * days)).flatMap(item => {
-      if (!item || typeof item !== "object") return [];
+    if (!Array.isArray(object.selected) || !object.selected.length
+      || object.selected.length > Math.min(28, Math.max(5, 4 * days))) return [];
+    const rows = object.selected.map(item => {
+      if (!item || typeof item !== "object") return null;
       const row = item as Record<string, unknown>;
-      if (typeof row.id !== "string") return [];
-      const day = finite(row.day_index, 0);
-      if (!Number.isInteger(day) || day < 0 || day >= days) return [];
-      return [{ id: row.id, day_index: day, duration_minutes: Math.max(30, Math.min(180, finite(row.duration_minutes, 60))) }];
+      if (typeof row.id !== "string" || !row.id.trim()
+        || !Number.isInteger(row.day_index) || Number(row.day_index) < 0 || Number(row.day_index) >= days
+        || !Number.isInteger(row.duration_minutes) || Number(row.duration_minutes) < 30
+        || Number(row.duration_minutes) > 180) return null;
+      return { id: row.id, day_index: Number(row.day_index), duration_minutes: Number(row.duration_minutes) };
     });
-    return rows.length ? [{ theme: typeof object.theme === "string" ? object.theme.replace(/[\n*_#]/g, " ").trim().slice(0, 90) : "", rows }] : [];
+    return rows.some(row => row === null) ? []
+      : [{ theme: typeof object.theme === "string" ? object.theme.replace(/[\n*_#]/g, " ").trim().slice(0, 90) : "",
+        rows: rows as DateCourseRow[] }];
   });
 }
 

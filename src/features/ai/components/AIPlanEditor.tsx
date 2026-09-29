@@ -39,7 +39,7 @@ import { exploreCandidateGroups, prepareCandidateExploration, replaceRejectedCan
   updateCandidateExplorationChoices } from "../candidateExplorationActions";
 import type { CandidateExplorationPreferences, CandidateGroup, ExplorationActivity,
   ExplorationCard, ItineraryPlanningInput } from "../candidateExploration";
-import { refinementGroupForMessage, retainExplorationChoices } from "../candidateExploration";
+import { maxSelectedExplorationPlaces, refinementGroupForMessage, retainExplorationChoices } from "../candidateExploration";
 import type { ExperiencePlan } from "../experiencePlan";
 import type { ResearchPlan } from "../researchPlan";
 import { selectedAreas } from "../dateBrief";
@@ -730,6 +730,16 @@ export function AIPlanEditor({
 
   async function planSelectedCandidates() {
     if (!exploration?.groups || !explorationSelectedIds.length || explorationBusy) return;
+    if (explorationSelectedIds.length > maxSelectedExplorationPlaces(plannerState.nights)) {
+      setConversation(current => [...current, { role: "assistant",
+        text: `이번 일정에서는 최대 ${maxSelectedExplorationPlaces(plannerState.nights)}곳까지 고를 수 있어요. 선택한 장소를 줄여 주세요.` }]);
+      return;
+    }
+    if (!exploration.researchPlan) {
+      setConversation(current => [...current, { role: "assistant",
+        text: "탐색 조건이 바뀌었어요. 장소를 다시 찾은 뒤 일정을 만들어 주세요." }]);
+      return;
+    }
     setExplorationBusy(true);
     setLoadingSeconds(0);
     try {
@@ -739,10 +749,11 @@ export function AIPlanEditor({
       if (!verified) throw new Error("unverified_session");
       sessionCandidatesRef.current = verified;
       const planningInput: ItineraryPlanningInput = { experiencePlan: exploration.experiencePlan,
-        researchPlan: exploration.researchPlan!, selectedCandidateIds: [...explorationSelectedIds],
-        rejectedCandidateIds: [...explorationRejectedIds], candidatePool: verified };
+        researchPlan: exploration.researchPlan, selectedCandidateIds: [...explorationSelectedIds],
+        rejectedCandidateIds: [...explorationRejectedIds], preferences: exploration.preferences,
+        candidatePool: verified };
       await runGenerate(plannerState, `${exploration.request}\n선택한 장소를 포함해서 일정 짜줘`, "선택한 장소로 일정 짜기",
-        planningInput.selectedCandidateIds, planningInput.rejectedCandidateIds);
+        planningInput);
     } catch {
       setConversation(current => [...current, { role: "assistant",
         text: "선택한 장소를 확인하지 못했어요. 다시 선택하거나 잠시 후 시도해 주세요." }]);
@@ -750,9 +761,9 @@ export function AIPlanEditor({
   }
 
   async function runGenerate(nextState: AIPlannerState, message: string, displayText?: string,
-    selectedCandidateIds?: string[], rejectedCandidateIds?: string[]) {
+    planningInput?: ItineraryPlanningInput) {
     const request = message.trim();
-    if (candidateExplorationActive && !selectedCandidateIds && !recommendation) {
+    if (candidateExplorationActive && !planningInput && !recommendation) {
       if (exploration?.groups && request) {
         const groupId = refinementGroupForMessage(exploration.groups, request, activeExplorationGroup);
         if (groupId) {
@@ -832,7 +843,7 @@ export function AIPlanEditor({
         dateLabel: startDate || undefined,
         conversation: nextTurns.map(turn => ({ role: turn.role, text: turn.text })),
         planningSessionId, sessionCandidates: sessionCandidatesRef.current,
-        selectedCandidateIds, rejectedCandidateIds,
+        planningInput,
       });
       if (ticket !== requestIdRef.current) return;
       const result = response.result;
@@ -933,7 +944,9 @@ export function AIPlanEditor({
             rejectedIds={explorationRejectedIds} busy={explorationBusy}
             planned={Boolean(recommendation)}
             onSearch={() => void searchExploration()}
-            onSelect={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
+            onSelect={card => { if (!explorationSelectedIds.includes(card.candidateId)
+              && explorationSelectedIds.length >= maxSelectedExplorationPlaces(plannerState.nights)) return;
+              setActiveExplorationGroup(exploration.groups?.find(group =>
               group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
               if (card.groupId) explorationGroupById.current[card.candidateId] = card.groupId;
               setExplorationSelectedIds(current => current.includes(card.candidateId)

@@ -193,6 +193,28 @@ export function validateExperiencePlan(raw: unknown, input: ExperiencePlanInput)
   return { ...raw, days } as ExperiencePlan;
 }
 
+/** Recheck a client-carried P2 plan at the server-action boundary. Its contents
+ * remain planning context; required activities come from the current brief. */
+export function validateExperiencePlanHandoff(raw: unknown, input: {
+  days: number; pace: AIPlannerState["pace"]; requiredElements: DateActivityId[];
+  requiredPlaces: string[]; excludedPlaces: string[];
+}): ExperiencePlan | null {
+  if (!record(raw) || raw.overallPace !== input.pace
+    || !Array.isArray(raw.requiredElements)
+    || raw.requiredElements.some(item => !experienceIds.has(String(item)))
+    || !Array.isArray(raw.qualitativeNeeds)) return null;
+  return validateExperiencePlan(raw, {
+    message: "", objective: "", days: input.days, pace: input.pace,
+    hardConstraints: { requiredPlaces: input.requiredPlaces,
+      excludedPlaces: input.excludedPlaces } as ExperiencePlanInput["hardConstraints"],
+    activitySignals: input.requiredElements.map(activity => ({ activity,
+      origin: "explicit_constraint", explicit: true })),
+    qualitativeNeeds: raw.qualitativeNeeds as ExperienceQuality[],
+    semanticPreferences: [], timeWindow: { startTime: null, endTime: null, dayWindows: {} },
+    sessionFeedback: [],
+  });
+}
+
 export type ExperiencePlanComparison = { plannedDensities: ExperienceDensity[];
   legacyMinStops: number; legacySpine: DateActivityId[];
   plannedExperienceCount: number; supportingMealOrCafeCount: number;

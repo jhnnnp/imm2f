@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { CAFE_CHOICES, CULTURE_CHOICES, CUISINE_CHOICES, EXPLORATION_ACTIVITIES,
-  SHOPPING_CHOICES, type CandidateExplorationPreferences, type CandidateGroup,
+  SHOPPING_CHOICES, maxSelectedExplorationPlaces, type CandidateExplorationPreferences, type CandidateGroup,
   type ExplorationActivity, type ExplorationCard } from "../candidateExploration";
 import { kakaoPlaceUrl } from "@/features/places/format";
 import { openPlaceMiniWindow } from "@/features/places/openPlaceMini";
@@ -40,6 +40,7 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
 }) {
   const [refinements, setRefinements] = useState<Partial<Record<ExplorationActivity, string>>>({});
   const chosen = selectedCards.filter(card => selectedIds.includes(card.candidateId));
+  const selectionLimit = maxSelectedExplorationPlaces(nights);
   const pendingGroups = groups && preferences.activities.filter(id => !groups.some(group => group.id === id));
   const toggle = (id: ExplorationActivity) => {
     const activities = preferences.activities.includes(id)
@@ -167,7 +168,8 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
                 </div>
               </div>
               <div className="candidate-card-actions"><button type="button" className="candidate-select"
-                aria-pressed={selected} disabled={busy} onClick={() => onSelect(card)}>{selected ? "선택 취소" : "장소 선택"}</button>
+                aria-pressed={selected} disabled={busy || !selected && selectedIds.length >= selectionLimit}
+                onClick={() => onSelect(card)}>{selected ? "선택 취소" : "장소 선택"}</button>
                 <button type="button" className="candidate-detail" onClick={() => onDetail(card)}>상세보기</button>
                 <button type="button" className="candidate-map"
                   onClick={() => openPlaceMiniWindow(candidateKakaoUrl(card), "kakao")}
@@ -190,7 +192,8 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
         {!busy && <button type="button" onClick={onSearch}>남은 후보 다시 찾기</button>}
         {busy && <span className="candidate-pending-pulse" aria-hidden="true" />}
       </div>}
-      <footer className="candidate-selection-summary"><div><b>선택한 장소 {selectedIds.length}곳</b>
+      <footer className="candidate-selection-summary"><div><b>선택한 장소 {selectedIds.length}/{selectionLimit}곳</b>
+        {selectedIds.length >= selectionLimit && <p role="status">{nights > 0 ? `${nights}박 ${nights + 1}일` : "하루"} 일정에 담을 수 있는 선택 장소 수에 도달했어요. 다른 곳을 고르려면 먼저 선택을 취소해 주세요.</p>}
         <div>{chosen.map(card => <button type="button" key={card.candidateId} onClick={() => onSelect(card)}
           aria-label={`${card.name} 선택 취소`}>{card.name} ×</button>)}</div></div>
         <button type="button" className="candidate-primary" onClick={onPlan} disabled={busy || !selectedIds.length || nights > 6}>

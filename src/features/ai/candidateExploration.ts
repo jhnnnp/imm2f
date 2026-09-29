@@ -41,8 +41,15 @@ export type CandidateExplorationState = { experiencePlan: ExperiencePlan | null;
   rejectedCandidateIds: string[]; shownCandidateIds: string[] };
 export type ItineraryPlanningInput = { experiencePlan: ExperiencePlan | null;
   researchPlan: ResearchPlan; selectedCandidateIds: string[]; rejectedCandidateIds: string[];
+  preferences: CandidateExplorationPreferences;
   /** Existing signed session candidate snapshot, not a new candidate source of truth. */
   candidatePool: SessionCandidateContext | null };
+
+/** Leave room for supporting stops while keeping the signed anchor limit aligned with the UI. */
+export function maxSelectedExplorationPlaces(nights: number) {
+  const days = Math.max(1, Math.min(7, (Number.isFinite(nights) ? Math.trunc(nights) : 0) + 1));
+  return Math.min(12, days * 2 + 2);
+}
 
 export const EXPLORATION_ACTIVITIES: Array<{ id: ExplorationActivity; label: string }> = [
   { id: "beach", label: "바다/산책" }, { id: "culture", label: "전시/문화" },

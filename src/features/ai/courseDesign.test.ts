@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import { emptyDateBrief, isExclusiveCrawl } from "./dateBrief";
 import { candidateActivitySlot } from "./dateCourse";
-import { courseSelectionScore, decisionUsefulVenueObservation, discoveryCatalog, evaluateCourse, feasibleCourseSeeds, hardCourseProblems, hasRequestedVenueEvidence, usefulVenueEvidence, venueQuality } from "./courseDesign";
+import { courseSelectionScore, decisionUsefulVenueObservation, discoveryCatalog, evaluateCourse, evaluatePreparedCourse, feasibleCourseSeeds, hardCourseProblems, hasRequestedVenueEvidence, parseCourseProposals, usefulVenueEvidence, venueQuality } from "./courseDesign";
 
 function venue(id: string, name: string, category: DiscoverCandidate["category"], x: number): DiscoverCandidate {
   return {
@@ -15,6 +15,17 @@ function venue(id: string, name: string, category: DiscoverCandidate["category"]
 }
 
 describe("course design", () => {
+  it("checks a model proposal in its original order and rejects malformed rows as a whole", () => {
+    const places = [venue("a", "식당", "restaurant", 127.04), venue("b", "카페", "cafe", 127.042),
+      venue("c", "산책", "tourist", 127.041)];
+    const rows = places.map(item => ({ id: `kakao:${item.externalPlaceId}`, day_index: 0, duration_minutes: 60 }));
+    const proposal = { theme: "직접 고른 순서", rows };
+    const checked = evaluatePreparedCourse(proposal, proposal.rows, places, emptyDateBrief(), new Set());
+    expect(checked.rows.map(row => row.id)).toEqual(rows.map(row => row.id));
+    expect(checked.transformations).toEqual([]);
+    expect(parseCourseProposals([{ selected: [...rows, { id: "kakao:unknown", day_index: 3,
+      duration_minutes: 60 }] }], 1)).toEqual([]);
+  });
   it("rejects seafood venues even if an itinerary model selects them", () => {
     const meal = { ...venue("sea", "해물 파스타", "restaurant", 127.039), dishes: "봉골레 파스타" };
     const cafe = venue("c", "동네 카페", "cafe", 127.04);
@@ -205,12 +216,12 @@ describe("course design", () => {
     expect(venueQuality(strong, state)).toBeGreaterThan(venueQuality(base, state));
   });
 
-  it("keeps a stable feasible seed unless a model course is materially better", () => {
+  it("does not give deterministic seeds a score bonus", () => {
     const seed = { theme: "", rows: [], score: 50, meters: 600, longestHop: 300, evidenceCount: 2, problems: [] };
     const nearModel = { ...seed, score: 53 };
     const betterModel = { ...seed, score: 60 };
-    expect(courseSelectionScore(seed, 800, true)).toBeGreaterThan(courseSelectionScore(nearModel, 800));
-    expect(courseSelectionScore(betterModel, 800)).toBeGreaterThan(courseSelectionScore(seed, 800, true));
+    expect(courseSelectionScore(nearModel, 800)).toBeGreaterThan(courseSelectionScore(seed, 800));
+    expect(courseSelectionScore(betterModel, 800)).toBeGreaterThan(courseSelectionScore(nearModel, 800));
   });
 
   it("warns about a different neighborhood unless the area scope is explicit and strict", () => {

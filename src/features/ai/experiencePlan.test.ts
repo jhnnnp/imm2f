@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildDateContext } from "./dateContext";
 import { emptyDateBrief, withAreas } from "./dateBrief";
 import { toDateIntent } from "./dateIntent";
-import { buildExperiencePlanInput, compareExperiencePlanToLegacy, validateExperiencePlan,
+import { buildExperiencePlanInput, compareExperiencePlanToLegacy, validateExperiencePlan, validateExperiencePlanHandoff,
   type ExperienceBlock, type ExperiencePlan, type ExperienceQuality } from "./experiencePlan";
 import type { AIPlannerState } from "@/features/planning/types/plan";
 
@@ -29,6 +29,18 @@ const rawPlan = (days: Array<{ focus: string; density: "light" | "balanced" | "f
 });
 
 describe("P2 experience plan golden fixtures", () => {
+  it("revalidates the carried plan against the final trip span and pace", () => {
+    const plan = rawPlan([
+      { focus: "기장", density: "light", blocks: [block("해안 산책", "기장 바닷가")] },
+      { focus: "해운대", density: "balanced", blocks: [block("문화 체험", "해운대 문화 공간")] },
+    ]);
+    const handoff = { days: 2, pace: "balanced" as const, requiredElements: [],
+      requiredPlaces: [], excludedPlaces: [] };
+    expect(validateExperiencePlanHandoff(plan, handoff)?.days).toHaveLength(2);
+    expect(validateExperiencePlanHandoff(plan, { ...handoff, days: 3 })).toBeNull();
+    expect(validateExperiencePlanHandoff({ ...plan, overallPace: "active" }, handoff)).toBeNull();
+    expect(validateExperiencePlanHandoff({ ...plan, requiredElements: ["invented"] }, handoff)).toBeNull();
+  });
   it("normalizes a consistently one-based model day index without weakening other validation", () => {
     const request = "부산 1박2일 여행";
     const planningInput = inputFor(request, state(request, 1));

@@ -77,8 +77,12 @@ import { applyDateMemory, collectDateMemory } from "@/features/ai/dateMemory";
 import { discoveryCatalog } from "./courseDesign";
 import { planningFailureMessage } from "./planningFailureMessage";
 import { buildDateCandidatePool, type DateCandidateRecord } from "./dateCandidatePool";
+import { maxSelectedExplorationPlaces, validExplorationPreferences,
+  type ItineraryPlanningInput } from "./candidateExploration";
 import { buildDateContext, type DateContext } from "./dateContext";
 import { observeExperiencePlan } from "@/lib/openai/experiencePlan";
+import { validateExperiencePlanHandoff } from "./experiencePlan";
+import { resolveRequiredActivities } from "./planningRequirementProvenance";
 import { compareResearchSearches, evaluateResearchCoverage, executeResearchIntents, freshResearchCandidateEvidence,
   getResearchPlanMode, tryBuildResearchPlan,
   primarySearchIntents, providerCategoryForResearchIntent,
@@ -627,6 +631,8 @@ type RecommendDatePlanInput = {
   selectedCandidateIds?: string[];
   /** User-rejected venue identities must stay out of this itinerary. */
   rejectedCandidateIds?: string[];
+  /** The candidate exploration handoff, including soft planning preferences. */
+  planningInput?: ItineraryPlanningInput;
 };
 
 async function recommendDatePlanCore(input: RecommendDatePlanInput,
@@ -638,6 +644,17 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   const traceId = randomUUID();
   const traceStarted = performance.now();
   const message = (input.message ?? input.prompt ?? "").trim().slice(0, 800);
+  const planningInput = input.planningInput;
+  const selectedCandidateIds = planningInput?.selectedCandidateIds ?? input.selectedCandidateIds;
+  const rejectedCandidateIdList = planningInput?.rejectedCandidateIds ?? input.rejectedCandidateIds;
+  if (planningInput && (!validExplorationPreferences(planningInput.preferences)
+    || !validateResearchPlan(planningInput.researchPlan)
+    || !sessionCapture?.previous || !planningInput.candidatePool
+    || planningInput.candidatePool?.signature !== sessionCapture?.previous?.signature
+    || !Array.isArray(selectedCandidateIds) || !Array.isArray(rejectedCandidateIdList)
+    || selectedCandidateIds.some(id => typeof id !== "string")
+    || rejectedCandidateIdList.some(id => typeof id !== "string")))
+    return { error: "장소 탐색 정보를 확인하지 못했어요. 후보를 다시 찾아 주세요." };
   const previousState = input.previousState;
   const previousStops = input.previousStops?.length
     ? input.previousStops
@@ -682,10 +699,10 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       const observedContext = execution ? { ...baseContext, executionPlan: execution.plan,
         executionPlanComparison: execution.comparison,
         observations: [...baseContext.observations, execution.observation] } : baseContext;
-      const needsExperience = route?.mode === "course"
+      const needsExperience = !planningInput && (route?.mode === "course"
         && (!input.currentPlan || state.intent === "reset" || state.intent === "create")
         || route?.mode === "places" && Boolean(route.placeAsk?.area)
-          && getResearchPlanMode() !== "off";
+          && getResearchPlanMode() !== "off");
       const experience = needsExperience
         ? await observeExperiencePlan({ message, state: route?.mode === "places" && route.placeAsk?.area
           ? withAreas(state, [route.placeAsk.area]) : state, context: observedContext }) : null;
@@ -938,7 +955,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     return clarificationReply(slot, filledPrevious!, card);
   }
 
-  const interpretation = message
+  const interpretation = message && !planningInput
     ? await interpretDateRequest({
       message,
       previousState: filledPrevious,
@@ -951,13 +968,16 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       slot: missingSlot(filledPrevious),
       reply: "",
     };
+  if (planningInput) interpretation.state = { ...interpretation.state,
+    pace: planningInput.preferences.pace };
   const intentDone = performance.now();
-  const selectedAnchorRecords = input.selectedCandidateIds?.length && sessionCapture?.previous
-    ? sessionCapture.previous.records.filter(row => input.selectedCandidateIds!.includes(row.candidateId)
-      && sessionCapture.previous!.selectedCandidateIds.includes(row.candidateId) && row.venue)
-      .slice(0, 12) : [];
+  const selectedAnchorRecords = selectedCandidateIds?.length && sessionCapture?.previous
+    ? sessionCapture.previous.records.filter(row => selectedCandidateIds.includes(row.candidateId)
+      && sessionCapture.previous!.selectedCandidateIds.includes(row.candidateId) && row.venue) : [];
   const selectedAnchorIds = selectedAnchorRecords.map(row => row.candidateId);
-  if (input.selectedCandidateIds?.length && selectedAnchorIds.length !== new Set(input.selectedCandidateIds).size)
+  if ((selectedCandidateIds?.length ?? 0) > maxSelectedExplorationPlaces(interpretation.state.nights))
+    return chatResult({ headline: "", lines: [`이 여행에서는 최대 ${maxSelectedExplorationPlaces(interpretation.state.nights)}곳까지 선택할 수 있어요. 장소를 줄인 뒤 다시 시도해 주세요.`] }, interpretation.state);
+  if (selectedCandidateIds?.length && selectedAnchorIds.length !== new Set(selectedCandidateIds).size)
     return chatResult({ headline: "", lines: ["선택한 장소를 확인하지 못했어요. 장소를 다시 선택해 주세요."] }, interpretation.state);
   const turnUnderstanding = message ? await observeTurn(interpretation.state, routed, true) : null;
 
@@ -1004,7 +1024,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   }
 
   let state = applyDateDefaults(interpreted);
-  const rejectedCandidateIds = new Set((input.rejectedCandidateIds
+  if (planningInput) state = { ...state, pace: planningInput.preferences.pace };
+  const rejectedCandidateIds = new Set((rejectedCandidateIdList
     ?? sessionCapture?.previous?.rejectedCandidateIds ?? [])
     .filter(id => sessionCapture?.previous?.records.some(row => row.candidateId === id)));
   const normalizeVenuePart = (value: string) => value.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
@@ -1019,11 +1040,18 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     return clarificationReply("area", state, dateChatCard({ situation: "need_area", userMessage: message, state }));
   }
   const searchRegions = expandedSearchRegions(state);
-  const researchMode = getResearchPlanMode();
-  const researchPlan: ResearchPlan | null = researchMode === "off" ? null
-    : tryBuildResearchPlan(observedContextSnapshot.current?.experiencePlan);
+  const researchMode = planningInput ? "active" : getResearchPlanMode();
+  const handoffExperiencePlan = planningInput?.experiencePlan
+    ? validateExperiencePlanHandoff(planningInput.experiencePlan, {
+      days: courseSize(state).days, pace: state.pace,
+      requiredElements: resolveRequiredActivities(state).filter(item => item.explicit)
+        .map(item => item.activity),
+      requiredPlaces: state.requiredPlaces, excludedPlaces: state.excludedPlaces,
+    }) : null;
+  const researchPlan: ResearchPlan | null = planningInput?.researchPlan
+    ?? (researchMode === "off" ? null : tryBuildResearchPlan(observedContextSnapshot.current?.experiencePlan));
   const researchAuthority = researchSearchAuthority(researchMode, researchPlan,
-    Boolean(observedContextSnapshot.current?.experiencePlan));
+    Boolean(handoffExperiencePlan ?? observedContextSnapshot.current?.experiencePlan));
   const researchActive = researchAuthority.active;
   let researchFallbackReason: string | null = researchAuthority.fallbackReason;
   let researchCoverage: ResearchCoverage[] = [];
@@ -1139,6 +1167,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   // Signed provider snapshots are the user's chosen entities. Keep their IDs
   // through search, ranking and planning even if a later provider page omits them.
   for (const record of selectedAnchorRecords) if (record.venue) remember(record.venue, undefined, true);
+  if (planningInput) for (const record of sessionCapture?.previous?.records ?? []) {
+    if (record.venue && !rejectedCandidateIds.has(record.candidateId)) remember(record.venue);
+  }
   // Keep the exact entities already shown on screen available during edits.
   // Provider search can omit a venue on a later request even though it is a
   // required stop, which previously made add/swap operations collapse.
@@ -1462,7 +1493,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     understandingComparison: shadowSnapshot.current?.comparison,
     executionPlan: executionPlanSnapshot.current?.plan,
     executionPlanComparison: executionPlanSnapshot.current?.comparison,
-    experiencePlan: observedContextSnapshot.current?.experiencePlan,
+    experiencePlan: handoffExperiencePlan ?? observedContextSnapshot.current?.experiencePlan,
     experiencePlanComparison: observedContextSnapshot.current?.experiencePlanComparison,
     researchPlan, researchPlanMode: researchMode, researchCoverage, researchFallbackReason,
     observations: [...(shadowSnapshot.current?.observations ?? []),
@@ -1521,6 +1552,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     recentlyVisited,
     memory,
     researchPlanActive: researchActive && !researchFallbackReason,
+    experiencePlan: handoffExperiencePlan,
+    researchPlan: planningInput?.researchPlan ?? null,
+    explorationPreferences: planningInput?.preferences,
     conversation: input.conversation,
     currentCourse: previousStops,
     ...(hasSemanticPlanningHints(semanticPlanningHints) ? { semanticPlanningHints } : {}),

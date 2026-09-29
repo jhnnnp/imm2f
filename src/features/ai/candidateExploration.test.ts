@@ -7,7 +7,7 @@ import { buildExperiencePlanInput } from "./experiencePlan";
 import { emptySessionCandidates, markExplorationCandidates, mergeSessionCandidates } from "./sessionCandidates";
 import { candidateCardFact, candidateQualityBadges, explorationPrompt, explorationResearchPlan,
   explorationGroupMatch, explorationSearchQueries, explorationStateForActivities, groupExplorationCandidates,
-  initialExplorationPreferences, refineExplorationNeed, retainExplorationChoices,
+  initialExplorationPreferences, maxSelectedExplorationPlaces, refineExplorationNeed, retainExplorationChoices,
   refinementGroupForMessage, validExplorationPreferences,
   type CandidateExplorationPreferences } from "./candidateExploration";
 
@@ -25,6 +25,9 @@ const prefs = (activities: CandidateExplorationPreferences["activities"]): Candi
 });
 
 describe("P3.25 candidate exploration", () => {
+  it("keeps selection limits aligned with trip length and the signed anchor cap", () => {
+    expect([0, 1, 2, 3, 4, 6].map(maxSelectedExplorationPlaces)).toEqual([4, 6, 8, 10, 12, 12]);
+  });
   it("recognizes festival requests and provider-specific experience and shopping types", () => {
     expect(initialExplorationPreferences("전주 축제랑 체험하고 쇼핑하고 싶어", state).activities)
       .toEqual(["shopping", "experience", "festival"]);

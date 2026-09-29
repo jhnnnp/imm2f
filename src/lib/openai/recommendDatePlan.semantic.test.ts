@@ -52,6 +52,18 @@ describe("course proposal semantic boundary", () => {
       candidates, saved: [], state: state(), researchPlanActive: true });
     expect(enrichDateVenues).not.toHaveBeenCalled();
   });
+  it("passes intake preferences to the model and accepts its feasible course before seeds", async () => {
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 카페 데이트", condition,
+      candidates, saved: [], state: state(), researchPlanActive: true,
+      explorationPreferences: { activities: ["cafe"], cafeQualities: ["view"], cuisines: [],
+        shoppingKinds: [], cultureKinds: [], additionalDetails: "전망 좋은 곳", pace: "relaxed",
+        provenance: { pace: "user_selected" } } });
+    const sent = JSON.parse(vi.mocked(completeJson).mock.calls[0][0].messages[1].content);
+    expect(sent.explorationPreferences).toMatchObject({ interests: ["cafe"], pace: "relaxed" });
+    expect(sent.feasibleAlternatives).toBeUndefined();
+    expect(result.source).toBe("openai");
+    expect(result.recommendations.map(item => item.id)).toEqual(["kakao:meal", "kakao:quiet", "kakao:walk"]);
+  });
   it("keeps a selected provider ID even when the model omits it", async () => {
     const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
       candidates, saved: [], state: state(), researchPlanActive: true,
