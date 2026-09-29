@@ -89,7 +89,7 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
     return [{ region: row.region, query }];
   }).slice(0, 12);
   const min = additionCount || Math.max(size.min, (typeof raw.minStops === "number" && Number.isFinite(raw.minStops) ? Math.max(2, Math.min(8, Math.round(raw.minStops))) : fallback.minStops));
-  const max = Math.max(min, additionCount || (typeof raw.maxStops === "number" && Number.isFinite(raw.maxStops) ? Math.max(min, Math.min(12, Math.round(raw.maxStops))) : fallback.maxStops));
+  const max = Math.max(min, additionCount || (typeof raw.maxStops === "number" && Number.isFinite(raw.maxStops) ? Math.max(min, Math.min(size.max, Math.round(raw.maxStops))) : fallback.maxStops));
   return {
     themes: list(raw.themes, 3).length ? list(raw.themes, 3) : fallback.themes,
     priorities: list(raw.priorities, 8), queries: modelQueries.length ? modelQueries : fallback.queries,

@@ -4,6 +4,8 @@ import type { ExperiencePlan } from "./experiencePlan";
 import type { ResearchNeed, ResearchPlan } from "./researchPlan";
 import { dateCandidateKey } from "./dateCourse";
 import { researchEvidenceFresh } from "./researchPlan";
+import { distanceMeters } from "@/features/places/geo";
+import { classifyKakaoPlace, classifyPlaceExperiences } from "@/lib/kakao/placeClassification";
 import type { SessionCandidateContext } from "./sessionCandidates";
 import type { DateCandidateRecord } from "./dateCandidatePool";
 
@@ -28,16 +30,19 @@ export type CandidateExplorationPreferences = {
 };
 export type ExplorationCard = { candidateId: string; name: string; area: string;
   category: string; image?: string; mapUrl: string; address: string; badges: string[];
-  reason: string; factLabel: string; evidenceUrls: string[] };
+  reason: string; factLabel: string; evidenceUrls: string[]; groupId?: ExplorationActivity };
 export type CandidateGroup = { id: ExplorationActivity; title: string; description: string;
   needIds: string[]; cards: ExplorationCard[]; availableCount: number };
+/** Ephemeral retrieval evidence for ranking. It is not a venue fact or a popularity score. */
+export type ExplorationRetrievalSignal = { matchedQueries: number; primaryRank?: number; bestRank: number };
+const MAX_LOCAL_SHOPPING_DISTANCE_METERS = 2000;
 export type CandidateExplorationState = { experiencePlan: ExperiencePlan | null;
   researchPlan: ResearchPlan; groups: CandidateGroup[]; selectedCandidateIds: string[];
   rejectedCandidateIds: string[]; shownCandidateIds: string[] };
 export type ItineraryPlanningInput = { experiencePlan: ExperiencePlan | null;
   researchPlan: ResearchPlan; selectedCandidateIds: string[]; rejectedCandidateIds: string[];
   /** Existing signed session candidate snapshot, not a new candidate source of truth. */
-  candidatePool: SessionCandidateContext | null; candidateGraph?: never };
+  candidatePool: SessionCandidateContext | null };
 
 export const EXPLORATION_ACTIVITIES: Array<{ id: ExplorationActivity; label: string }> = [
   { id: "beach", label: "바다/산책" }, { id: "culture", label: "전시/문화" },
@@ -50,7 +55,7 @@ export const CAFE_CHOICES = [
   { value: "traditional", label: "한옥/전통" }, { value: "view", label: "전망 좋은 곳" },
   { value: "spacious", label: "좌석이 넉넉한 곳" },
 ] as const;
-export const CUISINE_CHOICES = ["한식", "양식", "일식", "중식", "고기", "해산물", "면/국수", "지역 음식"] as const;
+export const CUISINE_CHOICES = ["한식", "양식", "일식", "중식", "고기", "해산물", "면/국수"] as const;
 export const SHOPPING_CHOICES = [
   { value: "outlet", label: "아울렛" }, { value: "department", label: "백화점" },
   { value: "market", label: "시장" }, { value: "select_shop", label: "소품샵/편집샵" },
@@ -68,6 +73,42 @@ const activityQuery: Record<ExplorationActivity, string> = {
   beach: "해수욕장", culture: "전시", shopping: "쇼핑", meal: "식당",
   cafe: "카페", nightview: "야경 전망대", experience: "체험", nature: "공원",
 };
+const explorationAlternates: Partial<Record<ExplorationActivity, string[]>> = {
+  nightview: ["야경 명소", "전망대", "전망 공원"],
+  beach: ["해변", "해안 산책로"],
+  nature: ["수목원", "자연휴양림"],
+};
+
+export function explorationSearchQueries(id: ExplorationActivity, primary: string, area?: string) {
+  const localShopping = id === "shopping" && area && !isBroadExplorationArea(area)
+    ? [`${area.replace(/역$/, "")}역 상가`] : [];
+  const shopping = id !== "shopping" ? [] : /소품샵|편집샵/.test(primary)
+    ? ["소품샵", "편집샵"] : /아울렛|아웃렛/.test(primary)
+      ? ["아울렛", "상설할인매장"] : /백화점/.test(primary)
+        ? ["백화점"] : /시장/.test(primary)
+          ? ["시장", "상점가"]
+          : ["쇼핑몰", "백화점", "아울렛", "시장", "소품샵", "편집샵"];
+  return [...new Set([primary, ...localShopping, ...shopping, ...(explorationAlternates[id] ?? [])])];
+}
+
+const BROAD_EXPLORATION_AREAS = new Set(["서울", "부산", "인천", "대구", "대전", "광주", "울산", "세종", "제주"]);
+export const isBroadExplorationArea = (area: string) => BROAD_EXPLORATION_AREAS.has(area) || /시$|도$|광역시$|특별시$/.test(area);
+export function explorationGroupMatch(candidate: DiscoverCandidate, id: ExplorationActivity,
+  fromNeedSearch = false) {
+  const experienceSignals = classifyPlaceExperiences(candidate);
+  if (id === "shopping") {
+    const classification = classifyKakaoPlace({ name: candidate.name,
+      detailedCategory: candidate.detailedCategory, groupCode: candidate.kakaoCategoryGroupCode });
+    return candidate.category === "tourist" && classification.visitable && Boolean(classification.shoppingKind);
+  }
+  if (id === "nightview") return ["tourist", "nature", "photo"].includes(candidate.category)
+    && (experienceSignals.some(signal => signal.kind === "nightview") || fromNeedSearch);
+  if (id === "beach") return ["nature", "tourist"].includes(candidate.category)
+    && (experienceSignals.some(signal => signal.kind === "coast") || fromNeedSearch);
+  if (id === "nature") return ["nature", "tourist"].includes(candidate.category)
+    && (experienceSignals.some(signal => signal.kind === "nature") || fromNeedSearch);
+  return candidate.category === activityCategory[id];
+}
 const qualityEvidence: Record<string, string[]> = {
   aesthetic: ["space", "interior", "architecture"], view: ["view", "terrace", "window"],
   spacious: ["space", "seating"], traditional: ["architecture", "interior"],
@@ -173,7 +214,9 @@ export function explorationResearchPlan(plan: ResearchPlan | null, preferences: 
           ? `${CULTURE_CHOICES.find(item => item.value === preferences.cultureKinds[0])?.label ?? "전시"}`
           : activityQuery[id];
     return { id: `explore-${id}`, kind: "venue", purpose: `${query} 방문 경험`, category,
-      geographicFocus: base?.geographicFocus ?? area, qualities: qualityList,
+      // Exploration groups cover the requested area as a whole. A single P2 day
+      // focus must not silently constrain every category to that district.
+      geographicFocus: area, qualities: qualityList,
       evidenceNeeded: [...new Set(qualityList.flatMap(q => qualityEvidence[q] ?? []))],
       supportingRole: "primary", priority: "required" };
   });
@@ -230,8 +273,11 @@ const liveEvidence = (candidate: DiscoverCandidate) => (candidate.evidence ?? []
   (!fact.venueId || fact.venueId === dateCandidateKey(candidate)) && researchEvidenceFresh(fact));
 
 /** Only a checked source or provider identity metadata may describe a card. */
-export function candidateCardFact(candidate: DiscoverCandidate): { label: string; text: string } {
-  const checked = liveEvidence(candidate).find(fact => fact.verification === "source_checked" && fact.text.trim());
+export function candidateCardFact(candidate: DiscoverCandidate, need?: ResearchNeed): { label: string; text: string } {
+  const checkedFacts = liveEvidence(candidate).filter(fact => fact.verification === "source_checked" && fact.text.trim());
+  const checked = need?.evidenceNeeded
+    .map(attribute => checkedFacts.find(fact => fact.attribute === attribute)).find(Boolean)
+    ?? checkedFacts[0];
   if (checked) return { label: "확인된 정보", text: checked.text.replace(/\s+/g, " ").trim().slice(0, 120) };
   const reported = liveEvidence(candidate).find(fact => fact.verification === "search_report"
     && fact.sourceExcerpt?.trim() && fact.sourceVenueName?.trim() && fact.sourceAddress?.trim()
@@ -256,7 +302,11 @@ export function candidateQualityBadges(candidate: DiscoverCandidate, need: Resea
     if (quality === "value_for_money" || quality === "local_feel") return [];
     const supported = (qualityEvidence[quality] ?? []).some(attribute => facts.some(fact => {
       const text = `${fact.attribute} ${fact.text}`.toLowerCase();
-      if (/없음|없다|안\s*보|좁|시끄럽|붐비/.test(text) && quality !== "dessert") return false;
+      const contrary = quality === "quiet" ? /시끄럽|붐비(?!지\s*않)|소음이\s*심/
+        : quality === "spacious" ? /좁(?!지\s*않)/
+          : quality === "view" ? /전망\s*없|뷰\s*없|바다(?:가)?\s*안\s*보/
+            : null;
+      if (contrary?.test(text)) return false;
       if (quality === "view") return /오션뷰|바다\s*전망|전망이\s*좋|탁\s*트인\s*전망|sea view|ocean view/.test(text);
       if (quality === "traditional") return /한옥|전통|architecture|건축/.test(text);
       if (quality === "spacious") return /넓|대형|넉넉한\s*좌석|spacious/.test(text);
@@ -287,44 +337,90 @@ function cuisineMatches(candidate: DiscoverCandidate, cuisines: string[]) {
 function subtypeMatches(candidate: DiscoverCandidate, id: ExplorationActivity,
   preferences: CandidateExplorationPreferences) {
   const text = `${candidate.name} ${candidate.detailedCategory ?? ""} ${candidate.categoryLabel}`;
-  const shopping: Record<ShoppingKind, RegExp> = {
-    outlet: /아울렛|아웃렛|outlet/i, department: /백화점|department/i,
-    market: /시장|마켓|market/i, select_shop: /소품샵|편집샵|셀렉트샵|잡화|라이프스타일/i };
   const culture: Record<CultureKind, RegExp> = {
     art_museum: /미술관|갤러리|아트센터/i, museum: /박물관|뮤지엄/i,
     media_art: /미디어아트|미디어\s*전시|몰입형\s*전시/i, exhibit: /전시|갤러리|미술관/i };
   return id === "shopping" && preferences.shoppingKinds.length
-    ? preferences.shoppingKinds.some(kind => shopping[kind].test(text))
+    ? preferences.shoppingKinds.includes(classifyKakaoPlace({ name: candidate.name,
+      detailedCategory: candidate.detailedCategory, groupCode: candidate.kakaoCategoryGroupCode }).shoppingKind as ShoppingKind)
     : id === "culture" && preferences.cultureKinds.length
       ? preferences.cultureKinds.some(kind => culture[kind].test(text)) : true;
 }
 
+function matchStrength(candidate: DiscoverCandidate, id: ExplorationActivity) {
+  const text = `${candidate.name} ${candidate.detailedCategory ?? ""} ${candidate.categoryLabel}`;
+  const experienceKind = id === "beach" ? "coast" : id === "nightview" ? "nightview"
+    : id === "nature" ? "nature" : null;
+  if (experienceKind) return classifyPlaceExperiences(candidate)
+    .some(signal => signal.kind === experienceKind) ? 2 : 1;
+  if (id === "culture") return /전시|미술관|박물관|갤러리|뮤지엄|미디어아트/.test(text) ? 2 : 1;
+  if (id === "experience") return /체험|공방|액티비티|방탈출|놀이/.test(text) ? 2 : 1;
+  return 2;
+}
+
 export function groupExplorationCandidates(input: { plan: ResearchPlan; preferences: CandidateExplorationPreferences;
   candidates: DiscoverCandidate[]; session: SessionCandidateContext | null; shownIds?: string[];
-  rejectedIds?: string[]; records?: DateCandidateRecord[] }): CandidateGroup[] {
+  rejectedIds?: string[]; records?: DateCandidateRecord[];
+  candidateIdsByGroup?: Partial<Record<ExplorationActivity, string[]>>;
+  retrievalSignalsByGroup?: Partial<Record<ExplorationActivity, Record<string, ExplorationRetrievalSignal>>>;
+  searchCenter?: [number, number] | null }): CandidateGroup[] {
   const hidden = new Set([...(input.session?.shownCandidateIds ?? []), ...(input.session?.selectedCandidateIds ?? []),
     ...(input.session?.rejectedCandidateIds ?? []), ...(input.shownIds ?? []), ...(input.rejectedIds ?? [])]);
   const baseScores = new Map((input.records ?? []).map(record => [record.id,
     Object.values(record.scores).reduce((sum, value) => sum + value, 0)]));
+  const assigned = new Set<string>();
   return input.preferences.activities.map(id => {
     const need = input.plan.needs.find(item => item.id === `explore-${id}`)!;
+    const fromNeed = new Set(input.candidateIdsByGroup?.[id] ?? []);
+    // Pool records retain existing session candidates, then provider response order.
+    // Use this only when a more precise per-query retrieval signal is unavailable.
+    const sourceOrder = new Map((input.candidateIdsByGroup?.[id] ?? []).map((key, index) => [key, index]));
+    const retrievalSignals = input.retrievalSignalsByGroup?.[id] ?? {};
     const seen = new Set<string>();
-    const ranked = input.candidates.filter(item => item.category === need.category && !hidden.has(dateCandidateKey(item)))
+    const ranked = input.candidates.filter(item => !hidden.has(dateCandidateKey(item))
+      && !assigned.has(dateCandidateKey(item))
+      && (!input.candidateIdsByGroup || fromNeed.has(dateCandidateKey(item)))
+      && explorationGroupMatch(item, id, fromNeed.has(dateCandidateKey(item))))
+      .filter(item => {
+        if (id !== "shopping" || !need.geographicFocus || isBroadExplorationArea(need.geographicFocus)) return true;
+        return input.searchCenter
+          ? distanceMeters(input.searchCenter, item.coordinates) <= MAX_LOCAL_SHOPPING_DISTANCE_METERS
+          : `${item.name} ${item.district} ${item.address} ${item.roadAddress}`.includes(need.geographicFocus);
+      })
       .filter(item => id !== "meal" || cuisineMatches(item, input.preferences.cuisines))
-      .filter(item => id !== "shopping" || /쇼핑|아울렛|백화점|시장|편집샵|소품샵/.test(`${item.name} ${item.detailedCategory ?? ""}`))
       .filter(item => subtypeMatches(item, id, input.preferences))
-      .filter(item => { const key = `${item.name.replace(/\s/g, "").toLowerCase()}|${item.address.replace(/\s/g, "").toLowerCase()}`;
-        if (seen.has(key)) return false; seen.add(key); return true; })
       .map(item => ({ item, badges: candidateQualityBadges(item, need),
         focusFit: need.geographicFocus && `${item.district} ${item.address}`.includes(need.geographicFocus) ? 1 : 0,
+        nameFit: need.geographicFocus && !isBroadExplorationArea(need.geographicFocus)
+          && item.name.includes(need.geographicFocus) ? 1 : 0,
+        nearbyMeters: id === "shopping" && input.searchCenter
+          ? distanceMeters(input.searchCenter, item.coordinates) : Number.MAX_SAFE_INTEGER,
+        matchStrength: matchStrength(item, id),
+        retrieval: retrievalSignals[dateCandidateKey(item)],
+        sourceOrder: sourceOrder.get(dateCandidateKey(item)) ?? Number.MAX_SAFE_INTEGER,
+        shoppingFit: id === "shopping" && classifyKakaoPlace({ name: item.name,
+          detailedCategory: item.detailedCategory, groupCode: item.kakaoCategoryGroupCode }).shoppingKind ? 1 : 0,
         baseScore: baseScores.get(dateCandidateKey(item)) ?? 0 }))
-      .sort((a, b) => b.focusFit - a.focusFit || b.badges.length - a.badges.length
-        || b.baseScore - a.baseScore || liveEvidence(b.item).length - liveEvidence(a.item).length
-        || a.item.name.localeCompare(b.item.name));
+      .sort((a, b) => b.nameFit - a.nameFit || a.nearbyMeters - b.nearbyMeters || b.shoppingFit - a.shoppingFit
+        || b.focusFit - a.focusFit || b.badges.length - a.badges.length
+        || b.matchStrength - a.matchStrength
+        || (b.retrieval?.matchedQueries ?? 0) - (a.retrieval?.matchedQueries ?? 0)
+        || (a.retrieval?.primaryRank ?? Number.MAX_SAFE_INTEGER) - (b.retrieval?.primaryRank ?? Number.MAX_SAFE_INTEGER)
+        || (a.retrieval?.bestRank ?? Number.MAX_SAFE_INTEGER) - (b.retrieval?.bestRank ?? Number.MAX_SAFE_INTEGER)
+        || liveEvidence(b.item).length - liveEvidence(a.item).length || b.baseScore - a.baseScore
+        || a.sourceOrder - b.sourceOrder
+        || a.item.name.localeCompare(b.item.name))
+      .filter(({ item }) => {
+        const key = `${item.name.replace(/\s/g, "").toLowerCase()}|${item.address.replace(/\s/g, "").toLowerCase()}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     const cards = ranked.slice(0, MAX_EXPLORATION_CANDIDATES).map(({ item, badges }) => {
-      const fact = candidateCardFact(item);
+      assigned.add(dateCandidateKey(item));
+      const fact = candidateCardFact(item, need);
       return ({
-      candidateId: dateCandidateKey(item), name: item.name, area: item.district,
+      candidateId: dateCandidateKey(item), name: item.name, area: item.district, groupId: id,
       category: item.categoryLabel, image: item.image, mapUrl: item.mapUrl,
       address: item.address || item.roadAddress, badges,
       reason: fact.text, factLabel: fact.label,
@@ -338,7 +434,9 @@ export function groupExplorationCandidates(input: { plan: ResearchPlan; preferen
       ? `${input.preferences.cafeQualities.map(q => CAFE_CHOICES.find(item => item.value === q)?.label).filter(Boolean).join(" · ")} 카페`
       : id === "meal" && input.preferences.cuisines.length === 1
         ? `${input.preferences.cuisines[0]} 맛집` : label,
-      description: need.qualities.length ? cards.some(card => card.badges.length)
+      description: id === "nightview"
+        ? "전망 장소 후보예요. 야간 개방과 실제 야경은 상세 정보에서 확인해 주세요."
+        : need.qualities.length ? cards.some(card => card.badges.length)
         ? "확인된 근거가 있는 속성만 배지로 표시했어요."
         : "요청한 분위기와 속성은 아직 확인되지 않았어요. 장소 정보를 살펴보세요."
         : "지역과 장소 종류가 맞는 후보예요. 방문 가능 시간은 상세 정보에서 확인해 주세요.", needIds: [need.id], cards, availableCount: ranked.length };
@@ -349,10 +447,24 @@ export function explorationStateForActivities(state: AIPlannerState,
   preferences: CandidateExplorationPreferences): AIPlannerState {
   const mappings: Partial<Record<ExplorationActivity, DateActivityId>> = {
     cafe: "cafe", meal: "meal", culture: "exhibit", nightview: "nightview", beach: "walk" };
-  const mapped = preferences.activities.flatMap(id => mappings[id] ? [mappings[id]!] : []);
-  return { ...state, activities: mapped, pace: preferences.pace,
-    explicitPlanningSelections: { ...state.explicitPlanningSelections,
-      activities: mapped, ...(preferences.cuisines.length === 1
-        && ["한식", "양식", "일식", "중식"].includes(preferences.cuisines[0])
-        ? { cuisine: preferences.cuisines[0] as "한식" | "양식" | "일식" | "중식" } : {}) } };
+  const mapped = [...new Set([...(state.explicitPlanningSelections?.activities ?? []),
+    ...preferences.activities.flatMap(id => mappings[id] ? [mappings[id]!] : [])])];
+  // A category chosen for candidate discovery is an interest, not an
+  // itinerary requirement. Preserve only constraints already explicit in
+  // the user's request; selected places become anchors at the handoff.
+  return { ...state, activities: mapped, pace: preferences.pace };
+}
+
+export function retainExplorationChoices<T extends { candidateId: string }>(input: {
+  selectedCards: T[]; rejectedIds: string[];
+  groupById: Record<string, ExplorationActivity>;
+  activities: ExplorationActivity[];
+}) {
+  const allowed = new Set(input.activities);
+  const keep = (id: string) => {
+    const group = input.groupById[id];
+    return Boolean(group && allowed.has(group));
+  };
+  return { selectedCards: input.selectedCards.filter(card => keep(card.candidateId)),
+    rejectedIds: input.rejectedIds.filter(keep) };
 }

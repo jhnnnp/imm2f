@@ -142,6 +142,9 @@ describe("dateBrief", () => {
     expect(extractStay("제주 갈래")).toBeNull();
     expect(missingSlot({ ...withArea, stayKind: "date" })).toBeNull();
     expect(extractStay("군산 1박2일")).toEqual({ stayKind: "overnight", nights: 1 });
+    expect(extractStay("부산 3박4일 여행")).toEqual({ stayKind: "overnight", nights: 3 });
+    expect(extractStay("부산 5박 6일 여행")).toEqual({ stayKind: "overnight", nights: 5 });
+    expect(courseSize({ ...withArea, stayKind: "overnight", nights: 6 }).days).toBe(7);
     expect(courseSize({ ...withArea, stayKind: "date", timeWindow: "evening" }).min).toBe(2);
     expect(courseSize({
       ...withArea,

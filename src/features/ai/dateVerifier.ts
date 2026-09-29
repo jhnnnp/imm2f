@@ -4,7 +4,6 @@ import type { DateCourseRow } from "./dateCourse";
 import { assignStartTimes } from "./dateCourse";
 import type { CourseEvaluation } from "./courseDesign";
 import type { FootLeg, FootRoute } from "@/lib/routing/footRoute";
-import { courseSize } from "./dateBrief";
 import { legacyPlanningIssue, partitionPlanningIssues, planningIssue, type PlanningIssue, type PlanningQualitySignal } from "./planningPolicy";
 
 function clockMinutes(value: unknown) {
@@ -45,14 +44,36 @@ export function verifyDateItinerary(input: {
   if (input.route) {
     const limit = input.state.walkingPreference === "short" ? 1100 : 3000;
     const dailyLimit = input.state.walkingPreference === "short" ? 2500 : 6500;
-    if (input.route.legs.some(leg => leg.meters > limit)
-      || input.route.meters > dailyLimit * courseSize(input.state).days) {
-      issues.push(planningIssue("actual_route_limit", "실제 보행 경로가 이동 한도를 초과함"));
+    const distanceByDay = new Map<number, number>();
+    for (let index = 0; index < input.course.rows.length - 1; index++) {
+      const previous = input.course.rows[index];
+      const next = input.course.rows[index + 1];
+      if (previous.day_index !== next.day_index) continue;
+      const leg = input.route.legs[index];
+      if (!leg) continue;
+      const day = next.day_index ?? 0;
+      distanceByDay.set(day, (distanceByDay.get(day) ?? 0) + leg.meters);
+      if (leg.meters > limit) issues.push(planningIssue("actual_route_limit",
+        "실제 보행 경로가 이동 한도를 초과함", { dayIndex: day, candidateId: next.id }));
     }
+    for (const [day, meters] of distanceByDay) if (meters > dailyLimit)
+      issues.push(planningIssue("actual_route_limit", "실제 보행 경로가 이동 한도를 초과함", { dayIndex: day }));
     if (input.condition.timeSpecified) {
       const schedule = assignStartTimes(input.course.rows, input.candidates, input.state, input.condition.startTime);
       if (schedule.length !== input.course.rows.length || !routeLegsFitSchedule(schedule, input.route.legs)) {
-        issues.push(planningIssue("actual_route_schedule_conflict", "실제 보행 경로와 지정한 시간의 충돌"));
+        const conflict = schedule.findIndex((row, index) => index > 0
+          && row.day_index === schedule[index - 1].day_index
+          && (() => {
+            const before = schedule[index - 1];
+            const previousClock = clockMinutes(before.start_time);
+            const nextClock = clockMinutes(row.start_time);
+            return previousClock == null || nextClock == null || !input.route!.legs[index - 1]
+              || (nextClock - previousClock - Number(before.duration_minutes ?? 0)) * 60
+                < input.route!.legs[index - 1].seconds;
+          })());
+        issues.push(planningIssue("actual_route_schedule_conflict", "실제 보행 경로와 지정한 시간의 충돌",
+          conflict >= 0 ? { dayIndex: schedule[conflict].day_index ?? 0,
+            candidateId: schedule[conflict].id } : {}));
       }
     }
   }

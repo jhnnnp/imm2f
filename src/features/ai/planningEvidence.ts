@@ -50,3 +50,36 @@ export function planningEvidenceProfile(candidate: DiscoverCandidate, requiredTi
   const open = end > start ? at >= start && at < end : at >= start || at < end;
   return { identity, experience, openingAtRequiredTime: open ? "confirmed_open" : "confirmed_closed" };
 }
+
+/** Only an exact-venue, recently checked source can rule a scheduled visit
+ * out. Unknown or generic provider hours do not become a false guarantee. */
+export function verifiedOpeningAtVisit(candidate: DiscoverCandidate, dayYmd: string | null,
+  startTime: string, durationMinutes: number, now = Date.now()): "open" | "closed" | "unknown" {
+  if (!/^\d{2}:\d{2}$/.test(startTime)) return "unknown";
+  const visitTime = dayYmd && /^\d{8}$/.test(dayYmd)
+    ? Date.parse(`${dayYmd.slice(0, 4)}-${dayYmd.slice(4, 6)}-${dayYmd.slice(6, 8)}T00:00:00+09:00`) : NaN;
+  const observed = (candidate.evidence ?? []).filter(item => {
+    if (item.attribute !== "hours" || item.verification !== "source_checked"
+      || item.venueId !== dateCandidateKey(candidate) || !item.url) return false;
+    const checked = Date.parse(item.checkedAt);
+    if (!Number.isFinite(checked) || checked > now || now - checked > 7 * 86_400_000) return false;
+    const exactDay = Boolean(dayYmd && item.text.replace(/\D/g, "").includes(dayYmd));
+    return exactDay || /매일|연중무휴/.test(item.text)
+      && Number.isFinite(visitTime) && visitTime - checked <= 30 * 86_400_000;
+  }).sort((a, b) => Date.parse(b.checkedAt) - Date.parse(a.checkedAt))[0];
+  if (!observed) return "unknown";
+  if (/휴무|휴관|영업\s*안\s*함/.test(observed.text)) {
+    if (dayYmd && observed.text.replace(/\D/g, "").includes(dayYmd)
+      && !/휴무(?:일)?\s*없/.test(observed.text)) return "closed";
+    return "unknown";
+  }
+  const range = observed.text.match(/\b([01]\d|2[0-3]):([0-5]\d)\s*(?:~|[-–—])\s*([01]\d|2[0-3]):([0-5]\d)\b/);
+  if (!range) return "unknown";
+  const minutes = (hour: string, minute: string) => Number(hour) * 60 + Number(minute);
+  const start = minutes(startTime.slice(0, 2), startTime.slice(3));
+  const open = minutes(range[1], range[2]);
+  const close = minutes(range[3], range[4]);
+  const closeAbsolute = close <= open ? close + 1440 : close;
+  const startAbsolute = start < open && close <= open ? start + 1440 : start;
+  return startAbsolute >= open && startAbsolute + durationMinutes <= closeAbsolute ? "open" : "closed";
+}

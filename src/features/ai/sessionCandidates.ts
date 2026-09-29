@@ -72,6 +72,7 @@ export function emptySessionCandidates(sessionId: string): SessionCandidateConte
 
 const signingKey = () => process.env.SESSION_CANDIDATE_SIGNING_KEY?.trim()
   || process.env.SUPABASE_SECRET_KEY?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || null;
+export const sessionCandidateSigningReady = () => Boolean(signingKey());
 const unsigned = (context: SessionCandidateContext) => {
   const { signature: _signature, ...body } = context;
   return body;
@@ -337,6 +338,12 @@ export function markExplorationCandidates(context: SessionCandidateContext, inpu
     turnId: input.turnId };
   const records = context.records.map(row => {
     const next = { ...row, events: [...row.events], rejectedReasons: [...row.rejectedReasons] };
+    if (input.rejectedIds !== undefined && !rejected.has(next.candidateId)
+      && next.rejectedReasons.includes("exploration_rejected")) {
+      next.rejectedReasons = next.rejectedReasons.filter(reason => reason !== "exploration_rejected");
+      if (next.currentState === "rejected" && !next.rejectedReasons.length)
+        addEvent(next, "shown", info, "visible_result");
+    }
     if (next.currentState === "selected" && !selected.has(next.candidateId)
       && next.events.some(event => event.type === "selected" && event.source === "visible_result")
       && !next.events.some(event => event.type === "selected" && event.source === "current_plan"))

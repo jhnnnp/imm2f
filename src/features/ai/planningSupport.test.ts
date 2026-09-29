@@ -2,13 +2,15 @@ import { describe, expect, it } from "vitest";
 import { tripLocalWindows, unsupportedCourseRequest } from "./planningSupport";
 
 describe("course support boundary", () => {
-  it("does not silently shorten a four-day trip", () => {
-    expect(unsupportedCourseRequest("군산 3박 4일 여행 코스")).toContain("임의로 2박으로 줄이지");
+  it("does not silently shorten a trip beyond the supported span", () => {
+    expect(unsupportedCourseRequest("군산 7박 8일 여행 코스")).toContain("임의로 줄이지");
   });
   it("allows the supported spans", () => {
     expect(unsupportedCourseRequest("군산 당일치기")).toBeNull();
     expect(unsupportedCourseRequest("군산 1박2일")).toBeNull();
     expect(unsupportedCourseRequest("군산 2박 3일")).toBeNull();
+    expect(unsupportedCourseRequest("군산 3박 4일")).toBeNull();
+    expect(unsupportedCourseRequest("군산 6박 7일")).toBeNull();
   });
   it("makes an overseas itinerary request explicit", () => {
     expect(unsupportedCourseRequest("오사카 1박2일 여행")).toContain("국내 코스");

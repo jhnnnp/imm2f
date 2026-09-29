@@ -65,6 +65,7 @@ export function MapRouteOverlay({
   className = "map-route-overlay",
   pinVariant = "memory",
   roadProfile = "driving",
+  providedRoadPath,
 }: {
   map: MapLibreMap | null;
   anchors: RouteAnchor[];
@@ -72,6 +73,8 @@ export function MapRouteOverlay({
   className?: string;
   pinVariant?: "memory" | "planner";
   roadProfile?: RoadRouteProfile;
+  /** Reuse a parent's route fetch when the map and overlay share a path. */
+  providedRoadPath?: LngLat[] | null;
 }) {
   const gradientId = useId().replace(/:/g, "");
   const routeKey = useMemo(
@@ -93,11 +96,14 @@ export function MapRouteOverlay({
     [normalizedAnchors],
   );
 
-  const { path: roadPath, loading: roadLoading, usesRoadNetwork } = useRoadRoute(
+  const { path: fetchedRoadPath, loading: fetchedRoadLoading } = useRoadRoute(
     coordinateList,
-    active && coordinateList.length >= 2,
+    active && coordinateList.length >= 2 && providedRoadPath === undefined,
     roadProfile,
   );
+  const roadPath = providedRoadPath === undefined ? fetchedRoadPath : providedRoadPath;
+  const roadLoading = providedRoadPath === undefined && fetchedRoadLoading;
+  const usesRoadNetwork = Boolean(roadPath);
 
   useEffect(() => {
     if (!map || !active || normalizedAnchors.length < 2) {

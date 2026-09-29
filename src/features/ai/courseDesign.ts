@@ -1,5 +1,5 @@
 import { blocksCourse, legacyPlanningIssue, partitionPlanningIssues, planningIssue, type PlanningIssue, type PlanningIssueScope, type PlanningIssueSeverity, type PlanningQualitySignal, type PLANNING_POLICIES } from "./planningPolicy";
-import { planningEvidenceProfile, requiredOpeningTime } from "./planningEvidence";
+import { planningEvidenceProfile, requiredOpeningTime, verifiedOpeningAtVisit } from "./planningEvidence";
 import { resolveCuisineRequirement, resolveRequiredActivities } from "./planningRequirementProvenance";
 import { tripLocalWindows } from "./planningSupport";
 import { tracePlanningTransformation, type PlanningTransformation } from "./planningTransformations";
@@ -11,6 +11,9 @@ import { festivalPeriodCoversYmd } from "@/lib/tourapi/festivalSchedule";
 import { candidateActivitySlot, dateCandidateKey, defaultDuration, assignStartTimes, type DateCourseRow } from "./dateCourse";
 import { candidateFoodConflict } from "./dateIntent";
 import { evidenceConfidence } from "./dateEvidence";
+import { buildCandidateGraph, repeatedComplexDays, type CandidateGraph } from "./candidateGraph";
+
+export type CourseConstraints = { anchorIds?: readonly string[]; candidateGraph?: CandidateGraph };
 
 export type CourseProposal = { theme: string; rows: DateCourseRow[] };
 export type CourseEvaluation = CourseProposal & { score: number; meters: number; longestHop: number; evidenceCount: number; problems: string[]; issues: PlanningIssue[];
@@ -218,7 +221,7 @@ export function parseCourseProposals(value: unknown, days: number): CoursePropos
     if (!raw || typeof raw !== "object") return [];
     const object = raw as Record<string, unknown>;
     if (!Array.isArray(object.selected)) return [];
-    const rows = object.selected.slice(0, 12).flatMap(item => {
+    const rows = object.selected.slice(0, Math.min(28, 4 * days)).flatMap(item => {
       if (!item || typeof item !== "object") return [];
       const row = item as Record<string, unknown>;
       if (typeof row.id !== "string") return [];
@@ -321,9 +324,9 @@ export function prepareCourseForEvaluation(proposal: CourseProposal, candidates:
 
 /** Compatibility facade: preserves the original prepare → evaluate → default
  * sequence and all legacy return fields. Structured metadata stays internal. */
-export function evaluateCourse(proposal: CourseProposal, candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>): CourseEvaluation {
+export function evaluateCourse(proposal: CourseProposal, candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>, constraints: CourseConstraints = {}): CourseEvaluation {
   const prepared = prepareCourseForEvaluation(proposal, candidates, state);
-  const evaluated = evaluatePreparedCourse(proposal, prepared.rows, candidates, state, saved);
+  const evaluated = evaluatePreparedCourse(proposal, prepared.rows, candidates, state, saved, constraints);
   const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
   const rows = evaluated.rows.map(row => ({ ...row,
     duration_minutes: row.duration_minutes ?? defaultDuration(byId.get(row.id!)!, state.pace) }));
@@ -334,7 +337,7 @@ export function evaluateCourse(proposal: CourseProposal, candidates: DiscoverCan
 /** Read-only evaluation of already prepared rows. No reorder, insertion, or
  * duration rewrite occurs here; schedule feasibility is checked without applying
  * its output. The original proposal remains the authority for invalid IDs. */
-export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: DateCourseRow[], candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>): CourseEvaluation {
+export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: DateCourseRow[], candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>, constraints: CourseConstraints = {}): CourseEvaluation {
   const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
   const issues: PlanningIssue[] = [];
   const report = (code: keyof typeof PLANNING_POLICIES, message: string, scope: PlanningIssueScope = {},
@@ -345,6 +348,15 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
     { candidateId: ids.find(id => !id || !byId.has(id)) });
   if (new Set(ids).size !== ids.length) report("duplicate_place", "같은 장소 중복",
     { candidateId: ids.find((id, index) => ids.indexOf(id) !== index) });
+  for (const id of constraints.anchorIds ?? []) if (!ids.includes(id))
+    report("selected_anchor_missing", `선택한 장소 누락: ${byId.get(id)?.name ?? id}`, { candidateId: id });
+  for (const repeated of repeatedComplexDays(proposal.rows, constraints.candidateGraph ?? buildCandidateGraph(candidates)))
+    report("repeated_complex_day", "같은 복합시설 재방문", {
+      dayIndex: Math.max(...repeated.dayIndices),
+      candidateId: repeated.relation.candidateIds.find(id => proposal.rows.some(row => row.id === id
+        && row.day_index === Math.max(...repeated.dayIndices))),
+      constraint: repeated.relation.complexKey,
+    });
   const days = courseSize(state).days;
   const rows = preparedRows;
   const selected = rows.map(row => byId.get(row.id!)!);
@@ -468,6 +480,15 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
   if (mode === "walk" && route.meters > (state.walkingPreference === "short" ? 2200 : 5500) * days) report("walking_burden", "전체 도보 부담이 너무 큼");
   const timedRows = rows.length ? assignStartTimes(rows, candidates, state) : [];
   if (rows.length && !timedRows.length) report("schedule_infeasible", "지정한 시간 안에 이동과 체류를 배치할 수 없음");
+  for (const row of timedRows) {
+    const candidate = byId.get(row.id!);
+    if (!candidate || !row.start_time) continue;
+    if (verifiedOpeningAtVisit(candidate, tripDayYmd(state, row.day_index ?? 0), row.start_time,
+      row.duration_minutes ?? 60) === "closed")
+      report("confirmed_closed", "확인된 영업시간과 충돌", {
+        candidateId: row.id, dayIndex: row.day_index ?? 0, constraint: row.start_time,
+      });
+  }
   const evidenceCount = selected.filter(candidate => hasRequestedVenueEvidence(candidate, state)).length;
   const provenance = selected.length ? selected.reduce((sum, candidate) => sum + Math.max(
     evidenceConfidence(candidate, "space"), evidenceConfidence(candidate, "menu"),
@@ -530,15 +551,20 @@ function softStopTarget(state: AIPlannerState) {
 }
 
 /** Bounded beam search is an explicit degraded path, not a substitute for editorial judgment. */
-export function buildFallbackCourse(candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>): CourseProposal {
+export function buildFallbackCourse(candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>, constraints: CourseConstraints = {}): CourseProposal {
   const days = courseSize(state).days;
   const ranked = candidates.filter(candidate => !state.excludedPlaces.some(name => matchesTerm(candidate, name))).sort((a, b) => venueQuality(b, state, saved) - venueQuality(a, state, saved));
-  const required = [...new Set(state.requiredPlaces.flatMap(name => ranked.find(candidate => matchesTerm(candidate, name)) ?? []))];
+  const anchorIds = new Set(constraints.anchorIds ?? []);
+  const required = [...new Set([
+    ...ranked.filter(candidate => anchorIds.has(dateCandidateKey(candidate))),
+    ...state.requiredPlaces.flatMap(name => ranked.find(candidate => matchesTerm(candidate, name)) ?? []),
+  ])];
   const wanted = state.discovery?.requiredActivities ?? state.activities;
   const target = Math.min(Math.max(state.discovery?.maxStops ?? 12, days, required.length),
     Math.max(softStopTarget(state), required.length, wanted.length,
       state.addStop && state.pinOrder.length ? state.pinOrder.length + 1 : 0));
-  const catalog = discoveryCatalog(ranked, state, saved, 54);
+  const catalog = [...required, ...discoveryCatalog(ranked, state, saved, 54)
+    .filter(candidate => !required.includes(candidate))];
   const qualityById = new Map(catalog.map(candidate => [dateCandidateKey(candidate), venueQuality(candidate, state, saved)]));
   const scorePath = (path: DiscoverCandidate[]) => {
     const coverage = wanted.filter(activity => path.some(candidate => matchesActivity(candidate, activity))).length * 25;
@@ -579,22 +605,30 @@ export function buildFallbackCourse(candidates: DiscoverCandidate[], state: AIPl
     beams = next.slice(0, 12).map(item => item.path);
     if (!beams.length) break;
   }
+  const graph = constraints.candidateGraph ?? buildCandidateGraph(candidates);
+  const related = (a: DiscoverCandidate, b: DiscoverCandidate) => graph.relations.some(relation =>
+    relation.candidateIds.includes(dateCandidateKey(a)) && relation.candidateIds.includes(dateCandidateKey(b)));
   const proposals = beams.map(path => {
     const anchors = isTravelPlan(state) && days > 1
       ? [...path.filter(candidate => meaningfulTripExperience(candidate) && hasRequestedVenueEvidence(candidate, state)),
         ...path.filter(candidate => meaningfulTripExperience(candidate) && !hasRequestedVenueEvidence(candidate, state))].slice(0, days) : [];
     const perDay = Math.ceil(path.length / days);
     const groups: DiscoverCandidate[][] = Array.from({ length: days }, () => []);
-    anchors.forEach((candidate, day) => groups[day].push(candidate));
+    anchors.forEach(candidate => {
+      const sharedDay = groups.findIndex(group => group.some(existing => related(candidate, existing)));
+      const day = sharedDay >= 0 ? sharedDay : groups.findIndex(group => !group.length);
+      groups[day >= 0 ? day : groups.length - 1].push(candidate);
+    });
     for (const candidate of path) {
       if (anchors.includes(candidate)) continue;
       const missingMealDays = candidateActivitySlot(candidate) === "meal"
         ? groups.map((group, index) => ({ group, index })).filter(({ group }) => !group.some(item => candidateActivitySlot(item) === "meal"))
         : [];
-      const day = missingMealDays.length && anchors.length === days
+      const sharedDay = groups.findIndex(group => group.some(existing => related(candidate, existing)));
+      const day = sharedDay >= 0 ? sharedDay : missingMealDays.length && groups.every(group => group.length)
         ? missingMealDays.map(({ group, index }) => ({ index, score: distanceMeters(group[0].coordinates, candidate.coordinates) }))
           .sort((a, b) => a.score - b.score)[0].index
-        : anchors.length === days
+        : groups.every(group => group.length)
         ? groups.map((group, index) => ({ index, score: distanceMeters(group[0].coordinates, candidate.coordinates)
           + (group.length >= perDay ? 100_000 : 0) })).sort((a, b) => a.score - b.score)[0].index
         : Math.min(days - 1, Math.floor(groups.flat().length * days / path.length));
@@ -604,17 +638,18 @@ export function buildFallbackCourse(candidates: DiscoverCandidate[], state: AIPl
       id: dateCandidateKey(candidate), day_index, duration_minutes: defaultDuration(candidate, state.pace),
     }))) };
   });
-  return proposals.map(proposal => evaluateCourse(proposal, candidates, state, saved))
+  return proposals.map(proposal => evaluateCourse(proposal, candidates, state, saved, constraints))
     .sort((a, b) => a.hardIssues.length - b.hardIssues.length || b.score - a.score)[0] ?? { theme: "", rows: [] };
 }
 
 /** Different anchor neighborhoods produce feasible alternatives before LLM curation. */
-export function feasibleCourseSeeds(candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>): CourseEvaluation[] {
+export function feasibleCourseSeeds(candidates: DiscoverCandidate[], state: AIPlannerState, saved: Set<string>, constraints: CourseConstraints = {}): CourseEvaluation[] {
   const anchors = discoveryCatalog(candidates, state, saved, 6);
   const radius = isTravelPlan(state) ? 18000 : state.discovery?.transport === "walk" ? 1800 : 3500;
   const proposals = [candidates, ...anchors.map(anchor => candidates.filter(candidate =>
-    state.requiredPlaces.some(name => matchesTerm(candidate, name)) || distanceMeters(anchor.coordinates, candidate.coordinates) <= radius
-  ))].map(pool => evaluateCourse(buildFallbackCourse(pool, state, saved), candidates, state, saved));
+    (constraints.anchorIds ?? []).includes(dateCandidateKey(candidate))
+      || state.requiredPlaces.some(name => matchesTerm(candidate, name)) || distanceMeters(anchor.coordinates, candidate.coordinates) <= radius
+  ))].map(pool => evaluateCourse(buildFallbackCourse(pool, state, saved, constraints), candidates, state, saved, constraints));
   const seen = new Set<string>();
   return proposals.filter(course => {
     if (blocksCourse(course.issues, "deterministic_seed")) return false;

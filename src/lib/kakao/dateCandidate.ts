@@ -1,4 +1,5 @@
 import type { KakaoPlaceCandidate } from "@/features/places/types/place";
+import { classifyKakaoPlace } from "./placeClassification";
 
 const DATE_GROUP_CODES = new Set(["CE7", "FD6", "AT4", "CT1"]);
 
@@ -44,6 +45,10 @@ export function isDateCourseCandidate(candidate: KakaoPlaceCandidate, requiredPl
     && candidate.address && candidate.coordinates.every(Number.isFinite)) return true;
   const groupCode = candidate.kakaoCategoryGroupCode ?? "";
   if (DATE_GROUP_CODES.has(groupCode)) return true;
+  const classification = classifyKakaoPlace({ name: candidate.name,
+    detailedCategory: candidate.detailedCategory, groupCode });
+  if (classification.shoppingKind && classification.visitable
+    && candidate.address && candidate.coordinates.every(Number.isFinite)) return true;
   if (isExplicitParkAccess(candidate, requiredPlaces)) return true;
   if (groupCode) return false;
   return SAFE_UNGROUPED_CATEGORY.test(candidate.detailedCategory ?? "");

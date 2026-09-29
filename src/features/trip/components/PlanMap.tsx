@@ -11,6 +11,7 @@ import { MapRouteOverlay } from "@/features/map/components/MapRouteOverlay";
 import { useRoadRoute } from "@/features/map/routing/useRoadRoute";
 import { planItemsWithCoordinates, syncPlanMapRoadRoute, syncPlanMapRoute } from "./planMapRoute";
 import { dayRoutes } from "./dayRoute";
+import type { RoadRouteProfile } from "@/features/map/routing/fetchRoadRoute";
 
 const MAP_PITCH = 44;
 
@@ -88,7 +89,9 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] ?? char));
 }
 
-export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem[]; dayLabel?: string; expanded?: boolean }) {
+export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "driving" }: {
+  items: PlanItem[]; dayLabel?: string; expanded?: boolean; routeProfile?: RoadRouteProfile;
+}) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
@@ -109,7 +112,7 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
     [located],
   );
   const coordinateList = useMemo(() => located.map(item => item.coordinates), [located]);
-  const { path: roadPath } = useRoadRoute(coordinateList, ready && coordinateList.length >= 2, "driving");
+  const { path: roadPath } = useRoadRoute(coordinateList, ready && coordinateList.length >= 2, routeProfile);
   locatedRef.current = located;
 
   useEffect(() => {
@@ -263,6 +266,8 @@ export function PlanMap({ items, dayLabel, expanded = false }: { items: PlanItem
       map={mapInstance}
       anchors={located.map(item => ({ coordinates: item.coordinates }))}
       pinVariant="planner"
+      roadProfile={routeProfile}
+      providedRoadPath={roadPath}
       active={ready && located.length >= 2}
     />
     {!located.length && <div className="map-unavailable is-overlay"><div><b>표시할 좌표가 없어요</b><span>장소를 담으면 실제 지도와 동선이 보여요.</span></div></div>}

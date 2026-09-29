@@ -36,6 +36,13 @@ describe("planning requirement provenance", () => {
     expect(evaluate(remembered).hardIssues.some(issue => issue.code === "required_activity_missing")).toBe(false);
   });
 
+  it("does not make a candidate browsing request a mandatory course activity", () => {
+    const state = { ...base(), activities: ["cafe" as const],
+      userRequests: ["카페 후보 보여줘"] };
+    expect(resolveRequiredActivities(state)[0]).toMatchObject({
+      activity: "cafe", explicit: false, origin: "legacy_heuristic" });
+  });
+
   it("recognizes a direct intake activity choice without inventing a user turn", () => {
     const state = withActivities(base(), ["전시"]);
     expect(resolveRequiredActivities(state)[0]).toMatchObject({ activity: "exhibit",

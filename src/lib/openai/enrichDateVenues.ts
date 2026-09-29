@@ -267,7 +267,7 @@ export async function enrichDateVenues(candidates: DiscoverCandidate[], state: A
 /** P3 bounded quality research. It uses the existing cited web-search and
  * branch verification path, and never turns missing soft evidence into a venue fact. */
 export async function enrichResearchNeedEvidence(candidates: DiscoverCandidate[], state: AIPlannerState,
-  needs: ResearchNeed[]): Promise<DiscoverCandidate[]> {
+  needs: ResearchNeed[], perNeedLimit = 3): Promise<DiscoverCandidate[]> {
   const evidenceNeeds = needs.filter(need => need.kind === "evidence" && need.evidenceNeeded.length);
   if (!candidates.length) return candidates;
   const fresh = candidates.map(freshResearchCandidateEvidence);
@@ -285,7 +285,7 @@ export async function enrichResearchNeedEvidence(candidates: DiscoverCandidate[]
     const focusParts = need.geographicFocus?.split(/[\/·]/).map(value => value.trim()).filter(Boolean) ?? [];
     for (const candidate of grounded.filter(item => item.category === need.category
       && (!focusParts.length || focusParts.some(focus => item.searchRegion === focus
-        || item.district.includes(focus)))).slice(0, 3)) {
+        || item.district.includes(focus)))).slice(0, Math.max(1, Math.min(perNeedLimit, 6)))) {
       if (evaluateResearchCoverage({ needs: [need], unresolved: [], source: "llm" },
         [candidate], new Set([need.id]))[0].status === "sufficient") continue;
       const id = dateCandidateKey(candidate);

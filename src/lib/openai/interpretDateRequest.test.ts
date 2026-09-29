@@ -33,6 +33,14 @@ describe("interpretDateRequest local merge", () => {
   it("ignores null optional fields without erasing prior constraints", () => {
     expect(validateIntentPayload({ addAreas: [" 성수 "], cuisine: null, preserveExistingPlaces: true })).toEqual({ addAreas: ["성수"], preserveExistingPlaces: true });
   });
+  it("keeps the model's trip intent separate from an explicit stay length", () => {
+    expect(validateIntentPayload({ journeyType: "trip", stayKind: null })).toEqual({ journeyType: "trip" });
+    expect(validateIntentPayload({ journeyType: "holiday" })).toBeNull();
+    const result = applyInterpretPatch({ message: "부산에서 며칠 쉬고 싶어",
+      patch: { journeyType: "trip", addAreas: ["부산"], intent: "create" } });
+    expect(result.journeyType).toBe("trip");
+    expect(result.state.stayKind).toBeNull();
+  });
   it("does not store the JSON schema's objective placeholder", () => {
     expect(validateIntentPayload({ objective: "short Korean date goal" })).toEqual({});
   });

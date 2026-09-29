@@ -52,6 +52,14 @@ describe("course proposal semantic boundary", () => {
       candidates, saved: [], state: state(), researchPlanActive: true });
     expect(enrichDateVenues).not.toHaveBeenCalled();
   });
+  it("keeps a selected provider ID even when the model omits it", async () => {
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+      candidates, saved: [], state: state(), researchPlanActive: true,
+      anchorCandidateIds: ["kakao:noisy"] });
+    expect(result.recommendations.map(item => item.id)).toContain("kakao:noisy");
+    const sent = JSON.parse(vi.mocked(completeJson).mock.calls[0][0].messages[1].content);
+    expect(sent.selectedAnchorIds).toEqual(["kakao:noisy"]);
+  });
   it("keeps the old message contract exactly when hints are absent", () => {
     const payload = { candidates: [{ id: "kakao:quiet" }], budgetWon: 100000 };
     const messages = courseProposalMessages(payload);

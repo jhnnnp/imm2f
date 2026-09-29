@@ -12,6 +12,7 @@ export type ResearchNeed = {
   qualities: string[];
   evidenceNeeded: string[];
   supportingRole?: "primary" | "meal" | "cafe" | "rest" | "shopping";
+  /** Search coverage priority only; never an itinerary hard constraint. */
   priority: "required" | "important" | "optional";
 };
 export type ResearchUnresolved = { needId?: string; reason: string };

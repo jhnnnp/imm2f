@@ -15,7 +15,15 @@ function candidateKakaoUrl(card: ExplorationCard) {
   } catch {
     // Search by the verified candidate name when the provider URL is unavailable.
   }
-  return kakaoPlaceUrl(card.name);
+  return kakaoPlaceUrl([card.name, card.address || card.area].filter(Boolean).join(" "));
+}
+
+function hasExactKakaoUrl(card: ExplorationCard) {
+  try {
+    const url = new URL(card.mapUrl);
+    return ["map.kakao.com", "place.map.kakao.com"].includes(url.hostname)
+      && ["http:", "https:"].includes(url.protocol);
+  } catch { return false; }
 }
 
 export function CandidateExplorationPanel({ area, nights, preferences, onPreferencesChange,
@@ -32,6 +40,7 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
 }) {
   const [refinements, setRefinements] = useState<Partial<Record<ExplorationActivity, string>>>({});
   const chosen = selectedCards.filter(card => selectedIds.includes(card.candidateId));
+  const pendingGroups = groups && preferences.activities.filter(id => !groups.some(group => group.id === id));
   const toggle = (id: ExplorationActivity) => {
     const activities = preferences.activities.includes(id)
       ? preferences.activities.filter(item => item !== id) : [...preferences.activities, id];
@@ -55,6 +64,9 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
         {preferences.cultureKinds.map(item => <span key={item}>{CULTURE_CHOICES.find(option => option.value === item)?.label}</span>)}
         <span>{preferences.pace === "relaxed" ? "여유롭게" : preferences.pace === "active" ? "많이 둘러보기" : "적당히"}</span>
       </div>
+      {nights > 6 && <p className="candidate-duration-note" role="status">
+        {nights}박 {nights + 1}일 장소 후보는 볼 수 있어요. 전체 일정 생성과 검증은 현재 최대 6박 7일까지 지원합니다.
+      </p>}
       <fieldset className="candidate-pref-field"><legend>이번 일정에서 하고 싶은 것</legend>
         <div className="candidate-choice-grid">{EXPLORATION_ACTIVITIES.map(option => <button key={option.id}
           type="button" aria-pressed={preferences.activities.includes(option.id)}
@@ -120,7 +132,10 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
         <h3>{area} · {nights > 0 ? `${nights}박${nights + 1}일` : "하루"}</h3>
         <p>{planned ? "선택한 장소를 반영한 일정을 아래에서 확인하세요. 후보는 여기서 다시 살펴볼 수 있어요."
           : "마음에 드는 곳만 골라 주세요. 모든 종류에서 고르지 않아도 됩니다."}</p></div>
-        <button type="button" onClick={onEdit}>조건 수정</button></header>
+        <button type="button" onClick={onEdit} disabled={busy}>조건 수정</button></header>
+      {nights > 6 && <p className="candidate-duration-note" role="status">
+        {nights}박 {nights + 1}일 후보 탐색 중입니다. 전체 일정 생성은 현재 최대 6박 7일까지 지원합니다.
+      </p>}
       {groups.map(group => <section className="candidate-group" key={group.id} aria-label={group.title}>
         <header className="candidate-group-head"><div><span className="eyebrow">CURATED PLACES</span>
           <h4>{group.title} <small>{group.cards.filter(card => !rejectedIds.includes(card.candidateId)).length}곳 추천</small></h4>
@@ -128,15 +143,15 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
           <button type="button" onClick={() => onMore(group.id)} disabled={busy}>다른 {group.id === "cafe" ? "카페" : "곳"} 보기</button>
         </header>
         <div className="candidate-card-grid">
-          {group.cards.filter(card => !rejectedIds.includes(card.candidateId)).map((card, index) => {
+          {group.cards.filter(card => !rejectedIds.includes(card.candidateId)).map(card => {
             const selected = selectedIds.includes(card.candidateId);
             return <article key={card.candidateId} className={`candidate-card${selected ? " is-selected" : ""}`}>
               <div className="candidate-card-topline">
-                <span className="candidate-card-index">{String(index + 1).padStart(2, "0")}</span>
                 <span className="candidate-card-category">{card.category}</span>
                 <div className="candidate-card-status">
                   {selected && <span className="candidate-selected-mark">✓ 선택됨</span>}
-                  <button type="button" className="candidate-reject" onClick={() => onReject(card)}>별로예요</button>
+                  <button type="button" className="candidate-reject" disabled={busy}
+                    onClick={() => onReject(card)}>별로예요</button>
                 </div>
               </div>
               <div className="candidate-card-main">
@@ -152,11 +167,12 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
                 </div>
               </div>
               <div className="candidate-card-actions"><button type="button" className="candidate-select"
-                aria-pressed={selected} onClick={() => onSelect(card)}>{selected ? "선택 취소" : "장소 선택"}</button>
+                aria-pressed={selected} disabled={busy} onClick={() => onSelect(card)}>{selected ? "선택 취소" : "장소 선택"}</button>
                 <button type="button" className="candidate-detail" onClick={() => onDetail(card)}>상세보기</button>
                 <button type="button" className="candidate-map"
                   onClick={() => openPlaceMiniWindow(candidateKakaoUrl(card), "kakao")}
-                  aria-label={`${card.name} 카카오맵에서 보기`}>카카오맵 <span aria-hidden="true">↗</span></button></div>
+                  aria-label={`${card.name} ${hasExactKakaoUrl(card) ? "카카오맵에서 보기" : "카카오맵에서 검색"}`}>
+                  {hasExactKakaoUrl(card) ? "카카오맵 보기" : "카카오맵 검색"} <span aria-hidden="true">↗</span></button></div>
             </article>;
           })}
         </div>
@@ -168,10 +184,16 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
           <button type="submit" disabled={busy || !refinements[group.id]?.trim()}>조건 다듬기</button>
         </form>
       </section>)}
+      {pendingGroups && pendingGroups.length > 0 && <div className="candidate-pending-groups" role="status">
+        <div><b>{busy ? "다음 장소 후보를 찾고 있어요" : "아직 불러오지 못한 장소가 있어요"}</b>
+          <p>{pendingGroups.map(id => EXPLORATION_ACTIVITIES.find(item => item.id === id)?.label).join(" · ")}</p></div>
+        {!busy && <button type="button" onClick={onSearch}>남은 후보 다시 찾기</button>}
+        {busy && <span className="candidate-pending-pulse" aria-hidden="true" />}
+      </div>}
       <footer className="candidate-selection-summary"><div><b>선택한 장소 {selectedIds.length}곳</b>
         <div>{chosen.map(card => <button type="button" key={card.candidateId} onClick={() => onSelect(card)}
           aria-label={`${card.name} 선택 취소`}>{card.name} ×</button>)}</div></div>
-        <button type="button" className="candidate-primary" onClick={onPlan} disabled={busy || !selectedIds.length}>
+        <button type="button" className="candidate-primary" onClick={onPlan} disabled={busy || !selectedIds.length || nights > 6}>
           {busy ? "일정을 만들고 있어요…" : planned ? "선택한 장소로 다시 짜기" : "선택한 장소로 일정 짜기"}</button></footer>
     </div>}
   </section>;

@@ -27248,6 +27248,7 @@ html.is-toss-blur .toss-veil {
 .candidate-pref-summary { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin: 20px 0 8px; }
 .candidate-pref-summary b { margin-right: 8px; color: #243a2f; font-size: 14px; }
 .candidate-pref-summary span { padding: 5px 9px; border-radius: 999px; background: #e7eee8; color: #466353; font-size: 12px; }
+.candidate-duration-note { margin: 14px 0; padding: 12px 14px; border: 1px solid #d7e3d9; border-radius: 12px; background: #f4f8f4; color: #405d4b; font-size: 13px; line-height: 1.5; }
 .candidate-pref-field { border: 0; margin: 20px 0 0; padding: 0; }
 .candidate-pref-field legend { margin-bottom: 10px; font-size: 14px; font-weight: 750; color: #253e31; }
 .candidate-pref-field legend small { font-size: 11px; font-weight: 400; color: #819088; }
@@ -27318,6 +27319,13 @@ html.is-toss-blur .toss-veil {
 .candidate-refine { display: flex; gap: 7px; margin-top: 12px; }
 .candidate-refine input { min-width: 0; flex: 1; padding: 10px 12px; border: 1px solid #dce4dc; border-radius: 10px; background: #fff; font-size: 12px; }
 .candidate-empty { padding: 20px; border: 1px dashed #cad7cd; border-radius: 12px; color: #637469; font-size: 12px; }
+.candidate-pending-groups { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; padding: 15px 17px; border: 1px solid #dce5dd; border-radius: 13px; background: #f8faf8; color: #31503a; }
+.candidate-pending-groups b { font-size: 13px; }
+.candidate-pending-groups p { margin: 4px 0 0; color: #728277; font-size: 12px; line-height: 1.4; }
+.candidate-pending-groups button { flex: none; padding: 8px 11px; border: 1px solid #cbd9ce; border-radius: 9px; background: white; color: #315a42; font-size: 12px; font-weight: 700; cursor: pointer; }
+.candidate-pending-pulse { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #608b6e; box-shadow: 0 0 0 5px #608b6e1f; animation: candidate-pending-pulse 1.4s ease-in-out infinite; }
+@keyframes candidate-pending-pulse { 50% { opacity: .35; transform: scale(.8); } }
+@media (prefers-reduced-motion: reduce) { .candidate-pending-pulse { animation: none; } }
 .candidate-selection-summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 26px -20px -20px; padding: 13px 20px; border-top: 1px solid #dce5dd; background: rgba(250, 251, 248, .97); }
 .candidate-selection-summary b { display: block; margin-bottom: 6px; font-size: 13px; color: #2d4735; }
 .candidate-selection-summary div div { display: flex; flex-wrap: wrap; gap: 5px; }

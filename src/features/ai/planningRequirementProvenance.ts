@@ -6,6 +6,7 @@ export type ActivityRequirement = { activity: DateActivityId; origin: PlanningIs
 export type CuisineRequirement = { cuisine: AIPlannerState["cuisine"]; origin: PlanningIssueOrigin; explicit: boolean };
 
 const questionOrRejection = /\?|어때|좋을까|싫|별로|말고|제외|빼\s*줘|안\s*먹|못\s*먹/;
+const candidateOnlyRequest = /후보|장소\s*찾|어디\s*있|보여\s*줘|추천\s*해\s*줘/;
 const userClauses = (state: AIPlannerState) => (state.userRequests ?? [])
   .flatMap(message => message.match(/[^,.!?]+[,.!?]?/g) ?? []);
 
@@ -18,7 +19,8 @@ export function resolveRequiredActivities(state: AIPlannerState): ActivityRequir
     .flatMap(extractActivitiesFromText);
   return [...new Set(requested)].map(activity => {
     const fromIntake = state.explicitPlanningSelections?.activities?.includes(activity) && !latestRejected.includes(activity);
-    const fromTurn = !latestRejected.includes(activity) && userClauses(state).some(clause => !questionOrRejection.test(clause)
+    const fromTurn = !latestRejected.includes(activity) && userClauses(state).some(clause =>
+      !questionOrRejection.test(clause) && !candidateOnlyRequest.test(clause)
       && extractActivitiesFromText(clause).includes(activity));
     const origin: PlanningIssueOrigin = fromIntake || fromTurn ? "explicit_constraint"
       : state.memorySuggestions?.activities.includes(activity) ? "inferred_preference" : "legacy_heuristic";

@@ -700,8 +700,15 @@ export function extractCuisine(message: string): DateCuisineChoice | null {
 }
 
 export function extractStay(message: string): { stayKind: DateStayKind; nights: number } | null {
-  if (/2박\s*3일|이틀\s*자|2박/.test(message)) return { stayKind: "overnight", nights: 2 };
-  if (/1박\s*2일|하룻밤|하루\s*자|1박/.test(message)) return { stayKind: "overnight", nights: 1 };
+  const explicitNights = message.match(/(\d{1,2})\s*박(?:\s*(\d{1,2})\s*일)?/);
+  if (explicitNights) {
+    const nights = Number(explicitNights[1]);
+    const days = explicitNights[2] ? Number(explicitNights[2]) : nights + 1;
+    if (nights >= 1 && nights <= 14 && days === nights + 1)
+      return { stayKind: "overnight", nights };
+  }
+  if (/이틀\s*자/.test(message)) return { stayKind: "overnight", nights: 2 };
+  if (/하룻밤|하루\s*자/.test(message)) return { stayKind: "overnight", nights: 1 };
   if (/당일치기|당일\s*코스|하루\s*만|당일로/.test(message)) return { stayKind: "daytrip", nights: 0 };
   if (/데이트/.test(message) && !/여행/.test(message)) return { stayKind: "date", nights: 0 };
   const areas = extractAreasFromText(message);
@@ -887,7 +894,7 @@ export function slotQuestion(slot: DateIntakeSlot, state?: AIPlannerState) {
 }
 
 export function courseSize(state: AIPlannerState) {
-  const nights = Math.max(0, Math.min(2, state.nights || 0));
+  const nights = Math.max(0, Math.min(6, state.nights || 0));
   const days = state.stayKind === "overnight" || nights > 0 ? Math.max(2, nights + 1) : 1;
   const size = days > 1
     ? { min: days === 2 ? 4 : 8, max: 4 * days, days }

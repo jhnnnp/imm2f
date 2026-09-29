@@ -23,6 +23,7 @@ import { loadTasteBoard } from "@/features/taste/actions";
 import { applyTasteFallback, applyTasteHarshAllow, seedFromProfile, violatesTasteAvoid } from "@/features/taste/compare";
 import { applyRanking } from "@/lib/openai/rank";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
+import { isShoppingSearch } from "@/lib/kakao/placeClassification";
 import { searchTourPlacesRemote } from "@/lib/tourapi/client";
 import { isTourApiConfigured } from "@/lib/tourapi/env";
 import { festivalPeriodCoversYmd } from "@/lib/tourapi/festivalSchedule";
@@ -433,6 +434,7 @@ async function recommendPlacesForChat(input: {
       query: plan.query,
       category: activeResearch ? providerCategoryForResearchIntent(plan) : plan.category,
       page: plan.page,
+      includeShopping: isShoppingSearch(plan.query),
       })),
     ]),
   ]);
@@ -606,8 +608,10 @@ type RecommendDatePlanInput = {
   previousState?: AIPlannerState;
   dateLabel?: string;
   conversation?: DateChatTurn[];
-  /** Verified session selections are hard anchors for the existing planner handoff. */
+  /** Exact server-verified provider IDs that the itinerary must include. */
   selectedCandidateIds?: string[];
+  /** User-rejected venue identities must stay out of this itinerary. */
+  rejectedCandidateIds?: string[];
 };
 
 async function recommendDatePlanCore(input: RecommendDatePlanInput,
@@ -933,10 +937,13 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       reply: "",
     };
   const intentDone = performance.now();
-  const selectedAnchorNames = input.selectedCandidateIds?.length && sessionCapture?.previous
+  const selectedAnchorRecords = input.selectedCandidateIds?.length && sessionCapture?.previous
     ? sessionCapture.previous.records.filter(row => input.selectedCandidateIds!.includes(row.candidateId)
-      && sessionCapture.previous!.selectedCandidateIds.includes(row.candidateId))
-      .map(row => row.name).slice(0, 12) : [];
+      && sessionCapture.previous!.selectedCandidateIds.includes(row.candidateId) && row.venue)
+      .slice(0, 12) : [];
+  const selectedAnchorIds = selectedAnchorRecords.map(row => row.candidateId);
+  if (input.selectedCandidateIds?.length && selectedAnchorIds.length !== new Set(input.selectedCandidateIds).size)
+    return chatResult({ headline: "", lines: ["선택한 장소를 확인하지 못했어요. 장소를 다시 선택해 주세요."] }, interpretation.state);
   const turnUnderstanding = message ? await observeTurn(interpretation.state, routed, true) : null;
 
   if (courseEdit && input.currentPlan?.items.length && input.currentPlan.items.length === input.currentPlan.recommendations.length) {
@@ -966,10 +973,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
         .filter(Boolean).slice(-MAX_CONVERSATION_NOTES),
       dateLabel: interpretation.state.dateLabel || input.dateLabel || null,
       requiredPlaces: uniqueStrings([
-        ...selectedAnchorNames,
         ...pickedPlaces,
         ...interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|만화카페|VR(?:카페|\s*체험)?|실내(?:\s*놀거리)?)$/.test(place)),
-      ], selectedAnchorNames.length ? 12 : 6),
+      ], 6),
     },
   });
   const interpreted = tasteSeed ? applyTasteFallback(interpretedRaw, tasteSeed) : interpretedRaw;
@@ -983,6 +989,16 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   }
 
   let state = applyDateDefaults(interpreted);
+  const rejectedCandidateIds = new Set((input.rejectedCandidateIds
+    ?? sessionCapture?.previous?.rejectedCandidateIds ?? [])
+    .filter(id => sessionCapture?.previous?.records.some(row => row.candidateId === id)));
+  const normalizeVenuePart = (value: string) => value.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  const rejectedVenues = sessionCapture?.previous?.records.filter(row =>
+    rejectedCandidateIds.has(row.candidateId) && row.name && row.address) ?? [];
+  const isRejectedVenue = (candidate: DiscoverCandidate) => rejectedCandidateIds.has(dateCandidateKey(candidate))
+    || rejectedVenues.some(row => normalizeVenuePart(row.name) === normalizeVenuePart(candidate.name)
+      && [candidate.address, candidate.roadAddress].some(address => address
+        && normalizeVenuePart(row.address!) === normalizeVenuePart(address)));
   const selectedRegions = selectedAreas(state);
   if (!selectedRegions.length) {
     return clarificationReply("area", state, dateChatCard({ situation: "need_area", userMessage: message, state }));
@@ -1007,7 +1023,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     if (!pending) {
       pending = searchKakaoPlacesRemote({ region: intent.region,
         category: researchActive ? providerCategoryForResearchIntent(intent) : intent.category,
-        query: intent.query, page });
+        query: intent.query, page, includeShopping: isShoppingSearch(intent.query) });
       prefetchedKeywords.set(key, pending);
     }
     return pending;
@@ -1098,6 +1114,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     if (!required && isOffDateVenue(candidate, { allowHarsh, allowKaraoke: state.activities.includes("indoor") })) return;
     unique.set(key, searchRegion ? { ...candidate, searchRegion } : candidate);
   };
+  // Signed provider snapshots are the user's chosen entities. Keep their IDs
+  // through search, ranking and planning even if a later provider page omits them.
+  for (const record of selectedAnchorRecords) if (record.venue) remember(record.venue, undefined, true);
   // Keep the exact entities already shown on screen available during edits.
   // Provider search can omit a venue on a later request even though it is a
   // required stop, which previously made add/swap operations collapse.
@@ -1253,8 +1272,10 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     };
   };
   const admit = (candidate: DiscoverCandidate) => {
-    const required = state.requiredPlaces.some(name => matchesTerm(candidate, name));
-    return isDateCourseCandidate(candidate, state.requiredPlaces)
+    const required = selectedAnchorIds.includes(dateCandidateKey(candidate))
+      || state.requiredPlaces.some(name => matchesTerm(candidate, name));
+    return (required || isDateCourseCandidate(candidate, state.requiredPlaces))
+      && !isRejectedVenue(candidate)
       && !state.excludedPlaces.some(name => matchesTerm(candidate, name))
       && !candidateFoodConflict(`${candidate.name} ${candidate.detailedCategory ?? ""} ${candidate.dishes ?? ""}`, state.excludedFoods ?? [])
       && !violatesTasteAvoid(`${candidate.name} ${candidate.categoryLabel} ${candidate.detailedCategory ?? ""}`, avoidFoods)
@@ -1265,7 +1286,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   let candidatePoolSnapshot: ReturnType<typeof buildDateCandidatePool> | null = null;
   const currentPool = () => {
     const scoped = (anchors.length
-      ? [...unique.values()].filter(candidate => state.requiredPlaces.some(name => matchesTerm(candidate, name)) || anchors.some(anchor => {
+      ? [...unique.values()].filter(candidate => selectedAnchorIds.includes(dateCandidateKey(candidate))
+        || state.requiredPlaces.some(name => matchesTerm(candidate, name)) || anchors.some(anchor => {
         const hop = distanceMeters(anchor.coordinates, candidate.coordinates);
         return hop <= (candidate.category === "festival" ? Math.max(radius, 4000) : radius);
       }) || researchActive && isTravelPlan(state)
@@ -1395,7 +1417,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       .map(fact => [`${fact.url}:${fact.text}`, fact])).values()];
     return { ...candidate, evidence };
   });
-  const catalog = discoveryCatalog(evidencePool, state, rankContext.savedPositive, 72);
+  const catalog = [...evidencePool.filter(candidate => selectedAnchorIds.includes(dateCandidateKey(candidate))),
+    ...discoveryCatalog(evidencePool, state, rankContext.savedPositive, 72)
+      .filter(candidate => !selectedAnchorIds.includes(dateCandidateKey(candidate)))];
   const [hydrated, withPerformances] = await Promise.all([
     hydrateDateCandidates(catalog, saved),
     attachKopisPerformances(catalog, state.dateLabel, courseSize(state).days),
@@ -1469,6 +1493,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     prompt: message || `${condition.region}에서 ${state.activities.join(", ") || "하루"} 데이트`,
     condition,
     candidates: courseCandidates,
+    anchorCandidateIds: selectedAnchorIds,
     saved,
     state,
     recentlyVisited,
@@ -1550,6 +1575,14 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     recommendation.card.lines = [...recommendation.card.lines, notice];
   }
   const designDone = performance.now();
+  if (recommendation.status === "plan" && recommendation.recommendations.some(place =>
+    rejectedCandidateIds.has(place.id) || rejectedCandidateIds.has(place.placeId)
+    || rejectedVenues.some(row => normalizeVenuePart(row.name) === normalizeVenuePart(place.name)
+      && Boolean(place.address) && normalizeVenuePart(row.address!) === normalizeVenuePart(place.address)))) {
+    return withLimitedTasks(() => chatResult({
+      headline: "", lines: ["제외한 장소가 일정에 다시 들어와서 결과를 보여드리지 않았어요. 다른 후보로 다시 시도해 주세요."],
+    }, state), state);
+  }
   // Commit an edit only when the complete replacement satisfies the mutation.
   // A failed search must not leak exclusions or missing stops into the next turn.
   const editingExisting = state.preserveExistingPlaces && Boolean(input.currentPlan?.items.length);

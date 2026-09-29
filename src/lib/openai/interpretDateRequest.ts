@@ -31,6 +31,7 @@ import { retrieveDatePlaybook } from "./datePlaybook";
 import { deriveDateUnderstanding, explicitFoodExclusions, sanitizeDatePreferences, sanitizeInferredPreferences } from "@/features/ai/dateIntent";
 
 export type IntentPayload = {
+  journeyType?: "trip" | "date";
   objective?: string;
   preferences?: Partial<NonNullable<AIPlannerState["preferences"]>>;
   inferredPreferences?: NonNullable<AIPlannerState["inferredPreferences"]>;
@@ -85,6 +86,10 @@ export function validateIntentPayload(value: unknown): IntentPayload | null {
     if (raw[key] == null) continue;
     if (typeof raw[key] !== "boolean") return null;
     result[key] = raw[key];
+  }
+  if (raw.journeyType != null) {
+    if (raw.journeyType !== "trip" && raw.journeyType !== "date") return null;
+    result.journeyType = raw.journeyType;
   }
   for (const key of ["intent", "cuisine", "indoorPlay", "areaScope", "timeWindow", "stayKind", "pace", "startTime", "endTime", "conversationNote", "askSlot", "reply"]) {
     if (raw[key] == null) continue;
@@ -165,7 +170,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     ? patch.stayKind
     : (reset ? null : base.stayKind);
   const nights = stayKind === "overnight"
-    ? Math.max(1, Math.min(2, Number(patch.nights ?? (reset ? 1 : base.nights)) || 1))
+    ? Math.max(1, Math.min(6, Number(patch.nights ?? (reset ? 1 : base.nights)) || 1))
     : 0;
   const areaScope = asAreaScope(patch.areaScope) ?? (reset ? null : base.areaScope);
   const located = withAreas({ ...base, areaScope }, areas);
@@ -272,7 +277,8 @@ export function applyInterpretPatch(input: {
     foodAllergy: merged.foodAllergy || (exclusions.length > 0 && /알레르기/.test(input.message)),
     pendingSlot: null }, areas);
   const next = { ...state, pendingSlot: missingSlot(state) };
-  return { state: next, slot: missingSlot(next), reply: usableReply(input.patch.reply) };
+  return { state: next, slot: missingSlot(next), reply: usableReply(input.patch.reply),
+    journeyType: input.patch.journeyType ?? null };
 }
 
 export function shouldSkipDateNlu(message: string) {
@@ -311,7 +317,7 @@ export async function interpretDateRequest(input: {
           content: [
             "You understand the goal and preferences in an ongoing Korean couple-date chat. Extract explicit constraints from THIS turn and infer soft ranking preferences. The course planner chooses venues later.",
             "Return JSON only:",
-            '{"intent":"create|modify|remove|reset|clarify","objective":"","preferences":{"vibe":[],"novelty":null,"intimacy":null,"activityLevel":null,"crowdTolerance":null,"scenicPreference":null,"foodImportance":null,"walkingTolerance":null},"inferredPreferences":[],"addActivities":[],"removeActivities":[],"addAreas":[],"removeAreas":[],"addPlaces":[],"addStop":false,"cuisine":null,"indoorPlay":null,"areaScope":null,"timeWindow":null,"stayKind":null,"nights":null,"pace":null,"startTime":null,"endTime":null,"preserveExistingPlaces":true,"conversationNote":"","askSlot":null,"reply":""}',
+            '{"intent":"create|modify|remove|reset|clarify","journeyType":"trip|date","objective":"","preferences":{"vibe":[],"novelty":null,"intimacy":null,"activityLevel":null,"crowdTolerance":null,"scenicPreference":null,"foodImportance":null,"walkingTolerance":null},"inferredPreferences":[],"addActivities":[],"removeActivities":[],"addAreas":[],"removeAreas":[],"addPlaces":[],"addStop":false,"cuisine":null,"indoorPlay":null,"areaScope":null,"timeWindow":null,"stayKind":null,"nights":null,"pace":null,"startTime":null,"endTime":null,"preserveExistingPlaces":true,"conversationNote":"","askSlot":null,"reply":""}',
             "latestMessage is the user's actual turn. recentTurns is the chat. currentPlaces is the course already on screen. Interpret meaning, not keywords. Chip labels like 일정추가, 카페변경, 식당변경, 일정제외 are user turns too.",
             "Never invent a city or neighborhood the user did not write. addAreas may only contain names that appear in latestMessage.",
             "If the user intends a trip or date but gives no destination, ask for the destination. Never copy names from the guidance into addAreas.",
@@ -319,6 +325,7 @@ export async function interpretDateRequest(input: {
             "Only explicitly requested activities become hard requirements. A destination alone does not imply a cafe, walk, meal, or attraction.",
             "Infer a date objective and soft preferences from the whole utterance. For example, 오랜만에 만나 조용히 대화 implies a conversational reunion, high intimacy and low crowd tolerance. These are ranking hints, NEVER hard activity or venue requirements. Cite an exact latestMessage phrase for each inferred preference and express confidence 0..1. An explicit food restriction is a hard constraint, not a preference.",
             "Use stayKind date for a date, daytrip for a specified one-day trip, overnight with nights for an explicitly specified overnight trip. An unspecified trip length stays null so the app can ask.",
+            "Set journeyType to trip when the user means a trip, even if its length is unknown. Set date for a local date. Judge the meaning of the whole message and recent turns, not a keyword alone. Do not infer a trip length from journeyType.",
             "If the user names a destination, never askSlot area. Time only if they mentioned when, not because they said 저녁 먹고 싶어.",
             "askSlot may be area only when no city or neighborhood can be inferred. Never ask activity, cuisine, scope, or indoor.",
             "reply is empty whenever a course can be generated. When asking where to go, one polite 해요체 sentence. No emoji, no 반말, no vibe adjectives.",

@@ -25,6 +25,19 @@ it("assembles pedestrian legs separately for each travel day", async () => {
   expect(route?.legs.map(leg => leg.meters)).toEqual([900, 0, 1100]);
 });
 
+it("keeps a short one-stop day without connecting it to the next day", async () => {
+  const candidates = [stop("a", 126.7), stop("b", 126.75), stop("c", 126.76)];
+  const byId = new Map(candidates.map(candidate => [`kakao:${candidate.externalPlaceId}`, candidate]));
+  vi.mocked(fetchFootRoute).mockResolvedValueOnce({ provider: "osm_foot", meters: 800, seconds: 600,
+    legs: [{ meters: 800, seconds: 600 }] });
+  const route = await footRouteForDays([
+    { id: "kakao:a", day_index: 0 }, { id: "kakao:b", day_index: 1 },
+    { id: "kakao:c", day_index: 1 },
+  ], byId, 2, 6500);
+  expect(fetchFootRoute).toHaveBeenCalledTimes(1);
+  expect(route?.legs.map(leg => leg.meters)).toEqual([0, 800]);
+});
+
 it("rejects a timed course when the actual walking leg misses the next stop", () => {
   const rows = [
     { id: "kakao:a", day_index: 0, start_time: "17:00", duration_minutes: 60 },

@@ -51,4 +51,13 @@ describe("dateCourseCandidate", () => {
     const other = candidate({ name: "소월아트홀 주차장", category: "tourist", categoryLabel: "주차장", kakaoCategoryGroupCode: undefined });
     expect(isDateCourseCandidate(other, ["소월아트홀"])).toBe(false);
   });
+
+  it("shares provider-backed shopping eligibility with candidate exploration", () => {
+    const outlet = candidate({ name: "서전주아울렛", category: "tourist", categoryLabel: "장소",
+      detailedCategory: "가정,생활 > 상설할인매장", kakaoCategoryGroupCode: "",
+      address: "전북특별자치도 전주시 완산구 효자동" });
+    expect(isDateCourseCandidate(outlet, [])).toBe(true);
+    expect(isDateCourseCandidate({ ...outlet, name: "아파트 상가동",
+      detailedCategory: "가정,생활 > 상가,아케이드 > 아파트상가" }, [])).toBe(false);
+  });
 });

@@ -1,6 +1,7 @@
 import { kakaoCategoryQuery, kakaoGroupCode } from "@/features/places/config/kakaoCategories";
 import type { KakaoPlaceCandidate, PlaceCategoryId } from "@/features/places/types/place";
 import { getKakaoApiKeys } from "./env";
+import { classifyKakaoPlace } from "./placeClassification";
 
 type KakaoKeywordDocument = {
   id?: string;
@@ -33,6 +34,8 @@ export type KakaoSearchInput = {
   y?: number;
   radius?: number;
   page?: number;
+  /** Admit provider-identified shopping complexes for an explicit shopping search. */
+  includeShopping?: boolean;
 };
 
 export type KakaoSearchResult =
@@ -79,9 +82,12 @@ export function districtFromAddress(address: string) {
   return address;
 }
 
-function toCandidate(document: KakaoKeywordDocument): KakaoPlaceCandidate | null {
+function toCandidate(document: KakaoKeywordDocument, includeShopping = false): KakaoPlaceCandidate | null {
   if (!document.id || !document.place_name) return null;
-  if (isKakaoUtilityGroupCode(document.category_group_code)) return null;
+  const classification = classifyKakaoPlace({ name: document.place_name,
+    detailedCategory: document.category_name, groupCode: document.category_group_code });
+  if (isKakaoUtilityGroupCode(document.category_group_code)
+    && !(includeShopping && classification.shoppingKind && classification.visitable)) return null;
   const lng = Number(document.x);
   const lat = Number(document.y);
   if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
@@ -214,7 +220,8 @@ export async function searchKakaoPlacesRemote(input: KakaoSearchInput): Promise<
         continue;
       }
       const payload = JSON.parse(text) as KakaoKeywordResponse;
-      const mapped = (payload.documents ?? []).map(toCandidate).filter((item): item is KakaoPlaceCandidate => item !== null);
+      const mapped = (payload.documents ?? []).map(document => toCandidate(document, input.includeShopping))
+        .filter((item): item is KakaoPlaceCandidate => item !== null);
       const categorized = input.category && input.category !== "all"
         ? mapped.filter(place => place.category === input.category)
         : mapped;

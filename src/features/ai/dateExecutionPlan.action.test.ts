@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import type { AIPlannerReply } from "@/features/planning/types/plan";
 import { emptyDateBrief } from "./dateBrief";
+import { markExplorationCandidates, sealSessionCandidates } from "./sessionCandidates";
 import { recommendDatePlan, recommendDatePlanWithSession } from "./actions";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
 import { recommendDatePlanWithOpenAi } from "@/lib/openai/recommendDatePlan";
@@ -138,6 +139,23 @@ it("carries candidate records across turns beside an unchanged AIPlannerResult",
     sessionCandidates: { ...first.sessionCandidates, signature: "bad" } });
   expect(invalid.result).toEqual(legacy);
   expect(invalid.sessionCandidates.turnCount).toBe(1);
+
+  const rejected = sealSessionCandidates(markExplorationCandidates(first.sessionCandidates, {
+    rejectedIds: ["kakao:cafe"], selectedIds: [], turnId: "reject:cafe",
+    observedAt: new Date().toISOString(),
+  }));
+  vi.mocked(searchKakaoPlacesRemote).mockResolvedValue({ ok: true, places: [
+    { ...candidates[0], kakaoCategoryGroupCode: "FD6" },
+    { ...candidates[1], kakaoCategoryGroupCode: "CE7" },
+    { ...candidates[1], externalPlaceId: "cafe-duplicate", kakaoCategoryGroupCode: "CE7" },
+    { ...candidates[1], externalPlaceId: "cafe-2", name: "다른 성수 카페",
+      kakaoCategoryGroupCode: "CE7" }] });
+  await recommendDatePlanWithSession({ ...sessionInput, sessionCandidates: rejected,
+    rejectedCandidateIds: ["kakao:cafe"] });
+  expect(vi.mocked(recommendDatePlanWithOpenAi).mock.lastCall?.[0].candidates
+    .map(candidate => `kakao:${candidate.externalPlaceId}`)).not.toContain("kakao:cafe");
+  expect(vi.mocked(recommendDatePlanWithOpenAi).mock.lastCall?.[0].candidates
+    .map(candidate => `kakao:${candidate.externalPlaceId}`)).not.toContain("kakao:cafe-duplicate");
 });
 
 it("keeps the course route primary and appends one verified cafe inspection only in limited assist", async () => {

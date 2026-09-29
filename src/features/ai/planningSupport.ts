@@ -1,4 +1,4 @@
-/** Current itinerary engine supports domestic local dates and trips up to three days. */
+/** Current itinerary engine supports domestic local dates and trips up to seven days. */
 export function unsupportedCourseRequest(message: string) {
   const abroad = /해외|국외/.test(message)
     || (/(?:여행|당일치기|\d+\s*박|(?:에서|으로|로)\s*(?:데이트|코스|일정))/.test(message)
@@ -7,8 +7,8 @@ export function unsupportedCourseRequest(message: string) {
     return "현재 장소·관광 정보 검증은 국내 코스에 한정돼 있어요. 해외 장소를 확인하지 않은 채 여행 코스를 만들지 않을게요.";
   const nights = [...message.matchAll(/(\d+)\s*박/g)].map(match => Number(match[1]));
   const longest = Math.max(0, ...nights);
-  if (longest > 2) {
-    return `현재 여행 코스는 최대 2박 3일까지 검증할 수 있어요. ${longest}박 일정을 임의로 2박으로 줄이지 않을게요. 먼저 2박 3일 구간을 지정해 주세요.`;
+  if (longest > 6) {
+    return `현재 여행 코스는 최대 6박 7일까지 검증할 수 있어요. ${longest}박 일정을 임의로 줄이지 않을게요. 먼저 6박 7일 이내 구간을 지정해 주세요.`;
   }
   return null;
 }

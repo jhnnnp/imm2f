@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import type { PlanItem } from "@/features/planning/types/plan";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { dayRoutes } from "./dayRoute";
+import { dayRoutes, itineraryOrderMatchesItems } from "./dayRoute";
 import { PlanMap } from "./PlanMap";
 
 const item = (dayIndex: number, order: number): PlanItem => ({ id: `${dayIndex}-${order}`,
@@ -28,4 +28,16 @@ it("renders one tab per itinerary day and selects the first day initially", () =
   expect(html).toContain("2일차");
   expect(html).toContain("3일차");
   expect(html).not.toContain(">전체</button>");
+});
+
+it("checks map day and marker order against the planned provider IDs", () => {
+  const items = [{ ...item(0, 0), placeId: "discover:kakao:a" },
+    { ...item(0, 1), placeId: "discover:kakao:b" },
+    { ...item(1, 2), placeId: "discover:kakao:c" }];
+  const rows = [{ id: "kakao:a", day_index: 0 }, { id: "kakao:b", day_index: 0 },
+    { id: "kakao:c", day_index: 1 }];
+  expect(itineraryOrderMatchesItems(rows, items)).toBe(true);
+  expect(itineraryOrderMatchesItems(rows, [items[1], items[0], items[2]])).toBe(true);
+  expect(itineraryOrderMatchesItems(rows, items.map((value, index) =>
+    index === 2 ? { ...value, dayIndex: 0 } : value))).toBe(false);
 });
