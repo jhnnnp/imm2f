@@ -1,0 +1,91 @@
+.overview {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-outer, 12px);
+  background: color-mix(in srgb, var(--sage-soft) 24%, var(--paper));
+}
+
+.overviewHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 10px;
+}
+
+.overviewHead h3 {
+  margin: 0;
+  font-size: .85rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.overviewHead > span,
+.memoAuthor {
+  font-size: .7rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.readableText .text {
+  margin: 0;
+  font: .9rem/1.7 var(--default);
+  color: var(--ink);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+.readableText .collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+}
+
+.expandButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  min-height: 32px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--sage-deep);
+  font-size: .78rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.expandButton:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.recommendation {
+  margin: 16px 0;
+}
+
+.sectionLabel {
+  display: block;
+  margin-bottom: 6px;
+  font-size: .75rem;
+  font-weight: 700;
+  color: var(--sage-deep);
+}
+
+.memoAuthor {
+  display: block;
+  margin-top: 8px;
+}
+
+.emptyMemo {
+  margin: 0;
+  font-size: .85rem;
+  line-height: 1.6;
+  color: var(--muted);
+}

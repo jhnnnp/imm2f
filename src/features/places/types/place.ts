@@ -22,6 +22,8 @@ export type Place = {
   phone?: string;
   openingHours?: string | null;
   description: string;
+  /** Provider overview for display; separate from the couple's editable memo. */
+  sourceDescription?: string;
   memoAuthorId?: string;
   durationMinutes: number;
   expectedCostTwo: number | null;

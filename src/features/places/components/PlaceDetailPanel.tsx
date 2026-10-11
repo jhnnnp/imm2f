@@ -2,7 +2,7 @@
 
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { TripScheduleStop } from "../tripPlaceMatch";
 import type { Place, PlacePreferenceStatus } from "../types/place";
 import { isDiscoverPlace } from "../discover";
@@ -13,9 +13,23 @@ import { kakaoPlaceUrl, naverPlaceSearchUrl } from "../format";
 import { openPlaceMiniWindow } from "../openPlaceMini";
 import { PlaceGraphicCover } from "./PlaceGraphicCover";
 import { PlaceLocationMap } from "./PlaceLocationMap";
+import styles from "./PlaceDetailPanel.module.css";
 
 const STATUS_OPTIONS: PlacePreferenceStatus[] = ["want", "visited", "revisit", "not_interested"];
 const HEART_SAVED: PlacePreferenceStatus[] = ["want", "must_visit", "revisit"];
+
+function ReadablePlaceText({ text, label = "설명" }: { text: string; label?: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const textId = useId();
+  const long = text.length > 180 || text.split("\n").length > 4;
+  useEffect(() => { setExpanded(false); }, [text]);
+  return <div className={styles.readableText}>
+    <p id={textId} className={`${styles.text} ${long && !expanded ? styles.collapsed : ""}`}>{text}</p>
+    {long && <button className={styles.expandButton} type="button" aria-expanded={expanded} aria-controls={textId} onClick={() => setExpanded(value => !value)}>
+      {expanded ? `${label} 접기` : `전체 ${label} 보기`} <span aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
+    </button>}
+  </div>;
+}
 
 function optionIsActive(current: PlacePreferenceStatus, option: PlacePreferenceStatus) {
   if (option === "want") return current === "want" || current === "must_visit";
@@ -106,6 +120,8 @@ export function PlaceDetailPanel({
   }
 
   const memoText = place.description.trim();
+  const recommendation = place.recommendReason?.trim() ?? "";
+  const overview = place.sourceDescription?.trim() || (preview && memoText !== recommendation ? memoText : "");
   const canEditMemo = !preview && Boolean(onDescriptionSave);
 
   return <div className="place-detail-panel" data-place-id={place.id}>
@@ -128,7 +144,7 @@ export function PlaceDetailPanel({
           <span>동네</span>
           <input name="district" defaultValue={place.district} placeholder="군산시 경암동" />
         </label>
-        <p className="form-hint">구석구석 위치가 어긋나면 주소로 카카오 좌표를 다시 맞춰요.</p>
+        <p className="form-hint">수정한 주소로 지도 위치를 다시 확인해요.</p>
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="dialog-actions">
           <button className="outline-button" type="button" onClick={() => { setEditing(false); setError(""); }}>취소</button>
@@ -136,8 +152,15 @@ export function PlaceDetailPanel({
         </div>
       </form>
     )}
-    {place.recommendReason ? <p className="detail-description is-recommend">{place.recommendReason}</p> : null}
-    <section className="place-memo-block" aria-labelledby="place-memo-label">
+    {recommendation && <section className={styles.recommendation} aria-label="추천 포인트">
+      <span className={styles.sectionLabel}>추천 포인트</span>
+      <ReadablePlaceText key={`${place.id}:recommendation`} text={recommendation} />
+    </section>}
+    {overview && <section className={styles.overview} aria-label="장소 소개">
+      <div className={styles.overviewHead}><h3>장소 소개</h3>{place.externalSource === "tourapi" && <span>한국관광공사 · 대한민국 구석구석</span>}</div>
+      <ReadablePlaceText key={`${place.id}:overview`} text={overview} />
+    </section>}
+    {!preview && <section className="place-memo-block" aria-labelledby="place-memo-label">
       <div className="place-memo-head">
         <span id="place-memo-label" className="place-memo-label">우리 메모</span>
         {canEditMemo && !memoEditing ? (
@@ -163,11 +186,11 @@ export function PlaceDetailPanel({
           </div>
         </form>
       ) : memoText ? (
-        <><p className="detail-description">{memoText}</p><small className="memo-author">{memoAuthor ? `${memoAuthor} · 마지막으로 작성` : "함께 남긴 메모"}</small></>
+        <><ReadablePlaceText key={`${place.id}:memo`} text={memoText} label="메모" /><small className={styles.memoAuthor}>{memoAuthor ? `${memoAuthor} · 마지막으로 작성` : "저장한 메모"}</small></>
       ) : (
-        <p className="detail-description muted">{preview ? "저장하면 우리의 메모를 남길 수 있어요." : "아직 우리의 메모는 없어요."}</p>
+        <p className={styles.emptyMemo}>함께 남긴 메모가 없어요.</p>
       )}
-    </section>
+    </section>}
     {!preview && tripScheduleStops.length > 0 && (
       <section className="place-trip-block" aria-labelledby="place-trip-label">
         <div className="place-memo-head">

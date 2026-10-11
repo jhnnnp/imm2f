@@ -495,7 +495,7 @@ export function PlacesExperience({
     setDiscover(current => current.map(item => (
       item.id === id
         ? detail
-          ? { ...item, description: detail.overview || item.description, image: detail.image || item.image, openingHours: detail.openingHours || item.openingHours, homepage: detail.homepage, detailFacts: detail.facts, tourDetailLoaded: true }
+          ? { ...item, sourceDescription: detail.overview, image: detail.image || item.image, openingHours: detail.openingHours || item.openingHours, homepage: detail.homepage, detailFacts: detail.facts, tourDetailLoaded: true }
           : { ...item, tourDetailLoaded: true }
         : item
     )));
@@ -521,7 +521,7 @@ export function PlacesExperience({
         durationMinutes: selected.durationMinutes || 60,
         expectedCost: selected.expectedCostTwo || 0,
         order: 0,
-        memo: selected.description || "",
+        memo: isDiscoverPlace(selected) ? "" : selected.description || "",
         dayIndex: destination.dayIndex,
         coordinates: selected.coordinates,
       }, { targetDate: destination.targetDate }).catch(() => ({ error: `${label}에 담지 못했어요. 연결을 확인하고 다시 시도해 주세요.` }));
