@@ -29,10 +29,9 @@ import {
   type Camera,
 } from "../canvasCamera";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
+import { createRefreshQueue } from "@/features/collaboration/refreshQueue";
 import {
   emptyBoardState,
-  isBoardEmpty,
-  mergeWallBoard,
   readBoardState,
   writeBoardState,
   writeBoardSyncedAt,
@@ -42,6 +41,7 @@ import {
 import { saveMemoryWallBoard, loadMemoryWallBoard } from "../wallBoardActions";
 import { mergeBoardEdits } from "../mergeBoardEdits";
 import { subscribeMemoryWallBoard } from "../wallBoardLive";
+import { isNewerBoardVersion } from "../wallBoardVersion";
 import {
   createWallText,
   WALL_TEXT_SIZES,
@@ -153,6 +153,9 @@ export function MemoryCanvas({
 }) {
   const session = useAppSession();
   const userId = session.mode === "authenticated" ? session.userId : null;
+  const scopeRef = useRef({ coupleId, userId });
+  scopeRef.current = { coupleId, userId };
+  const activeRef = useRef(true);
   const viewRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<Camera>({ x: 0, y: 0, zoom: 0.42 });
   const posesRef = useRef(poses);
@@ -171,7 +174,6 @@ export function MemoryCanvas({
   const spaceRef = useRef(false);
   const loadedRef = useRef(false);
   const applyingRemoteRef = useRef(false);
-  const lastSelfSaveAtRef = useRef(0);
   const coupleIdRef = useRef(coupleId);
   coupleIdRef.current = coupleId;
   const [camera, setCameraState] = useState<Camera>(cameraRef.current);
@@ -208,34 +210,45 @@ export function MemoryCanvas({
   const remoteVersionRef = useRef<string | null>(null);
   const dirtyRef = useRef(false);
   const savingRef = useRef(false);
+  const pendingRemoteRef = useRef<{ state: CorkBoardState; updatedAt: string } | null>(null);
+  const drainRemoteRef = useRef(() => {});
+  useEffect(() => {
+    activeRef.current = true;
+    savingRef.current = false;
+    return () => { activeRef.current = false; };
+  }, [coupleId, userId]);
   const [syncError, setSyncError] = useState("");
   const [syncStatus, setSyncStatus] = useState<"idle" | "saving" | "saved">("idle");
   const flushRemoteSave = useCallback((state: CorkBoardState) => {
     if (remoteSaveTimer.current) window.clearTimeout(remoteSaveTimer.current);
     remoteSaveTimer.current = window.setTimeout(async () => {
+      const expectedScope = { coupleId, userId };
+      const isCurrentScope = () => activeRef.current && scopeRef.current.coupleId === coupleId && scopeRef.current.userId === userId;
+      if (!isCurrentScope()) return;
       if (savingRef.current) { flushRemoteSave(boardSnapshot()); return; }
       savingRef.current = true;
       setSyncStatus("saving");
       const sent = boardSnapshot();
       const base = baseRef.current;
       try {
-        const result = await saveMemoryWallBoard(sent, base);
+        const result = await saveMemoryWallBoard(sent, base, expectedScope);
+        if (!isCurrentScope()) return;
         if ("error" in result) { setSyncError(result.error); setSyncStatus("idle"); return; }
         const next = mergeBoardEdits(sent, boardSnapshot(), result.state);
         baseRef.current = result.state;
         remoteVersionRef.current = result.updatedAt;
         posesRef.current = next.poses; strokesRef.current = next.strokes; textsRef.current = next.texts;
         setPoses(next.poses); setStrokes(next.strokes); setTexts(next.texts);
-        writeBoardState(coupleIdRef.current, next);
-        writeBoardSyncedAt(coupleIdRef.current, result.updatedAt);
+        writeBoardState(coupleId, next);
+        writeBoardSyncedAt(coupleId, result.updatedAt);
         dirtyRef.current = JSON.stringify({ ...next, camera: null }) !== JSON.stringify({ ...result.state, camera: null });
         setSyncError("");
         setSyncStatus("saved");
         if (dirtyRef.current) flushRemoteSave(next);
-      } catch { setSyncError("아직 저장되지 않았어요. 연결을 확인한 뒤 다시 저장해 주세요."); setSyncStatus("idle"); }
-      finally { savingRef.current = false; }
+      } catch { if (isCurrentScope()) { setSyncError("아직 저장되지 않았어요. 연결을 확인한 뒤 다시 저장해 주세요."); setSyncStatus("idle"); } }
+      finally { savingRef.current = false; if (isCurrentScope()) drainRemoteRef.current(); }
     }, 420);
-  }, [boardSnapshot, setPoses]);
+  }, [boardSnapshot, coupleId, setPoses, userId]);
 
   const persist = useCallback((next?: { poses?: Record<string, CorkPose>; strokes?: InkStroke[]; texts?: WallText[]; camera?: Camera }) => {
     dirtyRef.current = true;
@@ -245,6 +258,7 @@ export function MemoryCanvas({
     if (next?.camera) cameraRef.current = next.camera;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
+      if (!activeRef.current || scopeRef.current.coupleId !== coupleId) return;
       const state = boardSnapshot();
       writeBoardState(coupleId, state);
       if (!applyingRemoteRef.current) flushRemoteSave(state);
@@ -290,7 +304,12 @@ export function MemoryCanvas({
   useEffect(() => {
     let cancelled = false;
     loadedRef.current = false;
+    dirtyRef.current = false;
+    pendingRemoteRef.current = null;
+    remoteVersionRef.current = null;
+    baseRef.current = emptyBoardState();
     const local = readBoardState(coupleId);
+    const loadBase = boardSnapshot();
 
     const finishCamera = (board: CorkBoardState) => {
       const applyCamera = () => {
@@ -302,6 +321,7 @@ export function MemoryCanvas({
       };
       applyCamera();
       window.requestAnimationFrame(() => {
+        if (cancelled) return;
         applyCamera();
         loadedRef.current = true;
       });
@@ -309,47 +329,72 @@ export function MemoryCanvas({
 
     void loadMemoryWallBoard().then(({ state: remote, updatedAt }) => {
       if (cancelled) return;
+      // A newer socket/save response can arrive before this initial read.
+      if (remoteVersionRef.current && (!updatedAt || !isNewerBoardVersion(updatedAt, remoteVersionRef.current))) {
+        finishCamera(boardSnapshot());
+        return;
+      }
       baseRef.current = remote ?? emptyBoardState();
       remoteVersionRef.current = updatedAt;
-      const merged = remote ? { ...remote, camera: local.camera } : local;
+      const merged = dirtyRef.current
+        ? mergeBoardEdits(loadBase, boardSnapshot(), remote ?? local)
+        : remote ? { ...remote, camera: local.camera } : local;
       applyBoard(merged);
       writeBoardState(coupleId, merged);
       if (updatedAt) writeBoardSyncedAt(coupleId, updatedAt);
       finishCamera(merged);
-      if ((!remote || isBoardEmpty(remote)) && !isBoardEmpty(local)) {
-        void saveMemoryWallBoard(local, emptyBoardState()).then(result => {
-          if ("ok" in result) writeBoardSyncedAt(coupleId, result.updatedAt);
-        });
-      }
     }).catch(() => {
       if (cancelled) return;
-      applyBoard(local);
-      finishCamera(local);
+      if (remoteVersionRef.current) { finishCamera(boardSnapshot()); return; }
+      const next = dirtyRef.current ? mergeBoardEdits(loadBase, boardSnapshot(), local) : local;
+      // Retrying applies only edits since the cached board; cached data alone
+      // must not overwrite a partner's newer server board after an outage.
+      baseRef.current = local;
+      applyBoard(next);
+      finishCamera(next);
+      setSyncError("벽면을 불러오지 못했어요. 현재 꾸민 내용은 보관되어 있어요. 연결을 확인한 뒤 다시 저장해 주세요.");
     });
 
     const receive = (remote: CorkBoardState, updatedAt: string) => {
-      if (cancelled || updatedAt === remoteVersionRef.current || savingRef.current || drawRef.current || textDragRef.current || editingTextRef.current) return;
+      if (cancelled || !isNewerBoardVersion(updatedAt, remoteVersionRef.current)) return;
+      if (savingRef.current || drawRef.current || textDragRef.current || editingTextRef.current) {
+        if (!pendingRemoteRef.current || isNewerBoardVersion(updatedAt, pendingRemoteRef.current.updatedAt)) pendingRemoteRef.current = { state: remote, updatedAt };
+        return;
+      }
       remoteVersionRef.current = updatedAt;
       const next = dirtyRef.current ? mergeBoardEdits(baseRef.current, boardSnapshot(), remote) : { ...remote, camera: cameraRef.current };
       baseRef.current = remote;
       applyBoard(next);
       writeBoardState(coupleId, next);
       writeBoardSyncedAt(coupleId, updatedAt);
+      if (!loadedRef.current) finishCamera(next);
     };
-    const live = subscribeMemoryWallBoard(coupleId, receive);
-    const poll = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      void loadMemoryWallBoard().then(({ state, updatedAt }) => {
+    const drainRemote = () => {
+      if (!pendingRemoteRef.current || savingRef.current || drawRef.current || textDragRef.current || editingTextRef.current) return;
+      const pending = pendingRemoteRef.current;
+      pendingRemoteRef.current = null;
+      receive(pending.state, pending.updatedAt);
+    };
+    drainRemoteRef.current = drainRemote;
+    const queue = createRefreshQueue(async () => {
+      try {
+        const { state, updatedAt } = await loadMemoryWallBoard();
+        if (cancelled) return;
         if (state && updatedAt) receive(state, updatedAt);
-      }).catch(() => {});
-    }, 5000);
+      } catch { if (!cancelled) setSyncError("벽면의 최신 변경을 불러오지 못했어요. 현재 내용은 보관되어 있어요."); }
+    }, { canRun: () => !cancelled && document.visibilityState === "visible" });
+    const live = subscribeMemoryWallBoard(coupleId, receive, queue.schedule);
 
     return () => {
       cancelled = true;
+      if (drainRemoteRef.current === drainRemote) drainRemoteRef.current = () => {};
+      pendingRemoteRef.current = null;
+      queue.stop();
       live.unsubscribe();
-      if (poll) window.clearInterval(poll);
     };
-  }, [applyBoard, coupleId, userId]);
+  }, [applyBoard, boardSnapshot, coupleId, flushRemoteSave, userId]);
+
+  useEffect(() => { if (!editingTextId) drainRemoteRef.current(); }, [editingTextId]);
 
   useEffect(() => {
     if (!loadedRef.current || JSON.stringify(poses) === JSON.stringify(baseRef.current.poses)) return;
@@ -368,7 +413,7 @@ export function MemoryCanvas({
       texts: textsRef.current,
     };
     writeBoardState(coupleIdRef.current, state);
-    if (dirtyRef.current) void saveMemoryWallBoard(state, baseRef.current);
+    if (dirtyRef.current) void saveMemoryWallBoard(state, baseRef.current, scopeRef.current).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -631,10 +676,10 @@ export function MemoryCanvas({
     const view = viewRef.current;
     if (view?.hasPointerCapture(event.pointerId)) view.releasePointerCapture(event.pointerId);
     const draw = drawRef.current;
-    if (!draw || draw.pointerId !== event.pointerId) return;
+    if (!draw || draw.pointerId !== event.pointerId) { drainRemoteRef.current(); return; }
     drawRef.current = null;
     setLivePath("");
-    if (draw.tool === "eraser" || draw.points.length < 1) return;
+    if (draw.tool === "eraser" || draw.points.length < 1) { drainRemoteRef.current(); return; }
     commitStrokes([...strokesRef.current, createInkStroke({
       tool: draw.tool,
       color,
@@ -642,6 +687,7 @@ export function MemoryCanvas({
       points: draw.points,
       simulatePressure: draw.simulatePressure,
     })]);
+    drainRemoteRef.current();
   }
 
   function fitView() {

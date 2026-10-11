@@ -88,10 +88,11 @@ describe("date turn understanding", () => {
     expect(turn.ambiguities).toContain("아까 게");
   });
 
-  it("extracts an explicit budget with deterministic provenance", () => {
+  it("does not expose budget as an active constraint or grant deterministic provenance", () => {
     const turn = understand("예산 10만원 넘기지 마");
-    expect(turn.explicitConstraints.budgetWon).toBe(100000);
-    expect(turn.provenance).toContainEqual({ field: "explicitConstraints", key: "budgetWon", source: "deterministic" });
+    expect(turn.explicitConstraints.budgetWon).toBeUndefined();
+    expect(turn.provenance.some(item => item.key === "budgetWon")).toBe(false);
+    expect(toDateIntent({ ...state(), budgetWon: 100000 }).hardConstraints.budgetWon).toBeUndefined();
   });
 
   it("keeps an explicitly disliked food separate from preferences", () => {

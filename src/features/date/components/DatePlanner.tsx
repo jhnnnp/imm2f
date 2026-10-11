@@ -7,11 +7,12 @@ import { useRouter } from "next/navigation";
 import { readDateWorkspace } from "@/features/collaboration/workspaceReads";
 import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
 import { ContextPanel } from "@/components/layout/ContextPanel";
+import { openContextPanel } from "@/components/layout/ContextPanelDrawer";
 import { DatePickerButton } from "@/components/shared/DatePickerButton";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { DateArchiveJournal } from "@/features/date/components/DateArchiveJournal";
 import { emptyDateDay, hasDateContent, landingDateDay, upsertDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
-import type { CourseKeepInput, CourseKeepResult } from "@/features/ai/courseKeep";
+import { courseKeepError, type CourseKeepInput, type CourseKeepResult } from "@/features/ai/courseKeep";
 import { PlanTimeline } from "@/features/planning/components/PlanTimeline";
 import { useHydratePlanCoordinates } from "@/features/planning/useHydratePlanCoordinates";
 import { archiveDatePlan, listArchivedDatePlans, loadCouplePlan, openDateDay, saveCouplePlan, saveDateDraft, type ArchivedDatePlan } from "@/features/planning/actions";
@@ -19,6 +20,8 @@ import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityCl
 import type { CouplePlan, PlanChange, PlanItem } from "@/features/planning/types/plan";
 import type { TasteDateSeed } from "@/features/taste/types";
 import { formatKoDate } from "@/lib/dates";
+import { createPlanSaveQueue } from "@/features/planning/saveQueue";
+import { SyncNotice } from "@/components/shared/SyncNotice";
 
 const AIPlanEditor = dynamic(
   () => import("@/features/ai/components/AIPlanEditor").then(mod => mod.AIPlanEditor),
@@ -51,17 +54,26 @@ export function DatePlanner({
   const [drafts, setDrafts] = useState<DateDaySnapshot[]>(landed.drafts);
   const [panel, setPanel] = useState<Panel>(tasteSeed ? "ai" : null);
   const [saveError, setSaveError] = useState("");
-  const [notesSaveState, setNotesSaveState] = useState<"saved" | "typing" | "saving">("saved");
+  const [saveConflict, setSaveConflict] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const [notesSaveState, setNotesSaveState] = useState<"saved" | "typing" | "saving" | "error">("saved");
   const [showArchive, setShowArchive] = useState(false);
   const [archivedDates, setArchivedDates] = useState<ArchivedDatePlan[]>(initialArchives);
   const [archiveNotice, setArchiveNotice] = useState("");
   const [archiveFocusId, setArchiveFocusId] = useState("");
   const [recording, setRecording] = useState(false);
+  const [archivePending, setArchivePending] = useState(false);
+  const pendingArchiveRef = useRef<{ archive: ArchivedDatePlan; next: DateDaySnapshot; remaining: DateDaySnapshot[] } | null>(null);
   const [switchingDate, setSwitchingDate] = useState(false);
   const revisionRef = useRef(initialPlan.revision);
   const dirtyRef = useRef(false);
   const pendingSaves = useRef(0);
-  const saveQueueRef = useRef(Promise.resolve());
+  const [saveQueue] = useState(createPlanSaveQueue);
+  const switchingRef = useRef(false);
+  const recordingRef = useRef(false);
+  const preservePreviousDateRef = useRef(true);
+  const editVersion = useRef(0);
+  const itemsRef = useRef(items);
   const notesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const titleRef = useRef(title);
   const notesRef = useRef(notes);
@@ -69,16 +81,24 @@ export function DatePlanner({
   titleRef.current = title;
   notesRef.current = notes;
   dateRef.current = startDate;
+  itemsRef.current = items;
 
   useHydratePlanCoordinates("date", items, setItems);
-  useSharedRefresh(async () => {
-    if (dirtyRef.current) return;
-    const { plan: remote, drafts: nextDrafts } = await readDateWorkspace();
-    if (dirtyRef.current) return;
-    revisionRef.current = remote.revision;
-    const next = landingDateDay({ plan: remote, drafts: nextDrafts, today: dateRef.current });
-    setDrafts(current => JSON.stringify(current) === JSON.stringify(next.drafts) ? current : next.drafts); setItems(current => JSON.stringify(current) === JSON.stringify(next.focus.items) ? current : next.focus.items); setTitle(next.focus.title); setNotes(next.focus.notes);
-  });
+  const retrySync = useSharedRefresh(async ({ isCurrent }) => {
+    if (dirtyRef.current || switchingRef.current || recordingRef.current || pendingArchiveRef.current) return;
+    const version = editVersion.current;
+    try {
+      const { plan: remote, drafts: nextDrafts, archives } = await readDateWorkspace();
+      if (!isCurrent() || dirtyRef.current || switchingRef.current || recordingRef.current || pendingArchiveRef.current || version !== editVersion.current) return;
+      revisionRef.current = remote.revision;
+      const next = landingDateDay({ plan: remote, drafts: nextDrafts, today: dateRef.current });
+      applyFocus(next.focus, next.drafts, false);
+      setArchivedDates(archives);
+      setSyncError("");
+    } catch {
+      if (isCurrent()) setSyncError("파트너의 최신 데이트를 불러오지 못했어요. 현재 일정은 그대로 있어요.");
+    }
+  }, { tables: ["activities"], activityPrefixes: ["DATE_", "MEMORY_", "PLACE_", "PARTNER_"] });
 
 
   useEffect(() => {
@@ -92,6 +112,7 @@ export function DatePlanner({
     [drafts],
   );
   const markedDates = upcoming.map(day => day.date);
+  const placesHref = startDate ? `/places?from=date&day=${startDate}` : "/places?from=date";
   const markedLabels = useMemo(
     () => Object.fromEntries(upcoming.map(day => [
       day.date,
@@ -100,80 +121,145 @@ export function DatePlanner({
     [upcoming],
   );
 
-  const persist = (next: PlanItem[], extra?: { title?: string; subtitle?: string; startDate?: string | null }) => {
+  const persist = (next: PlanItem[], extra?: { title?: string; subtitle?: string; startDate?: string | null; preservePreviousDate?: boolean }): Promise<CourseKeepResult> => {
+    if (switchingRef.current) return Promise.resolve({ error: "날짜 일정을 불러오는 중이에요. 잠시 후 다시 저장해 주세요." });
+    const version = ++editVersion.current;
     dirtyRef.current = true;
     pendingSaves.current += 1;
     const mapped = next.map(item => ({ ...item, dayIndex: item.dayIndex ?? 0 }));
     const nextTitle = extra?.title ?? titleRef.current;
     const nextNotes = extra && "subtitle" in extra ? extra.subtitle ?? "" : notesRef.current;
     const nextDate = extra && "startDate" in extra ? extra.startDate ?? "" : dateRef.current;
+    const preservePreviousDate = extra?.preservePreviousDate ?? preservePreviousDateRef.current;
+    preservePreviousDateRef.current = preservePreviousDate;
+    itemsRef.current = mapped;
+    if (extra?.title !== undefined) { titleRef.current = nextTitle; setTitle(nextTitle); }
+    if (extra && "subtitle" in extra) { notesRef.current = nextNotes; setNotes(nextNotes); }
+    if (extra && "startDate" in extra) { dateRef.current = nextDate; setStartDate(nextDate); }
     setItems(mapped);
     setSaveError("");
     setNotesSaveState("saving");
     if (nextDate) {
       setDrafts(current => upsertDateDay(current, { date: nextDate, title: nextTitle, notes: nextNotes, items: mapped }));
     }
-    saveQueueRef.current = saveQueueRef.current.catch(() => {}).then(async () => {
-      const result = await saveCouplePlan("date", mapped, {
-        title: nextTitle,
-        subtitle: nextNotes,
-        startDate: nextDate || null,
-        dayCount: Math.max(1, ...mapped.map(item => (item.dayIndex ?? 0) + 1)),
-        expectedRevision: revisionRef.current,
-      });
-      if ("version" in result) {
+    return saveQueue.enqueue(async () => {
+      let failure = "";
+      try {
+        const result = await saveCouplePlan("date", mapped, {
+          title: nextTitle,
+          subtitle: nextNotes,
+          startDate: nextDate || null,
+          dayCount: Math.max(1, ...mapped.map(item => (item.dayIndex ?? 0) + 1)),
+          expectedRevision: revisionRef.current,
+          preservePreviousDate,
+        });
+        if ("error" in result) {
+          failure = result.error;
+          if (editVersion.current === version) setSaveConflict(Boolean(result.conflict));
+          return { error: failure };
+        }
         revisionRef.current = result.revision;
         if (nextDate) {
           const draftResult = await saveDateDraft({ date: nextDate, title: nextTitle, notes: nextNotes, items: mapped });
-          if ("error" in draftResult) setSaveError(draftResult.error);
+          if ("error" in draftResult) {
+            failure = draftResult.error;
+            return { error: failure };
+          }
         }
-      } else {
-        setSaveError(result.error);
+        emitCoupleActivitiesChanged();
+        preservePreviousDateRef.current = true;
+        if (editVersion.current === version) setSaveConflict(false);
+        return { ok: true as const };
+      } catch {
+        failure = "아직 저장되지 않았어요. 연결을 확인하고 다시 시도해 주세요.";
+        return { error: failure };
+      } finally {
+        pendingSaves.current = Math.max(0, pendingSaves.current - 1);
+        dirtyRef.current = pendingSaves.current > 0 || Boolean(failure) || editVersion.current !== version;
+        if (editVersion.current === version) setSaveError(failure);
+        setNotesSaveState(pendingSaves.current > 0 ? "saving" : editVersion.current !== version ? "typing" : failure ? "error" : "saved");
       }
-      pendingSaves.current -= 1;
-      dirtyRef.current = pendingSaves.current > 0 || "error" in result;
-      setNotesSaveState(pendingSaves.current > 0 ? "saving" : "saved");
-      emitCoupleActivitiesChanged();
-    }).catch(() => { pendingSaves.current = Math.max(0, pendingSaves.current - 1); setSaveError("아직 저장되지 않았어요. 연결을 확인하고 다시 시도해 주세요."); setNotesSaveState("typing"); });
+    });
   };
 
-  const applyFocus = (focus: DateDaySnapshot, nextDrafts: DateDaySnapshot[]) => {
+  const applyFocus = (focus: DateDaySnapshot, nextDrafts: DateDaySnapshot[], closeArchive = true) => {
+    titleRef.current = focus.title;
+    notesRef.current = focus.notes;
+    dateRef.current = focus.date;
+    itemsRef.current = focus.items;
     setDrafts(nextDrafts);
     setStartDate(focus.date);
     setTitle(focus.title);
     setNotes(focus.notes);
     setItems(focus.items);
-    setShowArchive(false);
+    if (closeArchive) setShowArchive(false);
   };
 
   const switchDate = async (nextDate: string) => {
-    if (nextDate === startDate || switchingDate) return;
+    if (nextDate === dateRef.current || switchingRef.current || recordingRef.current || pendingArchiveRef.current) return;
     if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    switchingRef.current = true;
+    dirtyRef.current = true;
     setSwitchingDate(true);
     setNotesSaveState("saving");
     setSaveError("");
-    const result = await openDateDay({
-      fromDate: startDate || null,
-      toDate: nextDate || null,
-      snapshot: { title, notes, items },
-      expectedRevision: revisionRef.current,
-    });
-    if ("error" in result) {
-      setSaveError(result.error);
-      setNotesSaveState("typing");
+    try {
+      await saveQueue.idle();
+      const result = await openDateDay({
+        fromDate: dateRef.current || null,
+        toDate: nextDate || null,
+        snapshot: { title: titleRef.current, notes: notesRef.current, items: itemsRef.current },
+        expectedRevision: revisionRef.current,
+      });
+      if ("error" in result) {
+        dirtyRef.current = true;
+        setSaveError(result.error);
+        setSaveConflict(Boolean(result.conflict));
+        setNotesSaveState("error");
+        return;
+      }
+      revisionRef.current = result.revision;
+      dirtyRef.current = false;
+      applyFocus(result.focus, result.drafts);
+      setNotesSaveState("saved");
+      setSaveConflict(false);
+      emitCoupleActivitiesChanged();
+      router.replace(result.focus.date ? `/date?day=${result.focus.date}` : "/date");
+    } catch {
+      dirtyRef.current = true;
+      setSaveError("날짜를 바꾸지 못했어요. 현재 일정은 그대로 있으니 다시 시도해 주세요.");
+      setNotesSaveState("error");
+    } finally {
+      switchingRef.current = false;
       setSwitchingDate(false);
-      return;
     }
-    revisionRef.current = result.revision;
-    dirtyRef.current = false;
-    applyFocus(result.focus, result.drafts);
-    setNotesSaveState("saved");
-    setSwitchingDate(false);
-    emitCoupleActivitiesChanged();
-    router.replace(result.focus.date ? `/date?day=${result.focus.date}` : "/date");
+  };
+
+  const reloadLatest = async () => {
+    if (switchingRef.current || recordingRef.current || pendingArchiveRef.current) return;
+    switchingRef.current = true;
+    setSwitchingDate(true);
+    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    try {
+      await saveQueue.idle();
+      const { plan, drafts: latestDrafts } = await readDateWorkspace();
+      const next = landingDateDay({ plan, drafts: latestDrafts, today: dateRef.current });
+      revisionRef.current = plan.revision;
+      applyFocus(next.focus, next.drafts);
+      dirtyRef.current = false;
+      setSaveError("");
+      setSaveConflict(false);
+      setNotesSaveState("saved");
+    } catch {
+      setSaveError("최신 일정을 불러오지 못했어요. 다시 시도해 주세요.");
+    } finally {
+      switchingRef.current = false;
+      setSwitchingDate(false);
+    }
   };
 
   const apply = (changes: PlanChange[]) => {
+    if (switchingRef.current || recordingRef.current || pendingArchiveRef.current) return;
     let next = [...items];
     changes.forEach(change => {
       if (change.type === "remove") next = next.filter(item => item.id !== change.itemId);
@@ -184,24 +270,29 @@ export function DatePlanner({
 
   const saveNotes = (value: string) => {
     if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
-    persist(items, { subtitle: value });
+    return persist(itemsRef.current, { subtitle: value });
   };
 
   const scheduleNotesSave = (value: string) => {
     if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
     dirtyRef.current = true;
+    editVersion.current += 1;
+    notesRef.current = value;
     setNotesSaveState("typing");
     notesTimerRef.current = setTimeout(() => saveNotes(value), 800);
   };
 
   const replace = (next: PlanItem[]) => {
+    if (switchingRef.current || recordingRef.current || pendingArchiveRef.current) return;
     persist(next);
   };
 
   const keepCourse = async (input: CourseKeepInput): Promise<CourseKeepResult> => {
+    const inputError = courseKeepError(input);
+    if (inputError) return { error: inputError };
+    if (switchingRef.current || recordingRef.current || pendingArchiveRef.current) return { error: "일정을 정리하는 중이에요. 완료 후 다시 담아 주세요." };
     if (input.destination === "date") {
-      persist(input.items);
-      return { ok: true };
+      return persist(input.items);
     }
     setSaveError("");
     const current = await loadCouplePlan("trip");
@@ -222,52 +313,79 @@ export function DatePlanner({
   };
 
   const finishDate = async () => {
-    if (!items.length || recording) return;
+    if ((!items.length && !pendingArchiveRef.current) || recordingRef.current || switchingRef.current) return;
+    recordingRef.current = true;
     setRecording(true);
     setSaveError("");
-    const result = await archiveDatePlan({ title, date: startDate, notes, items });
-    if ("error" in result) {
-      setSaveError(result.error);
+    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    try {
+      await saveQueue.idle();
+      if (!pendingArchiveRef.current) {
+        const saved = await persist(itemsRef.current);
+        if ("error" in saved) return;
+        const snapshot = { title: titleRef.current, date: dateRef.current, notes: notesRef.current, items: itemsRef.current };
+        const result = await archiveDatePlan(snapshot);
+        if ("error" in result) { setSaveError(result.error); return; }
+        const remaining = drafts.filter(day => day.date !== snapshot.date);
+        const archive = { ...snapshot, id: result.id };
+        pendingArchiveRef.current = { archive, remaining, next: remaining[0] ?? emptyDateDay("") };
+        setArchivedDates(current => [archive, ...current.filter(day => day.id !== archive.id)]);
+        setArchivePending(true);
+        emitCoupleActivitiesChanged();
+      }
+      const { archive, remaining, next } = pendingArchiveRef.current;
+      const cleared = await saveDateDraft(emptyDateDay(archive.date));
+      if ("error" in cleared) { setSaveError("기록은 보관했지만 일정 정리를 완료하지 못했어요. " + cleared.error); return; }
+      const nextSaved = await persist(next.items, { title: next.title, subtitle: next.notes, startDate: next.date || null, preservePreviousDate: false });
+      if ("error" in nextSaved) return;
+      applyFocus(next, remaining);
+      pendingArchiveRef.current = null;
+      setArchivePending(false);
+      setArchiveFocusId(archive.id);
+      setArchiveNotice("오늘 데이트를 기록장에 남겼어요.");
+      setShowArchive(true);
+      try {
+        const refreshed = await listArchivedDatePlans();
+        setArchivedDates(refreshed.dates);
+      } catch { setSyncError("기록은 보관했지만 최신 기록 목록을 불러오지 못했어요."); }
+    } catch {
+      setSaveError(pendingArchiveRef.current ? "기록은 보관했어요. 연결을 확인하고 일정 정리를 다시 시도해 주세요." : "기록을 완료하지 못했어요. 연결을 확인하고 다시 시도해 주세요.");
+    } finally {
+      recordingRef.current = false;
       setRecording(false);
-      return;
     }
-    emitCoupleActivitiesChanged();
-    const remaining = drafts.filter(day => day.date !== startDate);
-    const next = remaining[0] ?? emptyDateDay("");
-    await saveDateDraft(emptyDateDay(startDate));
-    persist(next.items, { title: next.title, subtitle: next.notes, startDate: next.date || null });
-    applyFocus(next, remaining);
-    const refreshed = await listArchivedDatePlans();
-    setArchivedDates(refreshed.dates);
-    setArchiveFocusId(result.id);
-    setArchiveNotice("오늘 데이트를 기록장에 남겼어요.");
-    setShowArchive(true);
-    setRecording(false);
   };
 
   return (
     <>
+      <SyncNotice message={syncError} onRetry={retrySync} />
+      {archivePending && <div className="sync-notice" role="status"><span>{recording ? "기록을 보관하고 다음 일정을 정리하고 있어요." : saveError || "기록은 보관했어요. 일정 정리를 마쳐 주세요."}</span><button type="button" className="text-button" disabled={recording} onClick={() => void finishDate()}>일정 정리 다시 시도</button></div>}
       {panel === "ai" && (
         <ContextPanel>
+          <div inert={switchingDate || recording || archivePending} style={{ display: "contents" }}>
           <AIPlanEditor kind="date" items={items} startDate={startDate} onApply={apply} onReplace={replace}
             onKeep={keepCourse} tasteSeed={tasteSeed} candidateExplorationActive={candidateExplorationActive} />
+          </div>
         </ContextPanel>
       )}
+      <div inert={switchingDate || recording || archivePending} style={{ display: "contents" }}>
       <div className="page-title-row date-planner-header">
         <div>
           <span className="eyebrow">DATE PLANNER</span>
-          <input className="title-input" value={title} onChange={event => { dirtyRef.current = true; setTitle(event.target.value); }} onBlur={() => persist(items, { title })} aria-label="데이트 제목" />
+          <input className="title-input" value={title} disabled={switchingDate || recording} onChange={event => { dirtyRef.current = true; editVersion.current += 1; titleRef.current = event.target.value; setTitle(event.target.value); setNotesSaveState("typing"); }} onBlur={() => void persist(itemsRef.current, { title: titleRef.current })} aria-label="데이트 제목" />
         </div>
         <div className="page-actions date-planner-actions trip-planner-actions">
           <DatePickerButton
             value={startDate}
             emptyLabel="날짜 고르기"
             ariaLabel="데이트 날짜"
+            disabled={switchingDate || recording}
             markedDates={markedDates}
             markedLabels={markedLabels}
             onChange={value => void switchDate(value)}
           />
-          <div className={`save-status${switchingDate || notesSaveState === "saving" ? " is-saving" : ""}`} role="status" aria-live="polite"><i /> {saveError || (switchingDate ? "날짜 일정 불러오는 중..." : notesSaveState === "saving" ? "저장 중..." : "저장됨")}</div>
+          <div className={`save-status${switchingDate || notesSaveState === "saving" ? " is-saving" : ""}`} role="status" aria-live="polite"><i /> {saveError || (switchingDate ? "날짜 일정 불러오는 중..." : notesSaveState === "saving" ? "저장 중..." : notesSaveState === "typing" ? "아직 저장 전이에요" : "저장됨")}</div>
+          {saveError && <button className="text-button" type="button" disabled={switchingDate || recording} onClick={() => void (saveConflict ? reloadLatest() : persist(itemsRef.current))}>{saveConflict ? "최신 일정 불러오기" : "다시 저장"}</button>}
           {(items.length > 0 || archivedDates.length > 0 || upcoming.length > 0) && (
             <button
               className={`date-action-button is-archive ${showArchive ? "is-active" : ""}`}
@@ -280,12 +398,15 @@ export function DatePlanner({
             </button>
           )}
           <div className="date-action-group">
-            <button className={`date-action-button is-ai ${panel === "ai" ? "is-active" : ""}`} type="button" onClick={() => setPanel(panel === "ai" ? null : "ai")}>
+            <button className={`date-action-button is-ai ${panel === "ai" ? "is-active" : ""}`} type="button" onClick={() => {
+              if (window.matchMedia("(max-width: 900px)").matches) { setPanel("ai"); openContextPanel(); }
+              else setPanel(panel === "ai" ? null : "ai");
+            }}>
               <HeaderActionIcon name="sparkles" />
               <span>AI 추천</span>
             </button>
             {items.length > 0 && (
-              <Link className="date-action-button" href="/places?from=date">
+              <Link className="date-action-button" href={placesHref}>
                 <HeaderActionIcon name="plus" />
                 <span>장소 더 담기</span>
               </Link>
@@ -294,6 +415,7 @@ export function DatePlanner({
         </div>
       </div>
       {saveError && <p className="form-hint">{saveError}</p>}
+      {saveConflict && <p className="form-hint">최신 일정을 불러오면 현재 화면의 미저장 변경을 지우고 파트너가 저장한 일정을 보여 드려요.</p>}
       {showArchive ? (
         <DateArchiveJournal
           dates={archivedDates}
@@ -309,8 +431,8 @@ export function DatePlanner({
           <h1 suppressHydrationWarning>{startDate ? `${formatKoDate(startDate)} 일정이 없어요` : "데이트 일정이 없어요"}</h1>
           <p>{startDate ? "이날 함께하고 싶은 장소를 담아 보세요. 날짜를 고르면 다른 날의 약속도 볼 수 있어요." : "어디로 갈지만 말해 주면 하루 코스를 만들어 드려요."}</p>
           <div className="dialog-actions">
-            <button className="primary-button" type="button" onClick={() => setPanel("ai")}>AI에게 데이트 추천받기</button>
-            <Link className="outline-button" href="/places?from=date">직접 장소 찾기</Link>
+            <button className="primary-button" type="button" onClick={() => { setPanel("ai"); openContextPanel(); }}>AI에게 데이트 추천받기</button>
+            <Link className="outline-button" href={placesHref}>직접 장소 찾기</Link>
           </div>
         </div>
       ) : (
@@ -324,7 +446,7 @@ export function DatePlanner({
                 <div className="date-tags">
                   {items.slice(0, 3).map(item => <b key={item.id}>{item.placeName}</b>)}
                 </div>
-                <Link className="text-link date-feature-link" href="/places?from=date">장소 더 담기 →</Link>
+                <Link className="text-link date-feature-link" href={placesHref}>장소 더 담기 →</Link>
               </div>
             </article>
             <section className="date-plan paper-card">
@@ -343,7 +465,7 @@ export function DatePlanner({
                   onReorder={persist}
                   onRemove={id => persist(items.filter(item => item.id !== id))}
                 />
-                <Link className="add-schedule date-add-letter" href="/places?from=date">데이트 장소 추가</Link>
+                <Link className="add-schedule date-add-letter" href={placesHref}>데이트 장소 추가</Link>
               </div>
             </section>
           </div>
@@ -351,6 +473,7 @@ export function DatePlanner({
             <span>우리의  메모</span>
             <textarea
               value={notes}
+              disabled={switchingDate || recording}
               onChange={event => {
                 setNotes(event.target.value);
                 scheduleNotesSave(event.target.value);
@@ -360,11 +483,12 @@ export function DatePlanner({
               rows={3}
             />
             <span className={`memo-save-state is-${notesSaveState}`} role="status">
-              {notesSaveState === "typing" ? "입력 중 · 잠시 후 자동 저장" : notesSaveState === "saving" ? "저장 중…" : "자동 저장됨"}
+              {notesSaveState === "typing" ? "입력 중 · 잠시 후 자동 저장" : notesSaveState === "saving" ? "저장 중…" : notesSaveState === "error" ? "저장되지 않았어요 · 다시 저장해 주세요" : "자동 저장됨"}
             </span>
           </label>
         </>
       )}
+      </div>
     </>
   );
 }

@@ -5,8 +5,9 @@ import { buildDateCandidatePool } from "@/features/ai/dateCandidatePool";
 import { evaluateCourse } from "@/features/ai/courseDesign";
 import { verifyDateItinerary } from "@/features/ai/dateVerifier";
 import { completeJson } from "./client";
-import { courseProposalMessages, recommendDatePlanWithOpenAi } from "./recommendDatePlan";
+import { courseProposalMessages, footRouteForDays, recommendDatePlanWithOpenAi } from "./recommendDatePlan";
 import { enrichDateVenues } from "./enrichDateVenues";
+import { fetchFootRoute } from "@/lib/routing/footRoute";
 import type { SemanticPlanningHints } from "@/features/ai/semanticPlanningHints";
 
 vi.mock("./client", () => ({ completeJson: vi.fn() }));
@@ -46,6 +47,190 @@ beforeEach(() => vi.mocked(completeJson).mockReset().mockResolvedValue(modelCour
 afterEach(() => vi.restoreAllMocks());
 
 describe("course proposal semantic boundary", () => {
+  it("supports a single chosen cafe rather than requiring a filler second stop", async () => {
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ theme: "카페에서 쉬기", selected: [
+      { id: "kakao:quiet", day_index: 0, duration_minutes: 60 },
+    ] }] });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "이 카페 한 곳에서 쉬고 싶어", condition,
+      candidates: [candidates[1]], saved: [], state: state(), anchorCandidateIds: ["kakao:quiet"], researchPlanActive: true });
+    expect(result.source).toBe("openai");
+    expect(result.items.map(item => item.placeName)).toEqual(["정원 카페"]);
+  });
+  it("omits historic budgets from planning and keeps price-independent eligibility", async () => {
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+      candidates: candidates.map(candidate => ({ ...candidate, expectedCostTwo: 100000 })),
+      saved: [], state: { ...state(), budgetWon: 0 }, researchPlanActive: true });
+    expect(result.items.length).toBeGreaterThan(0);
+    const payload = JSON.parse(vi.mocked(completeJson).mock.calls[0][0].messages[1].content);
+    expect(payload).not.toHaveProperty("budgetWon");
+    expect(payload.dateIntent.hardConstraints).not.toHaveProperty("budgetWon");
+    expect(payload.candidates.every((candidate: Record<string, unknown>) => !Object.hasOwn(candidate, "knownCostTwo"))).toBe(true);
+    expect(vi.mocked(completeJson).mock.calls[0][0].messages[0].content).toContain("does not manage budgets");
+    expect(result.message).not.toContain("예산");
+  });
+
+  it("explains provably impossible selections before research or model calls", async () => {
+    vi.mocked(enrichDateVenues).mockClear();
+    const result = await recommendDatePlanWithOpenAi({ prompt: "한 시간에 모두 방문", condition,
+      candidates: candidates.slice(0, 3), saved: [], anchorCandidateIds: ["kakao:meal", "kakao:quiet", "kakao:noisy"],
+      state: { ...state(), startTime: "15:00", endTime: "16:00" } });
+    expect(result.items).toEqual([]);
+    expect(result.design?.feasibility?.reason).toBe("selected_stays_exceed_time");
+    expect(result.message).toContain("90분");
+    expect(completeJson).not.toHaveBeenCalled();
+    expect(enrichDateVenues).not.toHaveBeenCalled();
+  });
+
+  it("finishes stalled research at the shared deadline without launching a late model request", async () => {
+    const deadline = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    vi.mocked(enrichDateVenues).mockClear().mockImplementationOnce(async () => {
+      deadline.abort();
+      return new Promise<DiscoverCandidate[]>(() => {});
+    });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "이 카페에서 쉬기", condition,
+      candidates: [candidates[1]], saved: [], state: state(), anchorCandidateIds: ["kakao:quiet"] });
+    expect(vi.mocked(enrichDateVenues).mock.calls[0][4]).toBe(deadline.signal);
+    expect(completeJson).not.toHaveBeenCalled();
+    expect(result.source).toBe("fallback");
+    expect(result.items.map(item => item.placeName)).toEqual(["정원 카페"]);
+  });
+
+  it("retains known two-person costs in generated and saved itinerary items", async () => {
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+      candidates: candidates.map(venue => ({ ...venue, ...(venue.externalPlaceId === "meal" ? { expectedCostTwo: 24000 } : {}) })),
+      saved: [], state: state(), researchPlanActive: true });
+    expect(result.items.find(item => item.placeName === "정원 식당")?.expectedCost).toBe(24000);
+    expect(result.recommendations.find(item => item.name === "정원 식당")?.expectedCost).toBe(24000);
+  });
+
+  it("preserves every walking leg for thirteen stops using overlapping provider requests", async () => {
+    vi.mocked(fetchFootRoute).mockClear();
+    const pool = Array.from({ length: 13 }, (_, index) => venue(String(index), `장소 ${index}`, "nature", 127.04 + index * 0.0001));
+    const rows = pool.map(venue => ({ id: `kakao:${venue.externalPlaceId}`, day_index: 0 }));
+    const route = await footRouteForDays(rows, new Map(pool.map(venue => [`kakao:${venue.externalPlaceId}`, venue])), 1, 5000);
+    expect(vi.mocked(fetchFootRoute).mock.calls.map(call => call[0].length)).toEqual([7, 7]);
+    expect(vi.mocked(fetchFootRoute).mock.calls[0][0].at(-1)).toEqual(vi.mocked(fetchFootRoute).mock.calls[1][0][0]);
+    expect(route).toMatchObject({ meters: 2400, seconds: 2160 });
+    expect(route?.legs).toHaveLength(12);
+  });
+
+  it("shares one repair across malformed structure and subsequent actual-route rejection", async () => {
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [] }).mockResolvedValueOnce(modelCourse);
+    vi.mocked(fetchFootRoute).mockImplementation(async points => ({ provider: "osm_foot", meters: 1000,
+      seconds: 86400, legs: Array.from({ length: points.length - 1 }, () => ({ meters: 500, seconds: 43200 })) }));
+    try {
+      const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+        candidates, saved: [], state: state(), researchPlanActive: true });
+      expect(result.items).toEqual([]);
+      expect(completeJson).toHaveBeenCalledTimes(2);
+      const calls = vi.mocked(completeJson).mock.calls;
+      expect(calls[0][0].signal).toBe(calls[1][0].signal);
+      expect(calls.every(call => call[0].retryOnTruncation === false)).toBe(true);
+    } finally {
+      vi.mocked(fetchFootRoute).mockImplementation(async points => ({ provider: "osm_foot",
+        meters: (points.length - 1) * 200, seconds: (points.length - 1) * 180,
+        legs: Array.from({ length: points.length - 1 }, () => ({ meters: 200, seconds: 180 })) }));
+    }
+  });
+
+  it("sends fresh research, schedule windows and provider-bound schema to curation", async () => {
+    vi.mocked(enrichDateVenues).mockResolvedValueOnce(candidates.map(candidate => ({ ...candidate,
+      evidence: [{ id: "fresh", text: "정원과 야외 테라스가 있습니다.", url: "https://example.com/new", checkedAt: "2026-10-11" }] })));
+    await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition, candidates, saved: [], state: state() });
+    const call = vi.mocked(completeJson).mock.calls[0][0];
+    const payload = JSON.parse(call.messages[1].content);
+    expect(payload.candidates.every((candidate: { observations: Array<{ id: string }> }) => candidate.observations[0].id === "fresh")).toBe(true);
+    expect(payload.schedule).toMatchObject({ transport: "walk", localDayWindows: {} });
+    expect(call.jsonSchema).toMatchObject({ name: "date_course_proposals_v2", strict: true });
+    expect(JSON.stringify(call.jsonSchema)).toContain("kakao:quiet");
+  });
+
+  it("includes fifteen chosen venues in a three-day model itinerary without a day-count quota", async () => {
+    const pool = Array.from({ length: 15 }, (_, index) => venue(String(index), `작은 공원 ${index}`, "nature", 127.04 + index * 0.0001));
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ theme: "선택 장소를 모두 잇는 여행", selected: pool.map((candidate, index) => ({
+      id: `kakao:${candidate.externalPlaceId}`, day_index: Math.floor(index / 5), duration_minutes: 30,
+    })) }] });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "부산 2박3일", condition: { ...condition, region: "부산" },
+      candidates: pool, anchorCandidateIds: pool.map(candidate => `kakao:${candidate.externalPlaceId}`), saved: [],
+      state: { ...state(), stayKind: "overnight", nights: 2 }, researchPlanActive: true });
+    expect(result.source).toBe("openai");
+    expect(result.items).toHaveLength(15);
+    expect(new Set(result.recommendations.map(place => place.id))).toEqual(new Set(pool.map(candidate => `kakao:${candidate.externalPlaceId}`)));
+    const call = vi.mocked(completeJson).mock.calls[0][0];
+    const payload = JSON.parse(call.messages[1].content);
+    expect(payload).toMatchObject({ proposalCount: 1, requiredDayIndices: [0, 1, 2] });
+    expect(call.jsonSchema?.schema.properties).toMatchObject({ courses: { maxItems: 1,
+      items: { properties: { selected: { minItems: 15 } } } } });
+  });
+
+  it("schedules a requested night view after 18:00 while keeping every chosen venue", async () => {
+    const pool = [venue("meal", "식당", "restaurant", 127.04), venue("cafe", "카페", "cafe", 127.041),
+      { ...venue("view", "전망대", "tourist", 127.042), detailedCategory: "여행 > 전망대" }];
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ theme: "식사와 야경", selected: pool.map(candidate => ({
+      id: `kakao:${candidate.externalPlaceId}`, day_index: 0, duration_minutes: 60,
+    })) }] });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "야경", condition: { ...condition, startTime: "10:00", endTime: "22:00" },
+      candidates: pool, anchorCandidateIds: pool.map(candidate => `kakao:${candidate.externalPlaceId}`), saved: [], researchPlanActive: true,
+      state: { ...state(), startTime: "10:00", endTime: "22:00", activities: ["nightview"], discovery: {
+        themes: [], priorities: [], queries: [], transport: "drive", requiredActivities: ["nightview"],
+        activityOrder: [], minStops: 2, maxStops: 3,
+      } } });
+    expect(result.source).toBe("openai");
+    expect(result.items).toHaveLength(3);
+    expect(result.items.find(item => item.placeName === "전망대")?.startTime).toBe("18:00");
+  });
+
+  it("recovers complementary three-day sections as one complete chosen model itinerary", async () => {
+    const pool = Array.from({ length: 10 }, (_, index) => venue(String(index), `공원 ${index}`, "nature", 127.04 + index * 0.0001));
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [0, 1, 2].map(day => ({ theme: `${day + 1}일차`,
+      selected: pool.filter((_, index) => Math.min(2, Math.floor(index / 4)) === day).map(candidate => ({
+        id: `kakao:${candidate.externalPlaceId}`, day_index: day, duration_minutes: 60,
+      })) })) });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "부산 2박3일", condition, candidates: pool, saved: [], researchPlanActive: true,
+      anchorCandidateIds: pool.map(candidate => `kakao:${candidate.externalPlaceId}`),
+      state: { ...state(), nights: 2, stayKind: "overnight" } });
+    expect(result.source).toBe("openai");
+    expect(result.items).toHaveLength(10);
+    expect(new Set(result.items.map(item => item.dayIndex))).toEqual(new Set([0, 1, 2]));
+    expect(completeJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("fits verified walking time instead of discarding a feasible timed model course", async () => {
+    vi.mocked(fetchFootRoute).mockResolvedValueOnce({ provider: "osm_foot", meters: 800, seconds: 1200,
+      legs: [{ meters: 800, seconds: 1200 }] });
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ theme: "식사와 카페", selected: ["meal", "quiet"]
+      .map(id => ({ id: `kakao:${id}`, day_index: 0, duration_minutes: 60 })) }] });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "17시부터 20시 데이트", condition: { ...condition, startTime: "17:00", endTime: "20:00", timeSpecified: true },
+      candidates: candidates.slice(0, 2), saved: [], researchPlanActive: true,
+      state: { ...state(), startTime: "17:00", endTime: "20:00" } });
+    expect(result.source).toBe("openai");
+    expect(result.items.map(item => item.startTime)).toEqual(["17:00", "18:20"]);
+    expect(result.design?.degraded).toBe(false);
+  });
+
+  it("keeps explicit transit time instead of replacing it with walking legs or limits", async () => {
+    vi.mocked(fetchFootRoute).mockClear();
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수에서 대중교통으로 데이트", condition,
+      candidates, saved: [], researchPlanActive: true, state: { ...state(), discovery: {
+        themes: [], priorities: [], queries: [], transport: "transit", requiredActivities: [],
+        activityOrder: [], minStops: 2, maxStops: 4,
+      } } });
+    expect(result.source).toBe("openai");
+    expect(result.items).toHaveLength(3);
+    expect(fetchFootRoute).not.toHaveBeenCalled();
+    expect(vi.mocked(completeJson)).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs a non-null malformed model structure before falling back", async () => {
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ selected: [{ id: "kakao:meal", day_index: 99, duration_minutes: 60 }] }] })
+      .mockResolvedValueOnce(modelCourse);
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition, candidates, saved: [], state: state(), researchPlanActive: true });
+    expect(result.source).toBe("openai");
+    expect(vi.mocked(completeJson)).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(vi.mocked(completeJson).mock.calls[1][0].messages[1].content).structureProblems).toContain("모델이 유효한 코스 구조를 반환하지 않음");
+  });
+
   it("uses already researched P3 candidates without launching legacy role research", async () => {
     vi.mocked(enrichDateVenues).mockClear();
     await recommendDatePlanWithOpenAi({ prompt: "성수 카페 데이트", condition,
@@ -115,9 +300,9 @@ describe("course proposal semantic boundary", () => {
     const costly = { ...venue("costly", "고가 식당", "restaurant", 127.0412), expectedCostTwo: 200000 };
     const pool = buildDateCandidatePool([...candidates, seafood, costly], constrained);
     expect(pool.eligible.map(item => item.externalPlaceId)).not.toContain("seafood");
-    expect(pool.eligible.map(item => item.externalPlaceId)).not.toContain("costly");
+    expect(pool.eligible.map(item => item.externalPlaceId)).toContain("costly");
     expect(pool.records.find(item => item.id === "kakao:seafood")?.rejectedReasons).toContain("excluded_food");
-    expect(pool.records.find(item => item.id === "kakao:costly")?.rejectedReasons).toContain("over_budget");
+    expect(pool.records.find(item => item.id === "kakao:costly")?.rejectedReasons).toEqual([]);
     const omittedRequired = evaluateCourse({ theme: "novel", rows: [{ id: "kakao:quiet", day_index: 0 },
       { id: "kakao:walk", day_index: 0 }] }, pool.eligible, constrained, new Set());
     expect(verifyDateItinerary({ course: omittedRequired, candidates: pool.eligible, state: constrained,
@@ -173,6 +358,7 @@ describe("course proposal semantic boundary", () => {
     const verification = verifyDateItinerary({ course: invalid,
       candidates: [expensiveSeafood, ...candidates.slice(1)], state: constrained, condition, route: null });
     expect(verification.passed).toBe(false);
-    expect(verification.issues).toEqual(expect.arrayContaining(["확인된 비용이 예산 초과", "제외 음식이 포함된 장소"]));
+    expect(verification.issues).toEqual(expect.arrayContaining(["제외 음식이 포함된 장소"]));
+    expect(verification.issues).not.toContain("확인된 비용이 예산 초과");
   });
 });

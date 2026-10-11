@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { createClient } from "@/lib/supabase/client";
-import { COUPLE_ACTIVITIES_CHANGED } from "./activityClient";
 import { mapActivityRows, type ActivityRecord } from "./activityMap";
 import { forgetDismissedIds, rememberDismissedIds, withoutDismissedActivities } from "./activityFeed";
 import type { CoupleActivity } from "./types";
+import { createRefreshQueue } from "./refreshQueue";
+import { subscribeWorkspaceChanges } from "./realtimeSync";
+import { createReadGuard } from "./readGuard";
 
 const FEED_LIMIT = 20;
 
@@ -15,81 +17,32 @@ async function loadNames(ids: string[]) {
   if (!unique.length) return new Map<string, string>();
   const supabase = createClient();
   if (!supabase) return new Map<string, string>();
-  const { data } = await supabase.from("profiles").select("id, display_name").in("id", unique);
+  const { data, error } = await supabase.from("profiles").select("id, display_name").in("id", unique);
+  if (error) throw new Error("이야기의 이름을 불러오지 못했어요.");
   return new Map((data ?? []).map(row => [row.id, row.display_name || "파트너"]));
 }
 
 export async function fetchCoupleActivitiesLive(coupleId: string, limit = FEED_LIMIT): Promise<CoupleActivity[]> {
   const supabase = createClient();
   if (!supabase) return [];
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("activities")
     .select("id, action, title, detail, actor_user_id, created_at")
     .eq("couple_id", coupleId)
     .neq("entity_type", "date_draft")
+    .neq("title", "")
     .order("created_at", { ascending: false })
     .limit(limit);
+  if (error) throw new Error("이야기를 불러오지 못했어요.");
   const rows = (data ?? []) as ActivityRecord[];
   const names = await loadNames(rows.flatMap(row => row.actor_user_id ? [row.actor_user_id] : []));
   return mapActivityRows(rows, names);
 }
 
-type SharedLive = {
-  count: number;
-  listeners: Set<() => void>;
-  connected: Promise<boolean>;
-  stop: () => void;
-};
-
-const liveByCouple = new Map<string, SharedLive>();
-
 export function subscribeCoupleActivities(coupleId: string, onChange: () => void) {
-  const supabase = createClient();
-  if (!supabase) return { unsubscribe: () => {}, connected: Promise.resolve(false) };
-
-  let shared = liveByCouple.get(coupleId);
-  if (!shared) {
-    const listeners = new Set<() => void>();
-    const notify = () => {
-      listeners.forEach(listener => listener());
-    };
-    let subscribed = false;
-    const channel = supabase
-      .channel(`couple-activities:${coupleId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "activities", filter: `couple_id=eq.${coupleId}` },
-        notify,
-      )
-      .subscribe(status => {
-        subscribed = status === "SUBSCRIBED";
-      });
-    shared = {
-      count: 0,
-      listeners,
-      connected: new Promise<boolean>(resolve => {
-        window.setTimeout(() => resolve(subscribed), 1200);
-      }),
-      stop() {
-        void supabase.removeChannel(channel);
-      },
-    };
-    liveByCouple.set(coupleId, shared);
-  }
-
-  shared.listeners.add(onChange);
-  shared.count += 1;
-  const current = shared;
-  return {
-    unsubscribe() {
-      current.listeners.delete(onChange);
-      current.count -= 1;
-      if (current.count > 0) return;
-      current.stop();
-      if (liveByCouple.get(coupleId) === current) liveByCouple.delete(coupleId);
-    },
-    connected: current.connected,
-  };
+  return subscribeWorkspaceChanges(coupleId, change => {
+    if (change.source !== "database" || change.table === "activities") onChange();
+  });
 }
 
 type FeedStore = {
@@ -152,45 +105,31 @@ function ensureFeed(coupleId: string) {
   store = { items: [], dismissed: dismissedSet(coupleId), loaded: false, error: "", listeners: new Set(), stop: null };
   feeds.set(coupleId, store);
 
-  let debounce: ReturnType<typeof setTimeout> | undefined;
-  let poll: number | undefined;
   let cancelled = false;
+  const guard = createReadGuard(coupleId);
 
-  const reload = () => {
-    void fetchCoupleActivitiesLive(coupleId, FEED_LIMIT).then(next => {
-      if (cancelled) return;
+  const reload = async () => {
+    const isCurrent = guard.capture();
+    await fetchCoupleActivitiesLive(coupleId, FEED_LIMIT).then(next => {
+      if (cancelled || !isCurrent()) return;
       applyIncoming(store!, next);
     }).catch(() => {
-      if (cancelled) return;
+      if (cancelled || !isCurrent()) return;
       store!.error = "이야기를 불러오지 못했어요.";
       store!.loaded = true;
       notifyFeed(store!);
     });
   };
 
-  const scheduleReload = () => {
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(reload, 160);
-  };
-
-  reload();
-  window.addEventListener(COUPLE_ACTIVITIES_CHANGED, scheduleReload);
-  const onVisible = () => {
-    if (document.visibilityState === "visible") scheduleReload();
-  };
-  document.addEventListener("visibilitychange", onVisible);
+  const queue = createRefreshQueue(reload, { canRun: () => document.visibilityState === "visible", debounceMs: 160 });
+  const scheduleReload = () => { guard.invalidate(); queue.schedule(); };
+  void queue.run();
   const live = subscribeCoupleActivities(coupleId, scheduleReload);
-  void live.connected.then(connected => {
-    if (cancelled || connected) return;
-    poll = window.setInterval(scheduleReload, 4000);
-  });
 
   store.stop = () => {
     cancelled = true;
-    if (debounce) clearTimeout(debounce);
-    if (poll) clearInterval(poll);
-    window.removeEventListener(COUPLE_ACTIVITIES_CHANGED, scheduleReload);
-    document.removeEventListener("visibilitychange", onVisible);
+    guard.invalidate();
+    queue.stop();
     live.unsubscribe();
   };
 

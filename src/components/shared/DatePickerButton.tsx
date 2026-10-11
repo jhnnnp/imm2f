@@ -11,6 +11,7 @@ export function DatePickerButton({
   ariaLabel,
   markedDates = [],
   markedLabels = {},
+  disabled = false,
 }: {
   value: string;
   emptyLabel: string;
@@ -18,6 +19,7 @@ export function DatePickerButton({
   ariaLabel: string;
   markedDates?: readonly string[];
   markedLabels?: Readonly<Record<string, string>>;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -49,6 +51,7 @@ export function DatePickerButton({
       <button
         className={`date-picker ${value ? "" : "is-empty"} ${open ? "is-open" : ""}`}
         type="button"
+        disabled={disabled}
         aria-label={ariaLabel}
         aria-haspopup="dialog"
         aria-expanded={open}

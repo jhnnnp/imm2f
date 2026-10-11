@@ -45,7 +45,7 @@ const SHOPPING_NOUN = /쇼핑|아울렛|아웃렛|백화점|전통시장|소품�
 const FESTIVAL_NOUN = /축제|페스티벌|지역\s*행사/;
 const ASK_VERB = /추천|알려|어디|어때|있어|있나|있을까|찾아|소개|골라|뭐가\s*좋|맛있는|유명한|괜찮은|잘\s*하는|핫한|인기|리스트|목록|어디가\s*좋|좋은\s*(?:곳|데)|갈만한|가볼만한|먹을\s*(?:곳|데|만한)|마실\s*(?:곳|데)|볼만한|어디\s*(?:갈|가)|몇\s*곳|몇\s*개/;
 const COURSE_WORD = /코스|일정|동선|짜\s*줘|짜줘|짜\s*봐|짜주|계획|플랜|하루\s*(?:를|을)?\s*(?:보내|채워)|데이트\s*(?:하고|할|하자|가자|짜)|여행\s*(?:가|하|짜|일정)|1박|2박|당일치기|오후부터|저녁부터|밤부터|스케줄|루트/;
-const QUESTION_WORD = /주차|영업\s*시간|몇\s*시(?:까지|부터|에)|언제\s*(?:열|닫|까지)|휴무|브레이크\s*타임|예약|웨이팅|줄\s*서|예산|얼마|가격|비싸|저렴|메뉴\s*(?:가|는|뭐|추천)|뭐가\s*유명|시그니처|대표\s*메뉴|왜\s*(?:골랐|추천|여기)|차이|비교|어느\s*(?:게|쪽)|둘\s*중|뭐가\s*(?:더|나)|비\s*오면|날씨|가는\s*법|어떻게\s*가|지하철|버스|택시|거리|멀어|가까워|걸어서|몇\s*분|소요|애견|반려|아이|유아|휠체어|콜키지|주류|와이파이|콘센트|노키즈|룸\s*있|단체|기념일|프로포즈|선물|뭐\s*입|옷/;
+const QUESTION_WORD = /주차|영업\s*시간|몇\s*시|언제\s*(?:열|닫|까지|가|갈|시작|방문)|머무|머물|체류|시작\s*시간|주소|전화|연락처|휴무|브레이크\s*타임|예약|웨이팅|줄\s*서|예산|얼마|가격|비싸|저렴|메뉴\s*(?:가|는|뭐|추천)|뭐가\s*유명|시그니처|대표\s*메뉴|왜\s*(?:골랐|추천|여기)|차이|비교|어느\s*(?:게|쪽)|둘\s*중|뭐가\s*(?:더|나)|비\s*오면|날씨|가는\s*법|어떻게\s*가|지하철|버스|택시|거리|멀어|가까워|걸어서|몇\s*분|소요|애견|반려|아이|유아|휠체어|콜키지|주류|와이파이|콘센트|노키즈|룸\s*있|단체|기념일|프로포즈|선물|뭐\s*입|옷/;
 const MORE_WORD = /다른\s*(?:곳|데|집|가게)|더\s*(?:보여|알려|추천|찾아)|또\s*(?:있|없)|다른\s*거|다른\s*(?:것|건)|더\s*없|다음/;
 const PICK_FROM_SHOWN = /이\s*중(?:에서|에)?|여기\s*중|위\s*(?:에서|중)|이걸로|이거로|얘로|여기로|이\s*집(?:으로|들로)?|얘들로|이곳으로|여기랑|번(?:이랑|하고|과|,|\s)|번으로|번\s*(?:가|갈|넣)/;
 
@@ -108,7 +108,7 @@ export function isMoreRequest(message: string) {
 }
 
 export function isQuestion(message: string, hasCourse: boolean) {
-  if (COURSE_WORD.test(message) && !/왜|얼마|주차|예약|웨이팅|영업/.test(message)) return false;
+  if (COURSE_WORD.test(message) && !/왜|얼마|주차|예약|웨이팅|영업|몇\s*시|언제|머무|머물|체류|시작\s*시간|주소|전화|연락처/.test(message)) return false;
   if (QUESTION_WORD.test(message)) return true;
   if (!hasCourse) return false;
   return /\?\s*$/.test(message) && !isPlaceRequest(message) && !ASK_VERB.test(message);
@@ -126,14 +126,16 @@ function shownNameMentioned(message: string, name: string, siblings: string[]) {
 
 export function pickedShownPlaces(message: string, shownPlaces: string[]) {
   const byName = shownPlaces.filter(name => shownNameMentioned(message, name, shownPlaces));
-  const numbers = [...message.matchAll(/(\d{1,2})\s*번/g)]
+  const numbers = [...message.matchAll(/(?<!\d)(\d+)\s*번/g)]
     .map(match => Number(match[1]))
     .filter(number => number >= 1 && number <= shownPlaces.length)
     .map(number => shownPlaces[number - 1]);
   const first = /첫\s*(?:번째|째)|첫\s*집|처음\s*(?:거|것|곳)/.test(message) ? [shownPlaces[0]] : [];
   const second = /두\s*(?:번째|째)/.test(message) ? [shownPlaces[1]] : [];
   const third = /세\s*(?:번째|째)/.test(message) ? [shownPlaces[2]] : [];
-  return uniqueStrings([...byName, ...numbers, ...first, ...second, ...third].filter((name): name is string => Boolean(name)), 4);
+  const fourth = /네\s*(?:번째|째)/.test(message) ? [shownPlaces[3]] : [];
+  const last = /마지막/.test(message) ? [shownPlaces.at(-1)] : [];
+  return uniqueStrings([...byName, ...numbers, ...first, ...second, ...third, ...fourth, ...last].filter((name): name is string => Boolean(name)), 4);
 }
 
 /**
@@ -150,6 +152,11 @@ export function routeDateChatLocally(input: {
   const shown = input.state?.shownPlaces ?? [];
   if (!message) return { mode: "course", confident: true };
   if (input.chatSituation) return { mode: "chat", confident: true };
+  // Never turn an absent displayed candidate into a different, unrequested course.
+  if (shown.length && COURSE_WORD.test(message) && !/빼|삭제|제외|제거|교체|바꿔|변경/.test(message)) {
+    const numbers = [...message.matchAll(/(?<!\d)(\d+)\s*번/g)].map(match => Number(match[1]));
+    if (numbers.some(number => number < 1 || number > shown.length)) return { mode: "question", confident: true };
+  }
   // A typed area answer must resume the same search, just like an area chip.
   const pendingAsk = input.state?.placeAsk;
   const writtenAreas = extractAreasFromText(message);
@@ -166,10 +173,11 @@ export function routeDateChatLocally(input: {
     };
   }
   if (isCourseQuickAction(message)) return { mode: "course", confident: true };
-  const discussingEdit = /왜.*(?:바뀌|바꿨|변경|빠졌|삭제)|(?:바꾸|바꿔|교체|변경|빼|제외|추가|대신).*(?:할까|될까|어때|좋을까|됐|된\s*거|했어|했나요)/.test(message);
+  const discussingEdit = /왜.*(?:바뀌|바꿨|변경|빠졌|삭제)|(?:바꾸|바꿔|교체|변경|빼|제외|삭제|제거|추가|대신).*(?:할까|될까|어때|좋을까|됐|된\s*거|했어|했나요)/.test(message);
   const commandsEdit = /해\s*줘|해\s*주|바꿔\s*줘|빼\s*줘|넣어\s*줘|고쳐|짜\s*줘/.test(message);
   if (discussingEdit && !commandsEdit) return { mode: "question", confident: true };
-  if (input.hasCourse && (isSwapRequest(message) || isRedoRequest(message) || isSoftReroll(message) || /빼\s*줘|제외|한\s*곳\s*더|추가해/.test(message))) {
+  if (input.hasCourse && /빼지|삭제하지|제외하지|제거하지/.test(message) && !/말고|대신/.test(message)) return { mode: "question", confident: true };
+  if (input.hasCourse && (isSwapRequest(message) || isRedoRequest(message) || isSoftReroll(message) || /빼\s*줘|제외|삭제|제거|한\s*곳\s*더|추가해/.test(message))) {
     return { mode: "course", confident: true };
   }
   if (shown.length && (PICK_FROM_SHOWN.test(message) || pickedShownPlaces(message, shown).length) && COURSE_WORD.test(message)) {

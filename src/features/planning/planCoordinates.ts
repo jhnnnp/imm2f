@@ -1,7 +1,14 @@
 import { discoverPlaceId, parseDiscoverPlaceId } from "@/features/places/discover";
-import type { PlanItem } from "./types/plan";
+import type { PlanItem, PlanKind } from "./types/plan";
+
+export function planCoordinateHydrateKey(kind: PlanKind, items: PlanItem[]) {
+  const missing = items.filter(item => !asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]));
+  if (!missing.length) return "";
+  return `${kind}:${JSON.stringify(missing.map(item => [item.id, item.placeId, item.placeName]).sort((a, b) => a[0].localeCompare(b[0])))}`;
+}
 
 export function asPlanCoordinates(lng: unknown, lat: unknown): [number, number] | null {
+  if (![lng, lat].every(value => typeof value === "number" || (typeof value === "string" && value.trim() !== ""))) return null;
   const x = Number(lng);
   const y = Number(lat);
   if (!Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > 180 || Math.abs(y) > 90) return null;
@@ -45,6 +52,18 @@ export function withLookedUpCoordinates(items: PlanItem[], lookup: Map<string, [
   });
 }
 
+/** A late coordinate lookup may fill a location, but cannot overwrite newer edits. */
+export function mergeHydratedPlanCoordinates(current: PlanItem[], hydrated: PlanItem[]): PlanItem[] {
+  const byId = new Map(hydrated.map(item => [item.id, item]));
+  return current.map(item => {
+    if (asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1])) return item;
+    const match = byId.get(item.id);
+    if (!match || match.placeId !== item.placeId || match.placeName !== item.placeName) return item;
+    const coordinates = asPlanCoordinates(match.coordinates?.[0], match.coordinates?.[1]);
+    return coordinates ? { ...item, coordinates } : item;
+  });
+}
+
 export function regionHintFromTitle(title: string) {
   return title.replace(/\s*(여행|데이트|코스)$/u, "").trim();
 }
@@ -60,7 +79,10 @@ export function pickResolvedCoordinates(
 ) {
   const parsed = parseDiscoverPlaceId(item.placeId);
   const byId = parsed ? candidates.find(place => place.externalPlaceId === parsed.externalPlaceId) : undefined;
-  if (byId) return byId.coordinates;
-  const byName = candidates.find(place => place.name === item.placeName);
-  return byName?.coordinates ?? candidates[0]?.coordinates ?? null;
+  if (byId) return asPlanCoordinates(byId.coordinates[0], byId.coordinates[1]);
+  const compactName = (name: string) => name.replace(/\s+/g, "").toLowerCase();
+  const wanted = compactName(item.placeName);
+  const byName = candidates.find(place => compactName(place.name) === wanted);
+  // An unrelated first search result is not evidence for this stop's location.
+  return byName ? asPlanCoordinates(byName.coordinates[0], byName.coordinates[1]) : null;
 }

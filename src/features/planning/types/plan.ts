@@ -28,7 +28,7 @@ export type PlanChange =
   | { type: "remove"; itemId: string; label: string; detail: string }
   | { type: "duration"; itemId: string; minutes: number; label: string; detail: string };
 
-export type PlanOptionStyle = "balanced" | "relaxed" | "budget";
+export type PlanOptionStyle = "balanced" | "relaxed";
 
 export type PlanOption = {
   key: "A" | "B" | "C";
@@ -126,6 +126,7 @@ export type AIChatCard = {
 
 export type AIPlannerReply = {
   design?: {
+    feasibility?: import("@/features/ai/dateFeasibility").DateFeasibilityFailure;
     theme: string;
     alternativesConsidered: number;
     routeBasis: "straight_line" | "walking";
@@ -203,6 +204,7 @@ export type AIPlannerState = {
     minStops: number;
     maxStops: number;
   };
+  /** @deprecated Accepted for old chat payloads; the date engine ignores monetary limits. */
   budgetWon?: number | null;
   walkingPreference?: "short" | null;
   activities: DateActivityId[];

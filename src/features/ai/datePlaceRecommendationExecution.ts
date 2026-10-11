@@ -51,8 +51,6 @@ export function currentSessionVenue(row: SessionCandidateRecord, now: string,
     const evidence = row.evidence.filter(item => item.attribute === attribute);
     return practicalFresh && (!evidence.length || evidence.some(item => !isSessionEvidenceStale(item, now)));
   };
-  // An expired known price cannot prove a current numeric budget is satisfied.
-  if (state.budgetWon != null && venue.expectedCostTwo != null && !factFresh("price")) return null;
   return { ...venue,
     openingHours: factFresh("hours") ? venue.openingHours : undefined,
     expectedCostTwo: factFresh("price") ? venue.expectedCostTwo : undefined,

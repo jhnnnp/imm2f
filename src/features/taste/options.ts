@@ -1,7 +1,7 @@
 import type { DateActivityId, DateAreaScope, DateCuisine, DateTimeWindow } from "@/features/planning/types/plan";
 import { TASTE_AREA_CATALOG, flattenRegionAreas } from "./areaCatalog";
 import { DATE_INDOOR_OPTIONS } from "@/features/ai/dateBrief";
-import type { TasteBudget, TasteCrowd, TasteCuisine, TasteDateFlow, TasteDrink, TastePace, TasteSetting } from "./types";
+import type { TasteCrowd, TasteCuisine, TasteDateFlow, TasteDrink, TastePace, TasteSetting } from "./types";
 
 export { TASTE_AREA_CATALOG } from "./areaCatalog";
 export type {
@@ -191,12 +191,6 @@ export const TASTE_CROWD_OPTIONS: ReadonlyArray<{ id: TasteCrowd; label: string 
   { id: "mix", label: "분위기는 유연하게" },
 ];
 
-export const TASTE_BUDGET_OPTIONS: ReadonlyArray<{ id: TasteBudget; label: string; hint: string }> = [
-  { id: "modest", label: "부담 없이", hint: "둘이 가볍게" },
-  { id: "comfortable", label: "적당히", hint: "특별한 날 정도는 괜찮아요" },
-  { id: "generous", label: "오늘은 잘", hint: "코스에 돈을 더 써도 돼요" },
-];
-
 export const TASTE_TIME_OPTIONS: ReadonlyArray<{ id: DateTimeWindow; label: string }> = [
   { id: "afternoon", label: "오후부터" },
   { id: "evening", label: "저녁부터" },
@@ -248,10 +242,6 @@ export function labelForSetting(id: TasteSetting) {
 
 export function labelForCrowd(id: TasteCrowd) {
   return TASTE_CROWD_OPTIONS.find(item => item.id === id)?.label ?? id;
-}
-
-export function labelForBudget(id: TasteBudget) {
-  return TASTE_BUDGET_OPTIONS.find(item => item.id === id)?.label ?? id;
 }
 
 export function labelForTime(id: DateTimeWindow) {

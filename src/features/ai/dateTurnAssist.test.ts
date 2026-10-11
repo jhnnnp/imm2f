@@ -133,11 +133,11 @@ describe("assist semantic approval", () => {
     expect(unrelated.semanticSignals[0].rejectionReason).toBe("not_grounded");
   });
 
-  it("protects deterministic budget from a model budget signal", () => {
+  it("rejects a model budget signal and omits historical budget constraints", () => {
     const previous = { ...state(), budgetWon: 100000 };
     const result = apply("예산 10만원 안에서", { semanticPreferences: [preference("budget", "200000원", "예산 10만원")] }, previous);
     expect(result.semanticSignals[0].rejectionReason).toBe("hard_constraint_conflict");
-    expect(result.effectiveUnderstanding.explicitConstraints.budgetWon).toBe(100000);
+    expect(result.effectiveUnderstanding.explicitConstraints).not.toHaveProperty("budgetWon");
     expect(previous.budgetWon).toBe(100000);
   });
 

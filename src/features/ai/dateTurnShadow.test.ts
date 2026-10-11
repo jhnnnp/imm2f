@@ -149,13 +149,13 @@ describe("shadow turn understanding", () => {
     ]);
   });
 
-  it("never lets a model budget claim override the explicit amount", () => {
+  it("never reintroduces a removed budget constraint from a shadow model", () => {
     const message = "예산 10만원 넘기지 마";
     const model = payload({ constraintClaims: { ...payload().constraintClaims, budgetWon: 200000 } });
     const existing = legacy(message);
     const merged = mergeDateTurnUnderstanding(existing, normalize(message, model));
-    expect(merged.explicitConstraints.budgetWon).toBe(100000);
-    expect(compareDateTurnUnderstanding(existing, normalize(message, model), model.constraintClaims).constraintConflicts).toContain("budgetWon");
+    expect(merged.explicitConstraints).not.toHaveProperty("budgetWon");
+    expect(compareDateTurnUnderstanding(existing, normalize(message, model), model.constraintClaims).constraintConflicts).not.toContain("budgetWon");
   });
 
   it("rejects malformed payloads and unknown goals without changing legacy understanding", async () => {

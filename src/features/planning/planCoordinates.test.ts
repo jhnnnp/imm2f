@@ -8,6 +8,8 @@ import {
   placeCoordinateLookup,
   regionHintFromTitle,
   withLookedUpCoordinates,
+  mergeHydratedPlanCoordinates,
+  planCoordinateHydrateKey,
 } from "./planCoordinates";
 
 function item(placeId: string, extras: Partial<PlanItem> = {}): PlanItem {
@@ -68,6 +70,15 @@ describe("plan coordinates", () => {
     expect(asPlanCoordinates(127.2, 37.8)).toEqual([127.2, 37.8]);
   });
 
+  it("does not turn missing coordinates into a pin at the equator", () => {
+    for (const value of [null, undefined, "", " ", false, true, [], {}]) {
+      expect(asPlanCoordinates(value, value)).toBeNull();
+    }
+    expect(asPlanCoordinates("127.2", "37.8")).toEqual([127.2, 37.8]);
+    expect(asPlanCoordinates(0, 0)).toEqual([0, 0]);
+    expect(placeCoordinateLookup([{ id: "missing", lng: null, lat: null }]).size).toBe(0);
+  });
+
   it("prefers the kakao id when resolving a search result", () => {
     const coords = pickResolvedCoordinates(item("discover:kakao:2", { placeName: "봄스커피" }), [
       { externalPlaceId: "9", name: "봄스커피", coordinates: [127.1, 37.8] },
@@ -76,8 +87,45 @@ describe("plan coordinates", () => {
     expect(coords).toEqual([127.2, 37.9]);
   });
 
+  it("does not pin a stop to an unrelated first search result", () => {
+    expect(pickResolvedCoordinates(item("manual", { placeName: "우리 카페" }), [
+      { externalPlaceId: "9", name: "다른 카페", coordinates: [127.1, 37.8] },
+    ])).toBeNull();
+    expect(pickResolvedCoordinates(item("manual", { placeName: "우리 카페" }), [
+      { externalPlaceId: "9", name: "우리카페", coordinates: [127.1, 37.8] },
+    ])).toEqual([127.1, 37.8]);
+  });
+
   it("reads the city out of a trip title for search", () => {
     expect(regionHintFromTitle("포천 여행")).toBe("포천");
     expect(regionHintFromTitle("성수 데이트")).toBe("성수");
+  });
+
+  it("fills invalid locations without overwriting edits made during the lookup", () => {
+    const current = [item("a", { id: "same", coordinates: [NaN, NaN], memo: "새 메모" }), item("b", { coordinates: [128, 38] })];
+    const hydrated = [item("a", { id: "same", coordinates: [127, 37], memo: "이전 메모" }), item("b", { coordinates: [126, 36] })];
+    const result = mergeHydratedPlanCoordinates(current, hydrated);
+    expect(result[0].coordinates).toEqual([127, 37]);
+    expect(result[0].memo).toBe("새 메모");
+    expect(result[1]).toBe(current[1]);
+  });
+
+  it("ignores a stale location for a replaced stop or a removed stop", () => {
+    const current = [item("new", { id: "same" })];
+    const hydrated = [item("old", { id: "same", coordinates: [127, 37] }), item("removed", { coordinates: [127, 37] })];
+    expect(mergeHydratedPlanCoordinates(current, hydrated)).toEqual(current);
+  });
+
+  it("looks up a replacement place even when the itinerary reuses its item ID", () => {
+    const old = item("old-place", { id: "same-stop", placeName: "이전 카페" });
+    const replacement = { ...old, placeId: "new-place", placeName: "새 카페" };
+    expect(planCoordinateHydrateKey("trip", [old])).not.toBe(planCoordinateHydrateKey("trip", [replacement]));
+  });
+
+  it("does not repeat a location lookup for order or memo changes", () => {
+    const first = item("a"), second = item("b");
+    const key = planCoordinateHydrateKey("trip", [first, second]);
+    expect(planCoordinateHydrateKey("trip", [{ ...second, order: 0 }, { ...first, order: 1, memo: "새 메모" }])).toBe(key);
+    expect(planCoordinateHydrateKey("trip", [{ ...first, coordinates: [127, 37] }, { ...second, coordinates: [128, 38] }])).toBe("");
   });
 });

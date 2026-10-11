@@ -20,6 +20,7 @@ import {
   missingSlot,
   uniqueActivities,
   uniqueStrings,
+  selectedAreas,
   withAreas,
   withTimeWindow,
 } from "@/features/ai/dateBrief";
@@ -28,7 +29,7 @@ import { isOpenAiConfigured } from "./env";
 import { chatSituationFromMessage } from "./composeDateChat";
 import { explicitDateConstraints } from "@/features/ai/dateConstraints";
 import { retrieveDatePlaybook } from "./datePlaybook";
-import { deriveDateUnderstanding, explicitFoodExclusions, sanitizeDatePreferences, sanitizeInferredPreferences } from "@/features/ai/dateIntent";
+import { deriveDateUnderstanding, explicitFoodExclusions, releasedFoodExclusions, sanitizeDatePreferences, sanitizeInferredPreferences } from "@/features/ai/dateIntent";
 
 export type IntentPayload = {
   journeyType?: "trip" | "date";
@@ -58,6 +59,38 @@ export type IntentPayload = {
   reply?: string;
 };
 
+const strictObject = (properties: Record<string, unknown>) => ({ type: "object", properties,
+  required: Object.keys(properties), additionalProperties: false });
+const nullableString = { type: ["string", "null"] };
+const strings = { type: "array", items: { type: "string" } };
+const nullableChoice = (values: string[]) => ({ type: ["string", "null"], enum: [...values, null] });
+const preferenceScore = { type: ["number", "null"], minimum: 0, maximum: 1 };
+
+/** Make every field's shape part of the API contract, rather than a prose example. */
+export const dateIntentPayloadSchema = strictObject({
+  intent: { type: "string", enum: ["create", "modify", "remove", "reset", "clarify"] },
+  journeyType: nullableChoice(["trip", "date"]),
+  objective: nullableString,
+  preferences: strictObject({ vibe: strings, novelty: preferenceScore, intimacy: preferenceScore,
+    activityLevel: preferenceScore, crowdTolerance: preferenceScore, scenicPreference: preferenceScore,
+    foodImportance: preferenceScore, walkingTolerance: preferenceScore }),
+  inferredPreferences: { type: "array", items: strictObject({ value: { type: "string" },
+    evidence: { type: "string" }, confidence: { type: "number", minimum: 0, maximum: 1 } }) },
+  addActivities: strings, removeActivities: strings, addAreas: strings, removeAreas: strings,
+  addPlaces: strings, removePlaces: strings,
+  addStop: { type: "boolean" },
+  cuisine: nullableChoice(["한식", "일식", "중식", "양식", "any"]),
+  indoorPlay: nullableString,
+  areaScope: nullableChoice(["core", "walkable", "nearby"]),
+  timeWindow: nullableChoice(["afternoon", "evening", "night", "any"]),
+  stayKind: nullableChoice(["date", "daytrip", "overnight"]),
+  nights: { type: ["integer", "null"], minimum: 0, maximum: 14 },
+  pace: nullableChoice(["relaxed", "balanced", "active"]),
+  startTime: nullableString, endTime: nullableString,
+  preserveExistingPlaces: { type: "boolean" },
+  conversationNote: nullableString, askSlot: nullableChoice(["area"]), reply: nullableString,
+});
+
 /** Reject malformed model fields before they can erase or corrupt conversation state. */
 export function validateIntentPayload(value: unknown): IntentPayload | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -80,7 +113,7 @@ export function validateIntentPayload(value: unknown): IntentPayload | null {
   for (const key of ["addActivities", "removeActivities", "addAreas", "removeAreas", "addPlaces", "removePlaces"]) {
     if (raw[key] == null) continue;
     if (!Array.isArray(raw[key]) || !raw[key].every(item => typeof item === "string")) return null;
-    result[key] = raw[key].map(item => item.trim()).filter(Boolean).slice(0, 12);
+    result[key] = raw[key].map(item => item.trim()).filter(Boolean);
   }
   for (const key of ["preserveExistingPlaces", "addStop"]) {
     if (raw[key] == null) continue;
@@ -96,8 +129,20 @@ export function validateIntentPayload(value: unknown): IntentPayload | null {
     if (typeof raw[key] !== "string") return null;
     result[key] = raw[key].slice(0, 800);
   }
+  const choices: Record<string, readonly string[]> = {
+    intent: ["create", "modify", "remove", "reset", "clarify"],
+    cuisine: ["한식", "일식", "중식", "양식", "any"],
+    areaScope: ["core", "walkable", "nearby"], timeWindow: ["afternoon", "evening", "night", "any"],
+    stayKind: ["date", "daytrip", "overnight"], pace: ["relaxed", "balanced", "active"], askSlot: ["area"],
+  };
+  for (const [key, allowed] of Object.entries(choices)) {
+    if (result[key] !== undefined && !allowed.includes(String(result[key]))) return null;
+  }
+  for (const key of ["startTime", "endTime"]) {
+    if (result[key] !== undefined && !asTime(result[key])) return null;
+  }
   if (raw.nights != null) {
-    if (typeof raw.nights !== "number" || !Number.isFinite(raw.nights)) return null;
+    if (typeof raw.nights !== "number" || !Number.isInteger(raw.nights) || raw.nights < 0 || raw.nights > 14) return null;
     result.nights = raw.nights;
   }
   return result as IntentPayload;
@@ -156,13 +201,13 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
   const addAreas = uniqueStrings((patch.addAreas ?? []).map(canonicalizeArea), 3);
   const removeAreas = uniqueStrings((patch.removeAreas ?? []).map(canonicalizeArea), 3);
   const areas = uniqueStrings([...(reset ? [] : base.areas), ...addAreas].filter(area => !removeAreas.includes(area)), 3);
-  const addPlaces = uniqueStrings(patch.addPlaces ?? [], 6).filter(place => {
+  const addPlaces = uniqueStrings(patch.addPlaces ?? [], Infinity).filter(place => {
     if (isDateActivityId(place)) return false;
     if (DATE_LANDMARKS.some(landmark => landmark === place)) return true;
     return !areas.includes(place);
   });
-  const removePlaces = uniqueStrings(patch.removePlaces ?? [], 4);
-  const requiredPlaces = uniqueStrings([...(replacePlaces ? [] : base.requiredPlaces), ...addPlaces].filter(place => !removePlaces.includes(place)), 6);
+  const removePlaces = uniqueStrings(patch.removePlaces ?? [], Infinity);
+  const requiredPlaces = uniqueStrings([...(replacePlaces ? [] : base.requiredPlaces), ...addPlaces].filter(place => !removePlaces.includes(place)), Infinity);
   const indoorPlay = patch.indoorPlay?.trim() || (reset ? null : base.indoorPlay);
   const timeWindow = asTimeWindow(patch.timeWindow) ?? (reset ? null : base.timeWindow);
   const timed = timeWindow && timeWindow !== base.timeWindow ? withTimeWindow(base, timeWindow) : base;
@@ -170,7 +215,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     ? patch.stayKind
     : (reset ? null : base.stayKind);
   const nights = stayKind === "overnight"
-    ? Math.max(1, Math.min(6, Number(patch.nights ?? (reset ? 1 : base.nights)) || 1))
+    ? Math.max(1, Math.min(14, Number(patch.nights ?? (reset ? 1 : base.nights)) || 1))
     : 0;
   const areaScope = asAreaScope(patch.areaScope) ?? (reset ? null : base.areaScope);
   const located = withAreas({ ...base, areaScope }, areas);
@@ -179,16 +224,19 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     preferences: {
       ...(reset ? { vibe: [] } : base.preferences ?? { vibe: [] }),
       ...patch.preferences,
-      vibe: patch.preferences?.vibe ?? (reset ? [] : base.preferences?.vibe ?? []),
+      // Structured output uses [] to say this turn contains no new mood.
+      // A short follow-up must not erase the earlier conversation's mood.
+      vibe: patch.preferences?.vibe?.length ? patch.preferences.vibe : (reset ? [] : base.preferences?.vibe ?? []),
     },
     inferredPreferences: patch.inferredPreferences ?? (reset ? [] : base.inferredPreferences ?? []),
     memorySuggestions: base.memorySuggestions,
     explicitPlanningSelections: reset ? undefined : base.explicitPlanningSelections,
-    excludedFoods: reset ? [] : base.excludedFoods ?? [],
-    foodAllergy: reset ? false : base.foodAllergy ?? false,
+    // Rebuilding the course is not permission to forget a food restriction.
+    excludedFoods: base.excludedFoods ?? [],
+    foodAllergy: base.foodAllergy ?? false,
     intakeFocusDone: base.intakeFocusDone,
     discovery: replacePlaces ? undefined : base.discovery,
-    budgetWon: base.budgetWon,
+    budgetWon: null,
     walkingPreference: base.walkingPreference,
     activities,
     areas: located.areas,
@@ -196,7 +244,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     regions: located.regions,
     areaScope: located.areaScope,
     requiredPlaces,
-    excludedPlaces: uniqueStrings([...(reset ? [] : base.excludedPlaces), ...removePlaces].filter(place => !addPlaces.includes(place)), 8),
+    excludedPlaces: uniqueStrings([...(reset ? [] : base.excludedPlaces), ...removePlaces].filter(place => !addPlaces.includes(place)), Infinity),
     cuisine: asCuisineChoice(patch.cuisine) ?? (reset ? null : base.cuisine),
     indoorPlay: indoorPlay || null,
     pace: patch.pace === "relaxed" || patch.pace === "active" || patch.pace === "balanced" ? patch.pace : base.pace,
@@ -206,7 +254,7 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     startTime: patch.startTime === undefined ? timed.startTime : asTime(patch.startTime) ?? timed.startTime,
     endTime: patch.endTime === undefined ? timed.endTime : asTime(patch.endTime) ?? timed.endTime,
     dateLabel: base.dateLabel || dateLabel || null,
-    pinOrder: replacePlaces ? [] : uniqueStrings(base.pinOrder, 8),
+    pinOrder: replacePlaces ? [] : uniqueStrings(base.pinOrder, Infinity),
     preserveExistingPlaces: patch.preserveExistingPlaces !== false,
     addStop: patch.addStop === true,
     intent,
@@ -252,14 +300,28 @@ export function applyInterpretPatch(input: {
   const inferred = [...understanding.inferredPreferences,
     ...(sanitizeInferredPreferences(input.patch.inferredPreferences, input.message) ?? [])]
     .filter((item, index, all) => all.findIndex(other => other.value === item.value) === index).slice(0, 5);
+  const explicitConstraints = explicitDateConstraints(input.message, input.previousState);
+  const venueClock = /공연|상영|영업|운영|예약|도착|현지\s*출발/.test(input.message)
+    && /\d{1,2}(?::\d{2}|\s*시)|오전|오후|밤/.test(input.message)
+    && !/저녁부터|오후부터|밤부터|저녁에\s*시작/.test(input.message);
   const patch: IntentPayload = {
     ...input.patch,
     objective: input.patch.objective || understanding.objective,
-    preferences: { ...understanding.preferences, ...input.patch.preferences },
+    preferences: { ...input.patch.preferences, ...understanding.preferences,
+      vibe: [...new Set([...(input.patch.preferences?.vibe ?? []), ...(understanding.preferences.vibe ?? [])])] },
     // A trip aspiration does not establish whether it lasts a day or a night.
     // Keep the model's semantic intent, but require explicit evidence for duration.
-    stayKind: unspecifiedTrip ? null : input.patch.stayKind,
-    nights: unspecifiedTrip ? null : input.patch.nights,
+    stayKind: explicitStay?.stayKind ?? (unspecifiedTrip ? null : input.previousState?.stayKind ?? null),
+    nights: explicitStay?.nights ?? (unspecifiedTrip ? null : input.previousState?.nights ?? null),
+    // A model-selected clock is not an explicit user constraint. Preserve a
+    // prior clock unless the user actually mentions a time in this turn.
+    startTime: explicitConstraints.startTime,
+    endTime: explicitConstraints.endTime,
+    // A night-view activity does not mean the entire trip starts at night;
+    // a quiet mood does not establish a strict geographic radius either.
+    timeWindow: explicitConstraints.startTime || explicitConstraints.endTime || venueClock
+      ? undefined : extractTimeWindow(input.message) ?? undefined,
+    areaScope: extractAreaScope(input.message) ?? undefined,
     // Cuisine is a hard filter. Never allow a model-inferred cuisine to turn
     // an open dinner request into an unrequested Korean/Japanese/etc. meal.
     cuisine: extractCuisine(input.message) ?? input.previousState?.cuisine ?? null,
@@ -270,11 +332,19 @@ export function applyInterpretPatch(input: {
   };
   const merged = mergeDateState(input.previousState, patch, input.dateLabel);
   const areas = groundedAreas(input.message, input.previousState, merged.areas);
+  const previousAreas = input.previousState ? selectedAreas(input.previousState) : [];
+  const destinationReplaced = areas.length > 0 && previousAreas.some(area => !areas.includes(area));
   const activities = groundedActivities(input.message, input.previousState, merged.activities, merged);
   const exclusions = explicitFoodExclusions(input.message);
-  const state = withAreas({ ...merged, ...explicitDateConstraints(input.message, input.previousState), activities,
-    excludedFoods: [...new Set([...(merged.excludedFoods ?? []), ...exclusions])],
-    foodAllergy: merged.foodAllergy || (exclusions.length > 0 && /알레르기/.test(input.message)),
+  const releases = releasedFoodExclusions(input.message);
+  const excludedFoods = [...new Set([...(merged.excludedFoods ?? []).filter(food => !releases.includes(food)), ...exclusions])];
+  const state = withAreas({ ...merged, ...explicitConstraints, activities,
+    requiredPlaces: destinationReplaced ? merged.requiredPlaces.filter(place => patch.addPlaces?.includes(place)) : merged.requiredPlaces,
+    pinOrder: destinationReplaced ? [] : merged.pinOrder,
+    preserveExistingPlaces: destinationReplaced ? false : merged.preserveExistingPlaces,
+    discovery: destinationReplaced ? undefined : merged.discovery,
+    excludedFoods,
+    foodAllergy: (merged.foodAllergy && excludedFoods.length > 0) || (exclusions.length > 0 && /알레르기/.test(input.message)),
     pendingSlot: null }, areas);
   const next = { ...state, pendingSlot: missingSlot(state) };
   return { state: next, slot: missingSlot(next), reply: usableReply(input.patch.reply),
@@ -308,6 +378,7 @@ export async function interpretDateRequest(input: {
   try {
     const interpretationRules = await retrieveDatePlaybook(input.message, input.previousState ?? emptyDateBrief(), "interpretation", 4);
     const response = await completeJson<unknown>({
+      jsonSchema: { name: "date_intent_patch_v1", strict: true, schema: dateIntentPayloadSchema },
       temperature: 0,
       maxTokens: 1200,
       reasoningEffort: "low",
@@ -317,7 +388,7 @@ export async function interpretDateRequest(input: {
           content: [
             "You understand the goal and preferences in an ongoing Korean couple-date chat. Extract explicit constraints from THIS turn and infer soft ranking preferences. The course planner chooses venues later.",
             "Return JSON only:",
-            '{"intent":"create|modify|remove|reset|clarify","journeyType":"trip|date","objective":"","preferences":{"vibe":[],"novelty":null,"intimacy":null,"activityLevel":null,"crowdTolerance":null,"scenicPreference":null,"foodImportance":null,"walkingTolerance":null},"inferredPreferences":[],"addActivities":[],"removeActivities":[],"addAreas":[],"removeAreas":[],"addPlaces":[],"addStop":false,"cuisine":null,"indoorPlay":null,"areaScope":null,"timeWindow":null,"stayKind":null,"nights":null,"pace":null,"startTime":null,"endTime":null,"preserveExistingPlaces":true,"conversationNote":"","askSlot":null,"reply":""}',
+            "Match the supplied schema. Use null or [] for fields with no new evidence in this turn. These empty values mean keep the previous constraints; reset is the explicit exception. Never return enum alternatives joined with '|'.",
             "latestMessage is the user's actual turn. recentTurns is the chat. currentPlaces is the course already on screen. Interpret meaning, not keywords. Chip labels like 일정추가, 카페변경, 식당변경, 일정제외 are user turns too.",
             "Never invent a city or neighborhood the user did not write. addAreas may only contain names that appear in latestMessage.",
             "If the user intends a trip or date but gives no destination, ask for the destination. Never copy names from the guidance into addAreas.",

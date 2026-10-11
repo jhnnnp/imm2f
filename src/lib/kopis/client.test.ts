@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { DiscoverCandidate } from "@/features/places/types/place";
-import { attachKopisPerformances, findKopisPerformances, kopisFacilityMatches, kopisShowtimes } from "./client";
+import { attachKopisPerformances, findKopisPerformances, kopisFacilityMatches, kopisRuntimeMinutes, kopisShowtimes } from "./client";
 
 const venue: DiscoverCandidate = {
   externalSource: "kakao", externalPlaceId: "theater-1", name: "소월아트홀", category: "photo",
@@ -10,6 +10,13 @@ const venue: DiscoverCandidate = {
 };
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+it.each([["1 시간 30 분", 90], ["150분", 150], ["3시간", 180],
+  ["2시간 30분 (인터미션 20분 포함)", 150], ["2시간 30분 (인터미션 20분 별도)", 170],
+  ["추후 공지", undefined], ["2시간 (인터미션 별도)", undefined], ["0분", undefined]])
+  ("preserves the published performance runtime %s", (value, minutes) => {
+    expect(kopisRuntimeMinutes(String(value))).toBe(minutes);
+  });
 
 it("matches a performance facility by exact identity and coordinate, never a nearby cafe", () => {
   const facility = { fcltynm: "소월아트홀", lo: "127.04", la: "37.56" };
@@ -34,12 +41,13 @@ it("ties a dated performance to the exact verified facility", async () => {
     const xml = path.endsWith("/pblprfr")
       ? "<dbs><db><mt20id>PF123456</mt20id><prfnm>작은 음악회</prfnm><fcltynm>소월아트홀</fcltynm><prfpdfrom>2026.09.01</prfpdfrom><prfpdto>2026.09.30</prfpdto></db></dbs>"
       : path.endsWith("/PF123456")
-        ? "<dbs><db><mt20id>PF123456</mt20id><mt10id>FC123456</mt10id><fcltynm>소월아트홀</fcltynm><prfnm>작은 음악회</prfnm><genrenm>클래식</genrenm><dtguidance>목요일(20:00)</dtguidance></db></dbs>"
+        ? "<dbs><db><mt20id>PF123456</mt20id><mt10id>FC123456</mt10id><fcltynm>소월아트홀</fcltynm><prfnm>작은 음악회</prfnm><genrenm>클래식</genrenm><prfruntime>1시간 30분</prfruntime><dtguidance>목요일(20:00)</dtguidance></db></dbs>"
         : "<dbs><db><mt10id>FC123456</mt10id><fcltynm>소월아트홀</fcltynm><la>37.56</la><lo>127.04</lo></db></dbs>";
     return new Response(xml, { status: 200 });
   }));
   expect(await findKopisPerformances(venue, "20260924")).toMatchObject([{
     id: "PF123456", title: "작은 음악회", dateYmd: "20260924", showtimes: ["20:00"],
+    durationMinutes: 90,
   }]);
 });
 

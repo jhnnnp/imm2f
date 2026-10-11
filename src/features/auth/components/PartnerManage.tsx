@@ -29,12 +29,11 @@ export function PartnerManage({
     }
     setPending(true);
     setError("");
-    const result = await leaveCouple();
-    if (result?.error) {
-      setError(result.error);
-      setPending(false);
-      setConfirm(false);
-    }
+    try {
+      const result = await leaveCouple();
+      if (result?.error) setError(result.error);
+    } catch { setError("연결을 해제하지 못했어요. 다시 시도해 주세요."); }
+    finally { setPending(false); setConfirm(false); }
   }
 
   return (

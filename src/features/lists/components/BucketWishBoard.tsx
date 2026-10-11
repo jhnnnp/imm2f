@@ -5,6 +5,7 @@ import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityCl
 import { formatKoDate } from "@/lib/dates";
 import { createNote, deleteNote, reorderNotes, updateNoteContent, updateNoteStatus } from "../actions";
 import type { CoupleNote } from "../types";
+import { noteCreationAttempt, type NoteCreationAttempt } from "../noteCreationAttempt";
 
 type StatusOption = { id: string; label: string };
 
@@ -21,6 +22,9 @@ export function BucketWishBoard({
   onError,
   onRefresh,
   onOpenDialog,
+  beginMutation,
+  endMutation,
+  busy,
 }: {
   notes: CoupleNote[];
   setNotes: Dispatch<SetStateAction<CoupleNote[]>>;
@@ -34,6 +38,9 @@ export function BucketWishBoard({
   onError: (message: string) => void;
   onRefresh: () => void;
   onOpenDialog: () => void;
+  beginMutation: () => boolean;
+  endMutation: () => void;
+  busy: boolean;
 }) {
   const [pending, setPending] = useState(false);
   const [quickTitle, setQuickTitle] = useState("");
@@ -45,8 +52,10 @@ export function BucketWishBoard({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const draggedRef = useRef<string | null>(null);
+  const editVersion = useRef<string | undefined>(undefined);
+  const creationAttemptRef = useRef<NoteCreationAttempt | null>(null);
 
-  const canReorder = persist && notes.length > 1 && visibleNotes.length === notes.length;
+  const canReorder = persist && !busy && notes.length > 1 && visibleNotes.length === notes.length;
   const visibleIds = useMemo(() => new Set(visibleNotes.map(note => note.id)), [visibleNotes]);
 
   const statusCounts = useMemo(() => {
@@ -86,19 +95,19 @@ export function BucketWishBoard({
     const from = notes.findIndex(note => note.id === draggedId);
     const to = notes.findIndex(note => note.id === targetId);
     if (from < 0 || to < 0) return;
+    if (!beginMutation()) return;
     const snapshot = notes;
     const reordered = [...notes];
     const [moved] = reordered.splice(from, 1);
     reordered.splice(to, 0, moved);
     setNotes(reordered);
-    void reorderNotes("bucket", reordered.map(note => note.id)).then(result => {
-      if ("error" in result) {
-        setNotes(snapshot);
-        onError(result.error);
-      } else {
+    void reorderNotes("bucket", reordered.map(note => note.id))
+      .catch(() => ({ error: "순서를 저장하지 못했어요. 연결을 확인해 주세요." }))
+      .then(result => {
+        endMutation();
+        if ("error" in result) { setNotes(snapshot); onError(result.error); }
         onRefresh();
-      }
-    });
+      });
   }
 
   function handleDragStart(event: DragEvent, noteId: string) {
@@ -120,19 +129,26 @@ export function BucketWishBoard({
       onError("로그인 후 함께 적을 수 있어요.");
       return;
     }
+    if (!beginMutation()) return;
     setPending(true);
-    const result = await createNote("bucket", {
+    const input = {
       title,
       detail: "",
       extra: quickWhen.trim(),
       status: statuses[0].id,
-    });
+    };
+    creationAttemptRef.current = noteCreationAttempt(creationAttemptRef.current, "bucket", input);
+    const result = await createNote("bucket", { ...input, attemptId: creationAttemptRef.current.id })
+      .catch(() => ({ error: "저장 응답을 확인하지 못했어요. 같은 내용으로 다시 시도해 주세요." }));
+    endMutation();
     setPending(false);
     if ("error" in result) {
       onError(result.error);
+      onRefresh();
       return;
     }
-    setNotes(current => [result.note, ...current]);
+    creationAttemptRef.current = null;
+    setNotes(current => [result.note, ...current.filter(note => note.id !== result.note.id)]);
     emitCoupleActivitiesChanged();
     setQuickTitle("");
     setQuickWhen("");
@@ -140,17 +156,21 @@ export function BucketWishBoard({
   }
 
   function changeStatus(note: CoupleNote, next: string) {
-    if (next === note.status) return;
+    if (next === note.status || !persist || !beginMutation()) return;
     const previous = note.status;
     setNotes(current => current.map(item => item.id === note.id ? { ...item, status: next } : item));
-    void updateNoteStatus(note.id, next).then(result => {
-      if ("error" in result) {
-        setNotes(current => current.map(item => item.id === note.id ? { ...item, status: previous } : item));
-        onError(result.error);
-      } else {
+    void updateNoteStatus(note.id, next, note.updatedAt)
+      .catch(() => ({ error: "상태를 저장하지 못했어요. 연결을 확인해 주세요." }))
+      .then(result => {
+        endMutation();
+        if ("error" in result) {
+          setNotes(current => current.map(item => item.id === note.id ? { ...item, status: previous } : item));
+          onError(result.error);
+        } else {
+          setNotes(current => current.map(item => item.id === note.id ? result.note : item));
+        }
         onRefresh();
-      }
-    });
+      });
   }
 
   function toggleDone(note: CoupleNote) {
@@ -159,6 +179,7 @@ export function BucketWishBoard({
   }
 
   function openEdit(note: CoupleNote) {
+    editVersion.current = note.updatedAt;
     setExpandedId(note.id);
     setEditDetail(note.detail);
     setEditExtra(note.extra);
@@ -169,11 +190,15 @@ export function BucketWishBoard({
       onError("로그인 후 수정할 수 있어요.");
       return;
     }
+    if (!beginMutation()) return;
     setPending(true);
-    const result = await updateNoteContent(note.id, { detail: editDetail, extra: editExtra });
+    const result = await updateNoteContent(note.id, { detail: editDetail, extra: editExtra }, editVersion.current)
+      .catch(() => ({ error: "메모를 저장하지 못했어요. 연결을 확인해 주세요." }));
+    endMutation();
     setPending(false);
     if ("error" in result) {
       onError(result.error);
+      onRefresh();
       return;
     }
     setNotes(current => current.map(item => item.id === note.id ? result.note : item));
@@ -182,16 +207,16 @@ export function BucketWishBoard({
   }
 
   function removeNote(note: CoupleNote) {
-    const removedIndex = notes.findIndex(item => item.id === note.id);
+    if (!persist || !beginMutation()) return;
+    const snapshot = notes;
     setNotes(current => current.filter(item => item.id !== note.id));
-    void deleteNote(note.id).then(result => {
-      if ("error" in result) {
-        setNotes(current => [...current.slice(0, removedIndex), note, ...current.slice(removedIndex)]);
-        onError(result.error);
-      } else {
+    void deleteNote(note.id)
+      .catch(() => ({ error: "삭제 응답을 확인하지 못했어요. 최신 목록을 확인해 주세요." }))
+      .then(result => {
+        endMutation();
+        if ("error" in result) { setNotes(snapshot); onError(result.error); }
         onRefresh();
-      }
-    });
+      });
   }
 
   function renderCard(note: CoupleNote, index: number) {
@@ -222,6 +247,7 @@ export function BucketWishBoard({
           <button
             className="bucket-check"
             type="button"
+            disabled={busy}
             aria-label={done ? `${note.title} 완료 취소` : `${note.title} 완료로 표시`}
             aria-pressed={done}
             onClick={() => toggleDone(note)}
@@ -246,6 +272,7 @@ export function BucketWishBoard({
                 <button
                   key={item.id}
                   type="button"
+                  disabled={busy}
                   className={note.status === item.id ? "is-active" : ""}
                   aria-pressed={note.status === item.id}
                   onClick={() => changeStatus(note, item.id)}
@@ -256,10 +283,10 @@ export function BucketWishBoard({
               ))}
             </div>
             <div className="bucket-card-tools">
-              <button type="button" className="bucket-tool" onClick={() => expanded ? setExpandedId(null) : openEdit(note)}>
+              <button type="button" className="bucket-tool" disabled={busy} onClick={() => expanded ? setExpandedId(null) : openEdit(note)}>
                 {expanded ? "닫기" : "메모"}
               </button>
-              <button type="button" className="bucket-tool is-danger" aria-label={`${note.title} 지우기`} onClick={() => removeNote(note)}>지우기</button>
+              <button type="button" className="bucket-tool is-danger" disabled={busy} aria-label={`${note.title} 지우기`} onClick={() => removeNote(note)}>지우기</button>
             </div>
           </div>
         </div>
@@ -280,8 +307,8 @@ export function BucketWishBoard({
               <input value={editExtra} onChange={event => setEditExtra(event.target.value)} placeholder="올해 겨울, 2주년 전후" />
             </label>
             <div className="bucket-card-edit-actions">
-              <button type="button" className="outline-button" onClick={() => setExpandedId(null)} disabled={pending}>취소</button>
-              <button type="submit" className={`primary-button${pending ? " is-loading" : ""}`} disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
+              <button type="button" className="outline-button" onClick={() => setExpandedId(null)} disabled={busy}>취소</button>
+              <button type="submit" className={`primary-button${pending ? " is-loading" : ""}`} disabled={busy} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
             </div>
           </form>
         )}
@@ -340,15 +367,17 @@ export function BucketWishBoard({
             onChange={event => setQuickTitle(event.target.value)}
             placeholder="둘이 함께 해보고 싶은 일을 적어 보세요"
             aria-label="새 버킷리스트 항목"
+            disabled={busy}
           />
           <input
             value={quickWhen}
             onChange={event => setQuickWhen(event.target.value)}
             placeholder="언제쯤 (선택)"
             aria-label="목표 시기"
+            disabled={busy}
           />
         </div>
-        <button type="submit" disabled={pending || !quickTitle.trim()}>{pending ? "추가 중" : "추가"}</button>
+        <button type="submit" disabled={busy || !quickTitle.trim()}>{pending ? "추가 중" : "추가"}</button>
       </form>
 
       {!notes.length ? (
@@ -384,7 +413,7 @@ export function BucketWishBoard({
 
       <footer className="bucket-paper-foot">
         <span>ONLY US</span>
-        <button type="button" onClick={onOpenDialog}>메모와 함께 자세히 추가</button>
+        <button type="button" disabled={busy} onClick={onOpenDialog}>메모와 함께 자세히 추가</button>
       </footer>
     </section>
   );

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Map as MapLibreMap, Marker, StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { PlanItem } from "@/features/planning/types/plan";
-import { htmlMarkerPlacement } from "@/features/map/htmlMarker";
+import { htmlMarkerPlacement, screenOffsetsForNearbyPins } from "@/features/map/htmlMarker";
 import { emptyGeoJsonSource, memoryCityStyle } from "@/features/map/memoryCityStyle";
 import { cinematicBearing } from "../planRoute";
 import { MapRouteOverlay } from "@/features/map/components/MapRouteOverlay";
@@ -95,7 +95,7 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
-  const locatedRef = useRef<Array<PlanItem & { coordinates: [number, number] }>>([]);
+  const locatedRef = useRef<ReturnType<typeof planItemsWithCoordinates>>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -112,7 +112,10 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
     [located],
   );
   const coordinateList = useMemo(() => located.map(item => item.coordinates), [located]);
-  const { path: roadPath } = useRoadRoute(coordinateList, ready && coordinateList.length >= 2, routeProfile);
+  const { path: roadPath } = useRoadRoute(coordinateList, ready && !error && coordinateList.length >= 2, routeProfile);
+  const routeAnchors = useMemo(() => located.map(item => ({
+    coordinates: item.coordinates,
+  })), [located]);
   locatedRef.current = located;
 
   useEffect(() => {
@@ -139,7 +142,7 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
               pitch: MAP_PITCH,
               bearing: cinematicBearing(locatedRef.current.map(item => item.coordinates)),
               maxPitch: 60,
-              attributionControl: false,
+              attributionControl: { compact: true },
               renderWorldCopies: false,
               fadeDuration: 0,
               refreshExpiredTiles: false,
@@ -148,6 +151,7 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
             });
             mapRef.current = map;
             setMapInstance(map);
+            readyTimer = window.setTimeout(() => { if (!disposed) setError(true); }, 10_000);
             map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
             const resizeIfVisible = () => {
               const node = container.current;
@@ -156,29 +160,25 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
             };
             resizeObserver = new ResizeObserver(resizeIfVisible);
             resizeObserver.observe(container.current);
-            let finished = false;
             const finishLoad = () => {
-              if (disposed || finished) return;
-              finished = true;
+              if (disposed) return;
               window.clearTimeout(readyTimer);
               resizeIfVisible();
               syncPlanMapRoute(map, locatedRef.current.map(item => item.coordinates));
+              setError(false);
               setReady(true);
             };
-            map.once("style.load", () => {
-              resizeIfVisible();
-              syncPlanMapRoute(map, locatedRef.current.map(item => item.coordinates));
-              map.once("idle", finishLoad);
-              readyTimer = window.setTimeout(finishLoad, 800);
-            });
+            map.on("style.load", finishLoad);
             map.on("webglcontextlost", event => {
               event.originalEvent?.preventDefault();
-              if (!disposed) setError(true);
+              if (!disposed) { setReady(false); setError(true); }
             });
             map.on("webglcontextrestored", () => {
               if (disposed) return;
               setError(false);
               resizeIfVisible();
+              window.clearTimeout(readyTimer);
+              readyTimer = window.setTimeout(() => { if (!disposed) setError(true); }, 10_000);
             });
           } catch {
             if (!disposed) setError(true);
@@ -189,9 +189,7 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
         });
     };
 
-    bootFrame = window.requestAnimationFrame(() => {
-      bootFrame = window.requestAnimationFrame(boot);
-    });
+    bootFrame = window.requestAnimationFrame(boot);
 
     return () => {
       disposed = true;
@@ -211,8 +209,23 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
     if (!map || !ready || error) return;
     const current = locatedRef.current;
     let disposed = false;
+    let layoutFrame = 0;
+    const syncMarkerOffsets = () => {
+      if (disposed || mapRef.current !== map || markersRef.current.length !== current.length) return;
+      const mapContainer = map.getContainer();
+      const offsets = screenOffsetsForNearbyPins(current.map(item => map.project(item.coordinates)), {
+        width: mapContainer.clientWidth, height: mapContainer.clientHeight,
+      });
+      markersRef.current.forEach((marker, index) => marker.setOffset(offsets[index]));
+    };
+    const scheduleMarkerOffsets = () => {
+      if (layoutFrame) return;
+      layoutFrame = window.requestAnimationFrame(() => { layoutFrame = 0; syncMarkerOffsets(); });
+    };
+    map.on("move", scheduleMarkerOffsets);
+    map.on("resize", scheduleMarkerOffsets);
     void import("maplibre-gl").then(maplibregl => {
-      if (disposed || !mapRef.current) return;
+      if (disposed || mapRef.current !== map) return;
       map.resize();
       markersRef.current.forEach(marker => marker.remove());
       markersRef.current = [];
@@ -220,16 +233,25 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
         syncPlanMapRoute(map, []);
         return;
       }
-      if (roadPath) syncPlanMapRoadRoute(map, roadPath);
-      else syncPlanMapRoute(map, current.map(item => item.coordinates));
-      markersRef.current = current.map((item, index) => {
+      markersRef.current = current.map(item => {
         const element = document.createElement("button");
         element.className = "plan-map-marker";
         element.type = "button";
-        element.innerHTML = `<span><i>${index + 1}</i></span><b>${escapeHtml(item.placeName)}</b>`;
-        element.setAttribute("aria-label", `${index + 1}. ${item.placeName}`);
+        element.innerHTML = `<span><i>${item.mapOrder}</i></span><b>${escapeHtml(item.placeName)}</b>`;
+        element.setAttribute("aria-label", `${item.mapOrder}. ${item.placeName}`);
+        element.setAttribute("aria-pressed", "false");
+        element.addEventListener("click", () => {
+          markersRef.current.forEach(marker => {
+            marker.getElement().classList.remove("is-selected");
+            marker.getElement().setAttribute("aria-pressed", "false");
+          });
+          element.classList.add("is-selected");
+          element.setAttribute("aria-pressed", "true");
+          map.easeTo({ center: item.coordinates, zoom: Math.max(map.getZoom(), 15), duration: 500 });
+        });
         return new maplibregl.Marker({ element, ...htmlMarkerPlacement }).setLngLat(item.coordinates).addTo(map);
       });
+      syncMarkerOffsets();
       const bearing = cinematicBearing(current.map(item => item.coordinates));
       const frame = (center: [number, number], zoom: number) => {
         map.easeTo({ center, zoom, pitch: MAP_PITCH, bearing, duration: 850 });
@@ -251,8 +273,21 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
         }
       }
     });
-    return () => { disposed = true; };
-  }, [ready, routeKey, roadPath, error]);
+    return () => {
+      disposed = true;
+      window.cancelAnimationFrame(layoutFrame);
+      map.off("move", scheduleMarkerOffsets);
+      map.off("resize", scheduleMarkerOffsets);
+    };
+  }, [ready, routeKey, error]);
+
+  // A routing response updates only geometry; it must preserve the user's camera.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || error) return;
+    if (roadPath) syncPlanMapRoadRoute(map, roadPath);
+    else syncPlanMapRoute(map, coordinateList);
+  }, [ready, error, coordinateList, roadPath]);
 
   return <section className={`planner-map${expanded ? " is-expanded" : ""}`} aria-label={`${dayLabel ?? "여행"} 지도`}>
     {routes.length > 1 && <div className="plan-map-days" role="tablist" aria-label="지도 날짜 선택">
@@ -264,15 +299,16 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
     <div ref={container} className="maplibre-canvas" />
     <MapRouteOverlay
       map={mapInstance}
-      anchors={located.map(item => ({ coordinates: item.coordinates }))}
+      anchors={routeAnchors}
       pinVariant="planner"
+      spreadNearbyPins
       roadProfile={routeProfile}
       providedRoadPath={roadPath}
-      active={ready && located.length >= 2}
+      active={ready && !error && located.length >= 2}
     />
-    {!located.length && <div className="map-unavailable is-overlay"><div><b>표시할 좌표가 없어요</b><span>장소를 담으면 실제 지도와 동선이 보여요.</span></div></div>}
-    {located.length > 0 && !ready && !error && <div className="map-loading"><span>여행 지도를 펼치고 있어요.</span><i /></div>}
-    {located.length > 0 && error && <div className="map-error"><b>지도를 불러오지 못했어요</b><span>장소와 일정은 그대로 저장되어 있어요.</span><button type="button" className="outline-button" onClick={() => setAttempt(value => value + 1)}>지도 다시 열기</button></div>}
-    {located.length > 0 && <div className="map-summary"><span>{routes.length > 1 ? `${activeDay + 1}일차` : dayLabel ?? "DAY 1"}</span><b>{located.length}곳</b><small>번호 순서대로 동선이 이어져요</small></div>}
+    {!located.length && <div className="map-unavailable is-overlay"><div><b>{activeItems.length ? "장소 위치를 확인하지 못했어요" : "아직 담은 장소가 없어요"}</b><span>{activeItems.length ? "일정은 저장되어 있어요. 장소 상세에서 위치를 확인해 주세요." : "장소를 담으면 실제 지도와 동선이 보여요."}</span></div></div>}
+    {located.length > 0 && !ready && !error && <div className="map-loading" role="status"><span>여행 지도를 펼치고 있어요.</span><i /></div>}
+    {located.length > 0 && error && <div className="map-error" role="alert"><b>지도를 불러오지 못했어요</b><span>장소와 일정은 그대로 저장되어 있어요.</span><button type="button" className="outline-button" onClick={() => setAttempt(value => value + 1)}>지도 다시 열기</button></div>}
+    {located.length > 0 && <div className="map-summary" role="status"><span>{routes.length > 1 ? `${activeDay + 1}일차` : dayLabel ?? "DAY 1"}</span><b>지도에 {located.length}곳</b><small>{activeItems.length > located.length ? `위치 미확인 ${activeItems.length - located.length}곳 · 일정에서 확인해 주세요` : "일정 번호 순서대로 동선이 이어져요"}</small></div>}
   </section>;
 }

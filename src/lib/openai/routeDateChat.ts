@@ -4,6 +4,7 @@ import { extractAreasFromText, selectedAreas, uniqueStrings } from "@/features/a
 import { chatSituationFromMessage } from "./composeDateChat";
 import { completeJson } from "./client";
 import { isOpenAiConfigured } from "./env";
+import { groundedCourseEdit } from "./courseEditIntent";
 
 type RouterPayload = {
   edit?: { kind?: string; indices?: unknown };
@@ -52,6 +53,24 @@ export async function routeDateChat(input: {
     hasCourse: input.hasCourse,
     chatSituation: chatSituationFromMessage(input.message),
   });
+  const explicitNumbers = [...input.message.matchAll(/(?<!\d)(\d+)\s*번/g)].map(match => Number(match[1]));
+  const simpleReferences = explicitNumbers.length > 0 && !/말고|대신|아니|빼지|삭제하지|제외하지|제거하지|또는|혹은|중|부터|까지|~|만약|경우|라면|유지|남겨/.test(input.message);
+  if (input.hasCourse && local.mode === "course" && simpleReferences) {
+    if (explicitNumbers.some(index => index < 1 || index > input.currentCourse.length)) return { mode: "question", confident: true };
+    if (/빼|삭제|제외|제거/.test(input.message) && !/추가|교체|바꿔|변경|순서/.test(input.message)) {
+      const indices = [...new Set(explicitNumbers)];
+      const allowsClearAll = /전부|모두|전체|싹|다\s*빼|다\s*지워|모든\s*장소/.test(input.message);
+      if (!groundedCourseEdit(input, { kind: "remove", indices })) return { mode: "question", confident: true };
+      return indices.length < input.currentCourse.length || allowsClearAll
+        ? { mode: "course", confident: true, edit: { kind: "remove", indices } }
+        : { mode: "question", confident: true };
+    }
+    if (/순서/.test(input.message) && explicitNumbers.length === input.currentCourse.length
+      && new Set(explicitNumbers).size === input.currentCourse.length) {
+      if (!groundedCourseEdit(input, { kind: "reorder", indices: explicitNumbers })) return { mode: "question", confident: true };
+      return { mode: "course", confident: true, edit: { kind: "reorder", indices: explicitNumbers } };
+    }
+  }
   // Deterministic quick actions and clear requests must not be reclassified by
   // the router model. This is especially important for add/swap/remove chips.
   const needsEditResolution = input.hasCourse && local.mode === "course"
@@ -72,7 +91,7 @@ export async function routeDateChat(input: {
           content: JSON.stringify({
             latestMessage: input.message,
             recentTurns: (input.conversation ?? []).slice(-6),
-            currentCourse: input.currentCourse.slice(0, 12).map((name, index) => ({ index: index + 1, name, category: input.currentCategories?.[index] })),
+            currentCourse: input.currentCourse.map((name, index) => ({ index: index + 1, name, category: input.currentCategories?.[index] })),
             pendingPlaceAsk: input.state?.placeAsk,
             shownPlaces: input.state?.shownPlaces ?? [],
             knownAreas: input.state ? selectedAreas(input.state) : [],
@@ -103,8 +122,12 @@ export async function routeDateChat(input: {
     if (mode === "course") {
       const shown = input.state?.shownPlaces ?? [];
       const picked = uniqueStrings((Array.isArray(parsed.pickedPlaces) ? parsed.pickedPlaces : []).filter(name => shown.includes(name)), 4);
-      const indices = Array.isArray(parsed.edit?.indices) ? [...new Set(parsed.edit.indices.filter((n): n is number => Number.isInteger(n) && Number(n) >= 1 && Number(n) <= input.currentCourse.length))] : [];
+      const rawIndices = parsed.edit?.indices;
+      const validIndices = Array.isArray(rawIndices) && rawIndices.every(n => Number.isInteger(n) && Number(n) >= 1 && Number(n) <= input.currentCourse.length)
+        && new Set(rawIndices).size === rawIndices.length;
+      const indices = validIndices ? rawIndices as number[] : [];
       const kind = parsed.edit?.kind;
+      if (parsed.edit && (!validIndices || !["retime", "remove", "reorder"].includes(kind ?? ""))) return { mode: "question", confident: true };
       const allowsClearAll = /전부|모두|전체|싹|다\s*빼|다\s*지워|모든\s*장소/.test(input.message);
       if (input.hasCourse && kind === "remove" && indices.length > 0 && indices.length === input.currentCourse.length && !allowsClearAll) {
         return { mode: "question", confident: true };
@@ -113,6 +136,10 @@ export async function routeDateChat(input: {
         || (kind === "remove" && indices.length > 0 && (indices.length < input.currentCourse.length || allowsClearAll))
         || (kind === "reorder" && indices.length === input.currentCourse.length))
         ? { kind, indices } as NonNullable<ChatRoute["edit"]> : undefined;
+      if (parsed.edit && !edit) return { mode: "question", confident: true };
+      if (edit && !groundedCourseEdit(input, edit)) return { mode: "question", confident: true };
+      if (needsEditResolution && !edit) return { mode: "question", confident: true };
+      if (local.mode === "chat" && !edit && !/코스|일정|짜|바꿔|변경|교체|추가|빼|삭제|제외|제거|순서|먼저|마지막/.test(input.message)) return { mode: "question", confident: true };
       return { mode, confident: true, pickedPlaces: picked.length ? picked : local.pickedPlaces, edit };
     }
     return { mode, confident: true };

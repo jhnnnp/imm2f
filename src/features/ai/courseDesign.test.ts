@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import { emptyDateBrief, isExclusiveCrawl } from "./dateBrief";
 import { candidateActivitySlot } from "./dateCourse";
-import { courseSelectionScore, decisionUsefulVenueObservation, discoveryCatalog, evaluateCourse, evaluatePreparedCourse, feasibleCourseSeeds, hardCourseProblems, hasRequestedVenueEvidence, parseCourseProposals, usefulVenueEvidence, venueQuality } from "./courseDesign";
+import { courseSelectionScore, decisionUsefulVenueObservation, discoveryCatalog, evaluateCourse, evaluatePreparedCourse, feasibleCourseSeeds, hardCourseProblems, hasRequestedVenueEvidence, joinComplementaryDayProposals, parseCourseProposals, usefulVenueEvidence, venueQuality } from "./courseDesign";
 
 function venue(id: string, name: string, category: DiscoverCandidate["category"], x: number): DiscoverCandidate {
   return {
@@ -15,6 +15,20 @@ function venue(id: string, name: string, category: DiscoverCandidate["category"]
 }
 
 describe("course design", () => {
+  it("joins complete, disjoint model day sections without changing any rows", () => {
+    const proposals = [2, 0, 1].map(day => ({ theme: `${day + 1}일차`, rows: [
+      { id: `kakao:${day}`, day_index: day, duration_minutes: 60 },
+    ] }));
+    const joined = joinComplementaryDayProposals(proposals, 3, ["kakao:0", "kakao:1", "kakao:2"]);
+    expect(joined).toHaveLength(1);
+    expect(joined[0].rows).toEqual([proposals[1].rows[0], proposals[2].rows[0], proposals[0].rows[0]]);
+    expect(joinComplementaryDayProposals(proposals, 3, ["kakao:missing"])).toEqual(proposals);
+    const repeated = proposals.map((proposal, index) => index === 2
+      ? { ...proposal, rows: [{ ...proposal.rows[0], id: "kakao:0" }] } : proposal);
+    expect(joinComplementaryDayProposals(repeated, 3, ["kakao:0"])).toEqual(repeated);
+    const oneDay = proposals.map(proposal => ({ ...proposal, rows: proposal.rows.map(row => ({ ...row, day_index: 0 })) }));
+    expect(joinComplementaryDayProposals(oneDay, 3, ["kakao:0"])).toEqual(oneDay);
+  });
   it("checks a model proposal in its original order and rejects malformed rows as a whole", () => {
     const places = [venue("a", "식당", "restaurant", 127.04), venue("b", "카페", "cafe", 127.042),
       venue("c", "산책", "tourist", 127.041)];
@@ -35,12 +49,50 @@ describe("course design", () => {
       .toContain("제외 음식이 포함된 장소");
   });
 
-  it("rejects a course whose known costs exceed the explicit budget", () => {
+  it("keeps expensive venues eligible after the budget feature is removed", () => {
     const meal = { ...venue("m", "식당", "restaurant", 127.039), expectedCostTwo: 80000 };
     const cafe = { ...venue("c", "카페", "cafe", 127.04), expectedCostTwo: 30000 };
     const proposal = { theme: "", rows: [meal, cafe].map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, day_index: 0 })) };
     expect(hardCourseProblems(evaluateCourse(proposal, [meal, cafe], { ...emptyDateBrief(), budgetWon: 100000 }, new Set()).problems))
-      .toContain("확인된 비용이 예산 초과");
+      .not.toContain("확인된 비용이 예산 초과");
+  });
+
+  it("ignores a legacy zero-won budget when verifying a course", () => {
+    const meal = { ...venue("a", "식당", "restaurant", 127.04), expectedCostTwo: 1000 };
+    const cafe = { ...venue("b", "카페", "cafe", 127.041), expectedCostTwo: 0 };
+    const proposal = { theme: "무료 데이트", rows: [{ id: "kakao:a" }, { id: "kakao:b" }] };
+    expect(hardCourseProblems(evaluateCourse(proposal, [meal, cafe], { ...emptyDateBrief(), budgetWon: 0 }, new Set()).problems))
+      .not.toContain("확인된 비용이 예산 초과");
+    expect(hardCourseProblems(evaluateCourse(proposal, [{ ...meal, expectedCostTwo: 0 }, cafe],
+      { ...emptyDateBrief(), budgetWon: 0 }, new Set()).problems)).not.toContain("확인된 비용이 예산 초과");
+  });
+
+  it("orders an early-closing museum before a later-opening cafe instead of rejecting a feasible day", () => {
+    const checked = (candidate: DiscoverCandidate, text: string): DiscoverCandidate => ({ ...candidate,
+      evidence: [{ id: "hours", venueId: `kakao:${candidate.externalPlaceId}`, attribute: "hours", verification: "source_checked",
+        checkedAt: new Date().toISOString(), url: "https://example.com/hours", text }] });
+    const museum = checked({ ...venue("museum", "미술관", "photo", 127.04), categoryLabel: "문화시설",
+      detailedCategory: "문화,예술 > 미술관" }, "매일 09:00~12:00");
+    const cafe = checked(venue("cafe", "카페", "cafe", 127.041), "매일 13:00~20:00");
+    const state = { ...emptyDateBrief(), dateLabel: "2026-10-11", startTime: "10:00", endTime: "17:00" };
+    const result = evaluateCourse({ theme: "", rows: [{ id: "kakao:cafe", duration_minutes: 60 },
+      { id: "kakao:museum", duration_minutes: 60 }] }, [museum, cafe], state, new Set());
+    expect(result.rows.map(row => row.id)).toEqual(["kakao:museum", "kakao:cafe"]);
+    expect(result.hardIssues.some(issue => issue.code === "schedule_infeasible")).toBe(false);
+  });
+
+  it("requires an actual visit date before accepting a sourced performance even in a local date course", () => {
+    const show = { ...venue("show", "공연장", "photo", 127.04), categoryLabel: "공연장", detailedCategory: "문화 > 공연장",
+      performanceEvent: { id: "show", title: "공연", dateYmd: "20261011", showtimes: ["19:00"], durationMinutes: 150,
+        genre: "뮤지컬", sourceUrl: "https://example.com/show", checkedAt: "2026-10-11" } };
+    const proposal = { theme: "공연과 휴식", rows: [{ id: "kakao:show", duration_minutes: 30 }] };
+    const undated = evaluatePreparedCourse(proposal, proposal.rows, [show], emptyDateBrief(), new Set());
+    expect(undated.hardIssues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "performance_time_unverified",
+      message: "공연 방문 날짜를 먼저 정해야 회차를 확인할 수 있어요." })]));
+    const wrongDay = evaluatePreparedCourse(proposal, proposal.rows, [show], { ...emptyDateBrief(), dateLabel: "2026-10-12" }, new Set());
+    expect(wrongDay.hardIssues.some(issue => issue.code === "performance_date_mismatch")).toBe(true);
+    const dated = evaluatePreparedCourse(proposal, proposal.rows, [show], { ...emptyDateBrief(), dateLabel: "2026-10-11" }, new Set());
+    expect(dated.hardIssues.some(issue => issue.code.startsWith("performance_"))).toBe(false);
   });
 
   it("keeps concrete dish evidence but does not treat menus as cafe space evidence", () => {

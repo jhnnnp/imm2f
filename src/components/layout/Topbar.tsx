@@ -17,6 +17,7 @@ function todayLabel() {
     month: "long",
     day: "numeric",
     weekday: "long",
+    timeZone: "Asia/Seoul",
   });
 }
 
@@ -26,6 +27,8 @@ export function Topbar() {
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [today, setToday] = useState("");
   const notifyRef = useRef<HTMLDivElement>(null);
+  const accountRef = useRef<HTMLDivElement>(null);
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
   const session = useAppSession();
   const { items: activities, loaded: notifyLoaded } = useCoupleActivityFeed(8);
   const label = session.mode === "authenticated" || session.mode === "setup_error" ? initialFromName(session.displayName) : "나";
@@ -56,19 +59,24 @@ export function Topbar() {
     const onClick = (event: MouseEvent) => {
       const target = event.target as Node;
       if (notifyRef.current && !notifyRef.current.contains(target)) setNotifyOpen(false);
+      if (accountRef.current && !accountRef.current.contains(target)) setMenuOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setNotifyOpen(false); setMenuOpen(false); }
     };
     document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("mousedown", onClick); document.removeEventListener("keydown", escape); };
   }, [notifyOpen, menuOpen]);
 
   return <>
     <header className="topbar">
       <div className="today"><span>우리의 공간</span><b suppressHydrationWarning>{today || "오늘"}</b></div>
       <div className="global-search-wrap">
-        <button className="global-search" type="button" onClick={() => setSearchOpen(true)} aria-label="전체 검색 열기" aria-expanded={searchOpen}>
+        <button ref={searchButtonRef} className="global-search" type="button" onClick={() => setSearchOpen(true)} aria-label="전체 검색 열기" aria-expanded={searchOpen}>
           <span>⌕</span><b>장소, 여행, 추억 검색</b><kbd>⌘K</kbd>
         </button>
-        {searchOpen && <CommandPalette open onClose={() => setSearchOpen(false)} />}
+        {searchOpen && <CommandPalette open onClose={() => { setSearchOpen(false); searchButtonRef.current?.focus(); }} />}
       </div>
       <div className="notify-wrap" ref={notifyRef}>
         <button
@@ -94,7 +102,7 @@ export function Topbar() {
           </div>
         )}
       </div>
-      <div className="account-menu">
+      <div className="account-menu" ref={accountRef}>
         <button className="profile-button" type="button" aria-label="프로필 메뉴" aria-expanded={menuOpen} onClick={() => { setMenuOpen(open => !open); setNotifyOpen(false); }}>{label}</button>
         {menuOpen && (
           <div className="account-popover" role="menu">

@@ -363,11 +363,13 @@ export function isExclusiveCrawl(state: Pick<AIPlannerState, "conversationNotes"
 }
 
 export function groundedAreas(message: string, previous: AIPlannerState | undefined, proposed: string[]) {
-  const extracted = extractAreasFromText(message);
+  const extracted = extractRequestedAreasFromText(message);
   // A substring is not proof of a locality: "여행가려구" once became an area.
   const mentioned = proposed.filter(area => extracted.includes(canonicalizeArea(area)));
   const found = uniqueStrings([...extracted, ...mentioned], 3);
-  const previousAreas = previous ? selectedAreas(previous) : [];
+  const allMentioned = extractAreasFromText(message);
+  const excluded = allMentioned.filter(area => !extracted.includes(area));
+  const previousAreas = previous ? selectedAreas(previous).filter(area => !excluded.includes(area)) : [];
   const switching = /(?:다른|말고|대신)\s*(?:곳|도시|동네|지역)|처음부터|새로|전부\s*바꿔/.test(message);
   if (switching) return found;
   if (found.length && previousAreas.length) {
@@ -523,6 +525,9 @@ export function groundedActivities(
   const previousActivities = previous?.activities ?? [];
   const switching = /처음부터|새로|전부\s*바꿔|리셋/.test(message);
   const editingCourse = /바꿔|교체|변경|빼줘|제외|한 곳/.test(message);
+  if (rejected.length && !switching) return uniqueActivities([
+    ...previousActivities.filter(activity => !rejected.includes(activity)), ...extracted,
+  ]);
   if (editingCourse && !switching && !rejected.length) return previousActivities;
   if (extracted.length) {
     // A model may omit one of several explicit experiences. Its partial
@@ -677,6 +682,18 @@ export function extractAreasFromText(message: string) {
     ...(bare && !AREA_STOPWORDS.has(bare) && !/가려|갈래|여행|데이트|추천|코스/.test(bare) ? [bare] : [])].map(canonicalizeArea), 3);
 }
 
+/** Places mentioned as rejected destinations are references, not search areas. */
+export function extractRequestedAreasFromText(message: string) {
+  return extractAreasFromText(message).filter(area => {
+    if (/말고|제외하고|빼고|대신|아니라|아니고/.test(area)) return false;
+    const aliases = uniqueStrings([area, ...KNOWN_AREAS.filter(name => canonicalizeArea(name) === area)], Infinity)
+      .sort((a, b) => b.length - a.length).map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const pattern = new RegExp(`(?:${aliases.join("|")})(?:역|시)?`, "g");
+    return [...message.matchAll(pattern)].some(match => !/^\s*(?:은|는|을|를|이|가|도)?\s*(?:말고|대신|제외|빼|가지\s*마|안\s*가|취소|아니라|아니고)/
+      .test(message.slice(match.index + match[0].length)));
+  });
+}
+
 export function extractAreaScope(message: string): DateAreaScope | null {
   const fromLabel = DATE_SCOPE_OPTIONS.find(item => message.includes(item.label));
   if (fromLabel) return fromLabel.id;
@@ -690,20 +707,26 @@ export function extractPlacesFromText(message: string) {
   const landmarks = DATE_LANDMARKS.filter(name => message.includes(name));
   const named = [...message.matchAll(/([가-힣A-Za-z0-9]{2,18}?(?:공원|미술관|박물관|전시관|시장|식당|카페|호수|수목원|계곡|해변|청계천))(?=\s|에서|으로|가고|들(?:러|렀)|빼|제외|도|$)/g)]
     .map(match => match[1]);
-  return uniqueStrings([...landmarks, ...named], 4);
+  return uniqueStrings([...landmarks, ...named], Infinity);
 }
 
 export function extractCuisine(message: string): DateCuisineChoice | null {
-  const specific = (["한식", "일식", "중식", "양식"] as const).find(item => message.includes(item));
-  if (specific) return specific;
-  const fromDish = (["한식", "일식", "중식", "양식"] as const).find(item => CUISINE_REGEX[item].test(message));
-  if (fromDish) return fromDish;
   if (/(?:음식|식사|메뉴|밥).*(상관없|아무거나)|상관없.*(?:음식|식사|메뉴)/.test(message)) return "any";
+  const prohibited = (tail: string) => /^\s*(?:은|는|을|를|이|가|도)?\s*(?:말고|대신|제외|빼|싫|안\s*먹|못\s*먹)/.test(tail);
+  const specific = [...message.matchAll(/한식|일식|중식|양식/g)].filter(match =>
+    !prohibited(message.slice(match.index + match[0].length))).at(-1);
+  if (specific) return specific[0] as DateCuisine;
+  const fromDish = (["한식", "일식", "중식", "양식"] as const).find(item => {
+    const matches = message.matchAll(new RegExp(CUISINE_REGEX[item].source, "g"));
+    return [...matches].some(match => !prohibited(message.slice(match.index + match[0].length)));
+  });
+  if (fromDish) return fromDish;
   return null;
 }
 
 export function extractStay(message: string): { stayKind: DateStayKind; nights: number } | null {
-  const explicitNights = message.match(/(\d{1,2})\s*박(?:\s*(\d{1,2})\s*일)?/);
+  const explicitNights = [...message.matchAll(/(\d{1,2})\s*박(?:\s*(\d{1,2})\s*일)?/g)]
+    .filter(match => !/^\s*(?:은|는|을|를)?\s*(?:말고|대신|취소|제외)/.test(message.slice(match.index + match[0].length))).at(-1);
   if (explicitNights) {
     const nights = Number(explicitNights[1]);
     const days = explicitNights[2] ? Number(explicitNights[2]) : nights + 1;
@@ -906,8 +929,10 @@ export function courseSize(state: AIPlannerState) {
       : (state.timeWindow === "evening" || state.timeWindow === "night")
         ? { min: 2, max: 3, days: 1 }
         : { min: 2, max: 4, days: 1 };
-  if (!state.addStop || !state.preserveExistingPlaces || state.pinOrder.length < 2) return size;
-  const need = Math.min(8, state.pinOrder.length + 1);
+  const retainedCount = Math.max(state.requiredPlaces.length, state.preserveExistingPlaces ? state.pinOrder.length : 0);
+  if (!state.addStop || !state.preserveExistingPlaces || state.pinOrder.length < 2)
+    return { ...size, max: Math.max(size.max, retainedCount) };
+  const need = state.pinOrder.length + 1;
   return {
     min: Math.max(size.min, need),
     max: Math.max(size.max, need),

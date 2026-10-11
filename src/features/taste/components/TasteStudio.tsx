@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { SyncNotice } from "@/components/shared/SyncNotice";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { initialFromName } from "@/features/auth/types";
 import { withSubjectParticle } from "@/features/auth/koreanName";
-import { calculatePreferenceInsight } from "@/lib/openai/analyzePreferences";
+import { calculatePreferenceInsight } from "@/lib/openai/preferenceInsight";
 import type { Place } from "@/features/places/types/place";
-import { saveTasteProfile } from "../actions";
+import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
+import { readTasteWorkspace, saveTasteProfile } from "../actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { emptyTasteInput, inputFromProfile } from "../parse";
 import { profileFacets } from "../profileFacets";
@@ -116,11 +118,26 @@ function TastePath({
   );
 }
 
-export function TasteStudio({ initial, places }: { initial: TasteBoard; places: Place[] }) {
+export function TasteStudio({ initial, places: initialPlaces }: { initial: TasteBoard; places: Place[] }) {
   const [board, setBoard] = useState(initial);
+  const [places, setPlaces] = useState(initialPlaces);
   const [editing, setEditing] = useState(!initial.you);
   const [error, setError] = useState("");
+  const [syncError, setSyncError] = useState("");
   const [pending, startTransition] = useTransition();
+  const saving = useRef(false);
+  const retrySync = useSharedRefresh(async ({ isCurrent }) => {
+    try {
+      const remote = await readTasteWorkspace();
+      if (!isCurrent() || saving.current) return;
+      setBoard(remote.board);
+      setPlaces(remote.places);
+      setSyncError("");
+    } catch {
+      if (isCurrent()) setSyncError("최신 취향을 불러오지 못했어요. 연결을 확인하고 다시 시도해 주세요.");
+    }
+  }, { tables: ["taste_profiles", "places", "place_preferences"], activityPrefixes: ["TASTE_", "PLACE_"] });
+
   const youInitial = initialFromName(board.youName);
   const partnerInitial = initialFromName(board.partnerName);
   const filledCount = Number(Boolean(board.you)) + Number(Boolean(board.partner));
@@ -139,9 +156,13 @@ export function TasteStudio({ initial, places }: { initial: TasteBoard; places: 
   );
 
   function save(input: Parameters<typeof saveTasteProfile>[0]) {
+    if (saving.current) return;
+    saving.current = true;
     setError("");
     startTransition(async () => {
-      const result = await saveTasteProfile(input);
+      const result = await saveTasteProfile(input)
+        .catch(() => ({ error: "취향을 저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
+      saving.current = false;
       if ("error" in result) {
         setError(result.error);
         return;
@@ -154,6 +175,8 @@ export function TasteStudio({ initial, places }: { initial: TasteBoard; places: 
 
   return (
     <div className={`taste-studio${editing ? " is-composing" : ""}`}>
+      <SyncNotice message={syncError} onRetry={retrySync} />
+      {error && !editing && <p className="form-error" role="alert">{error}</p>}
       {editing ? null : (
         <header className="taste-board-hero">
           <div className="taste-board-mast">
@@ -169,7 +192,7 @@ export function TasteStudio({ initial, places }: { initial: TasteBoard; places: 
             <div
               className="taste-status"
               role="status"
-              aria-label={`취향 기준 ${filledCount}명 중 2명`}
+              aria-label={`취향 기준 2명 중 ${filledCount}명 작성`}
             >
               <div className="taste-status-track" aria-hidden="true">
                 <i style={{ width: `${(filledCount / 2) * 100}%` }} />

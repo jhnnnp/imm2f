@@ -13,22 +13,21 @@ export function InviteManager() {
     setPending(true);
     setError("");
     setCopied(false);
-    const result = await createCoupleInvite();
-    setPending(false);
-    if ("error" in result && result.error) {
-      setError(result.error);
-      return;
-    }
-    if ("token" in result) {
-      const nextLink = `${window.location.origin}/invite/${result.token}`;
-      setLink(nextLink);
-    }
+    try {
+      const result = await createCoupleInvite();
+      if ("error" in result && result.error) { setError(result.error); return; }
+      if ("token" in result) setLink(`${window.location.origin}/invite/${result.token}`);
+    } catch { setError("초대 링크를 만들지 못했어요. 다시 시도해 주세요."); }
+    finally { setPending(false); }
   }
 
   async function copyLink() {
     if (!link) return;
-    await navigator.clipboard.writeText(link);
-    setCopied(true);
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setError("");
+    } catch { setError("자동 복사가 되지 않았어요. 위 링크를 선택해서 복사해 주세요."); }
   }
 
   async function shareLink() {
@@ -37,7 +36,8 @@ export function InviteManager() {
       try {
         await navigator.share({ title: "ONLY US 초대", text: "우리의 공간에 초대할게요.", url: link });
         return;
-      } catch {
+      } catch (cause) {
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
         // Share sheet dismissed or unavailable; copy instead.
       }
     }

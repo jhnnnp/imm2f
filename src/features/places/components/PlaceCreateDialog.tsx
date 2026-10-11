@@ -1,14 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { createPlace, saveKakaoPlace } from "../actions";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import type { DiscoverCandidate, Place, PlaceCategoryId } from "../types/place";
 import { withObjectParticle } from "@/lib/korean";
-
-const SAVE_PENDING_MIN_MS = 450;
+import { manualPlaceAttempt, type ManualPlaceAttempt } from "../manualPlaceAttempt";
 
 export function PlaceCreateDialog({
   open,
@@ -33,6 +32,9 @@ export function PlaceCreateDialog({
   const [pending, setPending] = useState(false);
   const [description, setDescription] = useState("");
   const [mounted, setMounted] = useState(false);
+  const [manualDraft, setManualDraft] = useState({ name: "", category: "cafe" as PlaceCategoryId, district: "", description: "" });
+  const manualAttempt = useRef<ManualPlaceAttempt | null>(null);
+  const pendingRef = useRef(false);
 
   useLayoutEffect(() => {
     setMounted(true);
@@ -42,8 +44,10 @@ export function PlaceCreateDialog({
     if (!open) {
       setDescription("");
       setError("");
-      setPending(false);
-      onPendingChange?.(false);
+      if (!pendingRef.current) {
+        setPending(false);
+        onPendingChange?.(false);
+      }
       return;
     }
     setDescription(mode === "confirm" ? initialDescription : "");
@@ -51,6 +55,7 @@ export function PlaceCreateDialog({
   }, [open, mode, candidate?.externalPlaceId, candidate?.externalSource, initialDescription, onPendingChange]);
 
   function setSavePending(next: boolean) {
+    pendingRef.current = next;
     setPending(next);
     onPendingChange?.(next);
   }
@@ -59,7 +64,7 @@ export function PlaceCreateDialog({
 
   async function confirmKakao(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!candidate || pending) return;
+    if (!candidate || pendingRef.current) return;
     setSavePending(true);
     setError("");
     const formData = new FormData(event.currentTarget);
@@ -71,11 +76,8 @@ export function PlaceCreateDialog({
       return;
     }
 
-    const [result] = await Promise.all([
-      saveKakaoPlace({ candidate, description: nextDescription, durationMinutes: 60, expectedCostTwo: null })
-        .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." })),
-      new Promise(resolve => window.setTimeout(resolve, SAVE_PENDING_MIN_MS)),
-    ]);
+    const result = await saveKakaoPlace({ candidate, description: nextDescription, durationMinutes: 60, expectedCostTwo: null })
+      .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
     setSavePending(false);
     if ("error" in result) {
       setError(result.error);
@@ -88,15 +90,11 @@ export function PlaceCreateDialog({
 
   async function submitManual(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending) return;
+    if (pendingRef.current) return;
     setSavePending(true);
     setError("");
-    const formData = new FormData(event.currentTarget);
     const input = {
-      name: String(formData.get("name") ?? ""),
-      category: String(formData.get("category") ?? "cafe") as PlaceCategoryId,
-      district: String(formData.get("district") ?? ""),
-      description: String(formData.get("description") ?? description).trim(),
+      ...manualDraft,
       durationMinutes: 60,
       expectedCostTwo: null,
     };
@@ -107,16 +105,16 @@ export function PlaceCreateDialog({
       return;
     }
 
-    const [result] = await Promise.all([
-      createPlace(input)
-        .catch(() => ({ error: "저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." })),
-      new Promise(resolve => window.setTimeout(resolve, SAVE_PENDING_MIN_MS)),
-    ]);
+    manualAttempt.current = manualPlaceAttempt(manualAttempt.current, input);
+    const result = await createPlace({ ...input, attemptId: manualAttempt.current.id })
+      .catch(() => ({ error: "저장 결과를 확인하지 못했어요. 같은 내용으로 다시 시도하면 이어서 저장해요." }));
     setSavePending(false);
     if ("error" in result) {
       setError(result.error);
       return;
     }
+    manualAttempt.current = null;
+    setManualDraft({ name: "", category: "cafe", district: "", description: "" });
     onSaved(result.place, `${withObjectParticle(result.place.name)} 우리의 장소에 저장했어요.`);
     emitCoupleActivitiesChanged();
     onClose();
@@ -135,7 +133,7 @@ export function PlaceCreateDialog({
               <small>{candidate.categoryLabel} · {candidate.roadAddress || candidate.address}</small>
             </div>
             <label className="field">
-              <span>우리의  메모</span>
+              <span>우리의 메모</span>
               <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것" disabled={pending} />
             </label>
             <p className="form-hint">저장하기 전까지는 목록에만 보여요.</p>
@@ -153,21 +151,21 @@ export function PlaceCreateDialog({
             <p className="form-hint">검색에서 못 찾은 장소만 직접 입력해요.</p>
             <label className="field">
               <span>이름</span>
-              <input name="name" required placeholder="장소 이름" disabled={pending} />
+              <input name="name" required placeholder="장소 이름" value={manualDraft.name} onChange={event => setManualDraft(current => ({ ...current, name: event.target.value }))} disabled={pending} />
             </label>
             <label className="field">
               <span>카테고리</span>
-              <select name="category" defaultValue="cafe" disabled={pending}>
+              <select name="category" value={manualDraft.category} onChange={event => setManualDraft(current => ({ ...current, category: event.target.value as PlaceCategoryId }))} disabled={pending}>
                 {PLACE_CATEGORIES.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}
               </select>
             </label>
             <label className="field">
               <span>동네</span>
-              <input name="district" placeholder="서울 성수동" disabled={pending} />
+              <input name="district" placeholder="서울 성수동" value={manualDraft.district} onChange={event => setManualDraft(current => ({ ...current, district: event.target.value }))} disabled={pending} />
             </label>
             <label className="field">
-              <span>우리의  메모</span>
-              <textarea name="description" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="둘에게 이 장소가 특별한 이유" disabled={pending} />
+              <span>우리의 메모</span>
+              <textarea name="description" rows={3} value={manualDraft.description} onChange={event => setManualDraft(current => ({ ...current, description: event.target.value }))} placeholder="둘에게 이 장소가 특별한 이유" disabled={pending} />
             </label>
             {pending && <div className="place-save-progress" role="status" aria-live="assertive"><i className="modal-spinner" aria-hidden="true" /><span><b>주소와 장소 정보를 저장하고 있어요</b><small>위치까지 확인한 뒤 목록에 추가할게요.</small></span></div>}
             {error && <p className="form-error" role="alert">{error}</p>}

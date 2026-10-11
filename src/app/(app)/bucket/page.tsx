@@ -1,9 +1,12 @@
+import type { Metadata } from "next";
 import { RouteSuspense } from "@/components/layout/RouteSuspense";
 import { CoupleNotesBoard } from "@/features/lists/components/CoupleNotesBoard";
 import { NotesContextPanel } from "@/features/lists/components/NotesContextPanel";
 import { ContextPanel } from "@/components/layout/ContextPanel";
 import { listNotes } from "@/features/lists/actions";
 import { getAppSession } from "@/features/auth/session";
+
+export const metadata: Metadata = { title: "우리의 버킷리스트" };
 
 export default function BucketPage() {
   return (

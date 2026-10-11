@@ -1,7 +1,9 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import { signUp, type AuthActionState } from "../session";
+import { loginHrefForInvite } from "../invitePath";
 
 const initialState: AuthActionState = null;
 
@@ -24,6 +26,7 @@ export function SignupForm({ inviteToken }: { inviteToken?: string }) {
         <input type="password" name="password" autoComplete="new-password" required minLength={8} placeholder="8자 이상" />
       </label>
       {state?.error && <p className="form-error" role="alert" aria-live="polite">{state.error}</p>}
+      {state?.message ? <div className="inline-notice" role="status" aria-live="polite"><p>{state.message}</p><Link href={loginHrefForInvite(inviteToken)}>인증 후 로그인하기</Link></div> : null}
       <button className="primary-button full" type="submit" disabled={pending}>{pending ? "만드는 중..." : inviteToken ? "가입하고 연결하기" : "공간 만들기"}</button>
     </form>
   );

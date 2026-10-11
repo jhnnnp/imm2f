@@ -260,7 +260,6 @@ export function buildDateTurnUnderstanding(input: Input): DateTurnUnderstanding 
   if (parsed.dateLabel) addConstraint("date", parsed.dateLabel);
   if (parsed.startTime) addConstraint("startTime", parsed.startTime);
   if (parsed.endTime) addConstraint("endTime", parsed.endTime);
-  if (parsed.budgetWon !== undefined) addConstraint("budgetWon", parsed.budgetWon);
   const foods = explicitFoodExclusions(message);
   if (/회\s*(?:는|를)?\s*(?:싫|안\s*먹|못\s*먹|제외|빼)/.test(message)) foods.push("회");
   if (foods.length) addConstraint("excludedFoods", [...new Set(foods)]);

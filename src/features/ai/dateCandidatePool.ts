@@ -38,8 +38,6 @@ export function buildDateCandidatePool(
     const menu = (venue.evidence ?? []).filter(item => item.attribute === "menu").map(item => item.text).join(" ");
     if (candidateFoodConflict(`${venue.name} ${venue.detailedCategory ?? ""} ${venue.dishes ?? ""} ${menu}`, state.excludedFoods ?? []))
       rejectedReasons.push("excluded_food");
-    if (state.budgetWon != null && venue.expectedCostTwo != null && venue.expectedCostTwo > state.budgetWon)
-      rejectedReasons.push("over_budget");
     if (venue.performanceEvent && validDates.length && !validDates.includes(venue.performanceEvent.dateYmd))
       rejectedReasons.push("event_date_mismatch");
     if (admit && !admit(venue)) rejectedReasons.push("search_policy");

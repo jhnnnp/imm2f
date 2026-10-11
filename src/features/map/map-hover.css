@@ -1,0 +1,43 @@
+.memory-city .map-pin-preview {
+  position: absolute;
+  z-index: 8;
+  width: 284px;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
+  padding: 13px;
+  border: 1px solid rgba(255, 255, 255, .92);
+  border-radius: 17px;
+  background: rgba(253, 251, 246, .98);
+  color: #2c3e35;
+  box-shadow: 0 12px 38px rgba(34, 51, 43, .2), 0 2px 8px rgba(34, 51, 43, .08);
+  cursor: default;
+  animation: map-preview-appear .14s ease-out;
+}
+
+.map-pin-preview::after {
+  content: "";
+  position: absolute;
+  left: var(--preview-arrow-x);
+  width: 12px;
+  height: 12px;
+  background: #fdfbf6;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.map-pin-preview[data-placement="above"]::after { bottom: -6px; }
+.map-pin-preview[data-placement="below"]::after { top: -6px; }
+.map-pin-preview-card { display: flex; align-items: flex-start; gap: 11px; }
+.map-pin-preview-image { width: 58px; height: 68px; flex: 0 0 58px; object-fit: cover; border-radius: 10px; }
+.map-pin-preview-body { min-width: 0; flex: 1; }
+.map-pin-preview-status { display: block; margin: 0 0 5px; color: #628998; font-size: .65rem; font-weight: 700; line-height: 1.3; }
+.map-pin-preview.is-visited .map-pin-preview-status, .map-pin-preview.is-trip .map-pin-preview-status { color: #527963; }
+.map-pin-preview.is-revisit .map-pin-preview-status { color: #a86659; }
+.map-pin-preview.is-memory .map-pin-preview-status { color: #a17b45; }
+.map-pin-preview-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: .96rem; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.map-pin-preview-meta, .map-pin-preview-detail { margin: 4px 0 0; color: #7b847d; font-size: .71rem; line-height: 1.5; overflow-wrap: anywhere; }
+.map-pin-preview-meta, .map-pin-preview-detail { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.map-pin-preview-hint { display: block; margin-top: 10px; padding-top: 8px; border-top: 1px solid #e6e9e2; color: #8c948d; font-size: .64rem; line-height: 1.4; }
+.memory-city .memory-city-marker.has-map-preview { z-index: 5; }
+.memory-city .memory-city-marker:focus-visible { outline: 3px solid #365f4d; outline-offset: 4px; border-radius: 50%; }
+@keyframes map-preview-appear { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .memory-city .map-pin-preview { animation: none; } }

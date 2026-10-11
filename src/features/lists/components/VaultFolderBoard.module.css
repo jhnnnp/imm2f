@@ -1,0 +1,161 @@
+.record {
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.selectedRecord {
+  border-color: #749184 !important;
+  box-shadow: 0 0 0 2px rgba(116, 145, 132, .13) !important;
+  background: #f8fbf8 !important;
+}
+
+.recordCheck {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-right: 3px;
+}
+
+.recordCheck input,
+.selectionBar input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #52776a;
+}
+
+.recordCheck input:disabled,
+.selectionBar input:disabled {
+  cursor: default;
+}
+
+.folderTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: start;
+  justify-self: start;
+  max-width: 100%;
+  margin: 0 0 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #f0f3ef;
+  color: #6d7d73;
+  font-size: .62rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.folderTag svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+}
+
+.selectionBar {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-height: 39px;
+  margin: -4px 0 12px;
+  padding: 9px 12px;
+  border: 1px solid rgba(94, 122, 106, .13);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .55);
+  color: #62776c;
+  font-size: .7rem;
+}
+
+.selectionBar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  cursor: pointer;
+}
+
+.selectionBar > button {
+  min-height: 29px;
+  margin-left: auto;
+  padding: 0 5px;
+  border: 0;
+  background: transparent;
+  color: #66766e;
+  font: inherit;
+  cursor: pointer;
+}
+
+.selectionBar > button:focus-visible,
+.recordCheck input:focus-visible,
+.selectionBar input:focus-visible {
+  outline: 2px solid #567e6a;
+  outline-offset: 3px;
+}
+
+.dragHint {
+  color: #9a9d94;
+  font-size: .64rem;
+  line-height: 1.6;
+}
+
+.folderEmpty > .text-link {
+  display: block;
+  margin: 14px auto 0;
+}
+
+.folderEmpty svg {
+  width: 24px;
+  height: 24px;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.saveDestination {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #dce5dc;
+  border-radius: 10px;
+  background: #f4f7f2;
+  color: #5c7364;
+  font-size: .73rem;
+}
+
+.saveDestination > b {
+  overflow-wrap: anywhere;
+}
+
+.saveDestination > small {
+  grid-column: 1 / -1;
+  color: #8b968b;
+  font-size: .64rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 700px) {
+  .selectionBar {
+    flex-wrap: wrap;
+    gap: 9px 12px;
+  }
+
+  .dragHint {
+    width: 100%;
+  }
+
+  .folderTag {
+    font-size: .68rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .record {
+    transition: none;
+  }
+}

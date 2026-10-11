@@ -2,6 +2,7 @@ import type { CoupleActivity } from "./types";
 
 export const IMPORTANT_ACTIONS = new Set([
   "PLACE_ADDED",
+  "PLACE_FOLDERS_UPDATED",
   "TRIP_CREATED",
   "TRIP_UPDATED",
   "DATE_CREATED",

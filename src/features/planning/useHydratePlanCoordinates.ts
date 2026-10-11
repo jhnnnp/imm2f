@@ -3,15 +3,7 @@
 import { useEffect, useRef } from "react";
 import { hydrateCouplePlanCoordinates } from "./actions";
 import type { PlanItem, PlanKind } from "./types/plan";
-import { asPlanCoordinates } from "./planCoordinates";
-
-function needsCoordinateHydrate(items: PlanItem[]) {
-  return items.some(item => !asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]));
-}
-
-function hydrateSignature(kind: PlanKind, items: PlanItem[]) {
-  return `${kind}:${items.length}:${items.map(item => item.id).join("|")}`;
-}
+import { mergeHydratedPlanCoordinates, planCoordinateHydrateKey } from "./planCoordinates";
 
 export function useHydratePlanCoordinates(
   kind: PlanKind,
@@ -22,7 +14,7 @@ export function useHydratePlanCoordinates(
   const latest = useRef(items);
   latest.current = items;
 
-  const key = needsCoordinateHydrate(items) ? hydrateSignature(kind, items) : "";
+  const key = planCoordinateHydrateKey(kind, items);
   useEffect(() => {
     if (!key) return;
     if (lastKey.current === key) return;
@@ -30,8 +22,7 @@ export function useHydratePlanCoordinates(
     let cancelled = false;
     void hydrateCouplePlanCoordinates(kind).then(plan => {
       if (!cancelled) {
-        const coordinates = new Map(plan.items.map(item => [item.id, item.coordinates]));
-        setItems(latest.current.map(item => ({ ...item, coordinates: item.coordinates ?? coordinates.get(item.id) ?? null })));
+        setItems(mergeHydratedPlanCoordinates(latest.current, plan.items));
       }
     }).catch(() => { /* Keep the current itinerary if coordinate lookup is unavailable. */ });
     return () => {

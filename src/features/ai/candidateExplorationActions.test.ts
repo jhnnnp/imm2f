@@ -2,8 +2,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import { emptyDateBrief, withAreas } from "./dateBrief";
 import { buildDateCandidatePool } from "./dateCandidatePool";
-import { mergeSessionCandidates, sealSessionCandidates } from "./sessionCandidates";
-import type { CandidateExplorationPreferences } from "./candidateExploration";
+import { markExplorationCandidates, mergeSessionCandidates, sealSessionCandidates } from "./sessionCandidates";
+import { explorationResearchPlan, type CandidateExplorationPreferences } from "./candidateExploration";
+
+vi.mock("@/features/auth/session", () => ({ getAppSession: vi.fn(async () => ({ mode: "authenticated", userId: "user", coupleId: "couple", displayName: "나", partner: null })) }));
 
 vi.mock("@/lib/openai/interpretDateRequest", () => ({ interpretDateRequest: vi.fn() }));
 vi.mock("@/lib/kakao/local", () => ({ searchKakaoPlacesRemote: vi.fn(), geocodeKakaoAddressRemote: vi.fn(async () => null) }));
@@ -89,6 +91,59 @@ it("prepares known region and activity, then shows only the five eligible provid
   expect(result.researchPlan.needs.filter(need => need.kind === "venue")).toHaveLength(1);
 });
 
+it.each(["부산 말고 제주로 바꿔줘", "부산이 아니라 제주로 바꿔줘", "부산 아니고 제주로 변경해줘"])("does not re-add a rejected city: %s", async message => {
+  vi.mocked(interpretDateRequest).mockResolvedValueOnce({
+    state: withAreas(state, ["제주"]), slot: null, reply: "",
+  });
+  const prepared = await prepareCandidateExploration({ message, previousState: state });
+  if ("error" in prepared) throw new Error(prepared.error);
+  expect(prepared.state.areas).toEqual(["제주"]);
+  expect(prepared.state.region).toBe("제주");
+});
+
+it("requests distinguishing restaurant evidence even when no atmosphere filter was selected", async () => {
+  const meals = { ...prefs, activities: ["meal" as const], provenance: { meal: "user_selected" as const } };
+  vi.mocked(searchKakaoPlacesRemote).mockResolvedValue({ ok: true, places: [{
+    ...venue(801), name: "부산 갈비집", category: "restaurant", categoryLabel: "음식점",
+    detailedCategory: "음식점 > 한식 > 갈비", kakaoCategoryGroupCode: "FD6",
+  }], isEnd: true, page: 1, totalCount: 1 });
+  const result = await exploreCandidateGroups({ message: "부산 식당", state, preferences: meals,
+    planningSessionId: sessionId });
+  if ("error" in result) throw new Error(result.error);
+  expect(enrichResearchNeedEvidence).toHaveBeenCalledWith(expect.any(Array), expect.any(Object),
+    expect.arrayContaining([expect.objectContaining({ kind: "venue", id: "explore-meal" })]), 4);
+  expect(result.groups[0].cards[0].reason).toContain("대표 메뉴와 가격");
+});
+
+it("keeps more than thirty-two authenticated selections without truncating their IDs", async () => {
+  const candidates = Array.from({ length: 40 }, (_, index) => venue(index + 901));
+  const observedAt = new Date().toISOString();
+  const pool = buildDateCandidatePool(candidates, state);
+  const context = markExplorationCandidates(mergeSessionCandidates(null, pool.records, {
+    sessionId, observedAt, turnId: "initial",
+  }), { shownIds: candidates.map(item => `kakao:${item.externalPlaceId}`), observedAt, turnId: "shown" });
+  const selectedIds = candidates.slice(0, 36).map(item => `kakao:${item.externalPlaceId}`);
+  const result = await updateCandidateExplorationChoices({ planningSessionId: sessionId,
+    sessionCandidates: sealSessionCandidates(context, { actorId: "user", coupleId: "couple" }),
+    selectedIds, rejectedIds: [] });
+  expect(result?.selectedCandidateIds).toHaveLength(36);
+  expect(new Set(result?.selectedCandidateIds)).toEqual(new Set(selectedIds));
+  expectNoProviderWork();
+});
+
+it("keeps repeated rejections beyond sixty-four without breaking the exploration session", async () => {
+  const candidates = Array.from({ length: 65 }, (_, index) => venue(index + 1001));
+  const observedAt = new Date().toISOString();
+  const context = mergeSessionCandidates(null, buildDateCandidatePool(candidates, state).records,
+    { sessionId, observedAt, turnId: "initial" });
+  const rejectedIds = candidates.map(item => `kakao:${item.externalPlaceId}`);
+  const result = await updateCandidateExplorationChoices({ planningSessionId: sessionId,
+    sessionCandidates: sealSessionCandidates(context, { actorId: "user", coupleId: "couple" }),
+    selectedIds: [], rejectedIds });
+  expect(new Set(result?.rejectedCandidateIds)).toEqual(new Set(rejectedIds));
+  expectNoProviderWork();
+});
+
 it("asks for a travel span before candidate exploration unless the user supplied one", async () => {
   const missing = await prepareCandidateExploration({ message: "부산 여행가려고" });
   if ("error" in missing) throw new Error(missing.error);
@@ -105,13 +160,14 @@ it("asks for a travel span before candidate exploration unless the user supplied
   const previous = await prepareCandidateExploration({ message: "부산 카페 여행",
     previousState: { ...state, stayKind: "daytrip", nights: 0 } });
   if ("error" in previous) throw new Error(previous.error);
-  expect(previous.needsSpan).toBe(true);
+  expect(previous.needsSpan).toBe(false);
+  expect(previous.state.stayKind).toBe("daytrip");
   expect(previous.state.nights).toBe(0);
 
   const compact = await prepareCandidateExploration({ message: "부산여행",
     previousState: { ...state, stayKind: "daytrip", nights: 0 } });
   if ("error" in compact) throw new Error(compact.error);
-  expect(compact.needsSpan).toBe(true);
+  expect(compact.needsSpan).toBe(false);
 
   const longer = await prepareCandidateExploration({ message: "부산 3박4일 여행",
     previousState: { ...state, stayKind: "daytrip", nights: 0 } });
@@ -225,7 +281,7 @@ it("reuses eight unseen eligible session candidates before issuing a provider se
   const now = new Date().toISOString();
   const records = buildDateCandidatePool(Array.from({ length: 10 }, (_, index) => venue(index + 1)), state).records;
   const session = sealSessionCandidates(mergeSessionCandidates(null, records, {
-    sessionId, observedAt: now, turnId: `${sessionId}:1` }));
+    sessionId, observedAt: now, turnId: `${sessionId}:1` }), { actorId: "user", coupleId: "couple" });
   const result = await exploreCandidateGroups({ message: "부산 카페", state, preferences: prefs,
     planningSessionId: sessionId, sessionCandidates: session });
   expect("error" in result).toBe(false);
@@ -336,4 +392,95 @@ it("refines only the cafe group and keeps shown candidates out of the next batch
     "kakao:6", "kakao:7", "kakao:8", "kakao:9", "kakao:10",
   ].sort());
   expect(next.researchPlan.needs.find(need => need.id === "explore-cafe")?.qualities).toContain("view");
+});
+
+function expectNoProviderWork() {
+  expect(interpretDateRequest).not.toHaveBeenCalled();
+  expect(observeExperiencePlan).not.toHaveBeenCalled();
+  expect(searchKakaoPlacesRemote).not.toHaveBeenCalled();
+  expect(geocodeKakaoAddressRemote).not.toHaveBeenCalled();
+  expect(searchTourPlacesRemote).not.toHaveBeenCalled();
+  expect(enrichResearchNeedEvidence).not.toHaveBeenCalled();
+}
+
+it.each([null, undefined, { message: null }, { message: 42 }, { message: "x".repeat(801) },
+  { message: "성수 카페", previousState: null }, { message: "성수 카페", previousState: { ...state, excludedFoods: [42] } },
+  { message: "성수 카페", planKind: "invalid" }, { message: "성수 카페", sessionCandidates: { data: "x".repeat(300001) } },
+])("rejects malformed intake before paid interpretation, case %#", async input => {
+  expect(await prepareCandidateExploration(input as never)).toHaveProperty("error");
+  expectNoProviderWork();
+});
+
+it("asks for the duration of a local city trip even when the text has no trip keyword", async () => {
+  const prepared = await prepareCandidateExploration({ message: "성수 카페", planKind: "trip" });
+  if ("error" in prepared) throw new Error(prepared.error);
+  expect(prepared.needsSpan).toBe(true);
+  expect(prepared.needsArea).toBe(false);
+  expect(prepared.state.nights).toBe(0);
+});
+
+it.each(["daytrip", "overnight"] as const)("preserves an explicit %s duration across normal trip follow-ups", async stayKind => {
+  const previousState = { ...state, stayKind, nights: stayKind === "overnight" ? 3 : 0 };
+  const prepared = await prepareCandidateExploration({ message: "카페 중심 부산 여행", previousState, planKind: "trip" });
+  if ("error" in prepared) throw new Error(prepared.error);
+  expect(prepared.needsSpan).toBe(false);
+  expect(prepared.state.stayKind).toBe(stayKind);
+  expect(prepared.state.nights).toBe(previousState.nights);
+});
+
+it("asks for a fresh duration when the user explicitly resets a previous trip", async () => {
+  const prepared = await prepareCandidateExploration({ message: "새 여행을 처음부터 계획할게", planKind: "trip",
+    previousState: { ...state, stayKind: "overnight", nights: 3 } });
+  if ("error" in prepared) throw new Error(prepared.error);
+  expect(prepared.needsSpan).toBe(true);
+  expect(prepared.state.nights).toBe(0);
+});
+
+it("retains long-stay candidate browsing without silently shrinking its stated duration", async () => {
+  const prepared = await prepareCandidateExploration({ message: "부산 8박9일 카페 여행", planKind: "trip" });
+  if ("error" in prepared) throw new Error(prepared.error);
+  expect(prepared.state.nights).toBe(8);
+  expect(prepared.needsSpan).toBe(false);
+  const explored = await exploreCandidateGroups({ message: "부산 카페", state: prepared.state,
+    preferences: prefs, planningSessionId: sessionId });
+  expect(explored).not.toHaveProperty("error");
+});
+
+const validExplore = () => ({ message: "부산 카페", state, preferences: prefs, planningSessionId: sessionId });
+it.each([null, undefined, { message: null }, { state: null }, { state: { ...state, areas: [42] } },
+  { preferences: null }, { preferences: { ...prefs, provenance: null } }, { planningSessionId: null },
+  { planningSessionId: "test-session" }, { selectedIds: [null] }, { rejectedIds: [42] },
+  { selectedIds: Array.from({ length: 501 }, (_, index) => `kakao:${index}`) },
+  { rejectedIds: Array.from({ length: 501 }, (_, index) => `kakao:${index}`) },
+  { selectedIds: ["kakao:1", "kakao:1"] }, { groupIds: "cafe" }, { groupIds: [null] }, { groupId: null },
+  { refinement: 42 }, { refinement: "x".repeat(161) },
+  { researchPlan: { needs: [null] } }, { experiencePlan: { days: [null] } },
+  { preferences: { ...prefs, provenance: { cafe: { toString: null } } } },
+  { researchPlan: { source: { toString: null }, unresolved: [], needs: [] } },
+  { sessionCandidates: { signature: "forged", records: [] } },
+  { sessionCandidates: { data: "x".repeat(300001) } },
+])("blocks malformed candidate search before any provider or enrichment, case %#", async patch => {
+  const input = patch == null ? patch : { ...validExplore(), ...patch };
+  expect(await exploreCandidateGroups(input as never)).toHaveProperty("error");
+  expectNoProviderWork();
+});
+
+const validChoices = () => ({ planningSessionId: sessionId, sessionCandidates: null, selectedIds: [], rejectedIds: [] });
+it.each([null, { selectedIds: null }, { selectedIds: [42] }, { rejectedIds: "kakao:1" },
+  { planningSessionId: null }, { rejectedIds: Array.from({ length: 65 }, (_, index) => `kakao:${index}`) },
+  { sessionCandidates: { data: "x".repeat(300001) } },
+])("safely rejects malformed selection updates without throwing, case %#", async patch => {
+  const input = patch == null ? patch : { ...validChoices(), ...patch };
+  expect(await updateCandidateExplorationChoices(input as never)).toBeNull();
+  expectNoProviderWork();
+});
+
+it.each([null, { state: null }, { preferences: null }, { selectedIds: [null] }, { rejectedIds: null },
+  { researchPlan: null }, { groupId: null }, { planningSessionId: null },
+  { researchPlan: { source: { toString: null }, unresolved: [], needs: [] } },
+])("safely rejects malformed replacement requests without throwing, case %#", async patch => {
+  const input = patch == null ? patch : { ...validChoices(), state, preferences: prefs, groupId: "cafe",
+    researchPlan: explorationResearchPlan(null, prefs, "부산"), ...patch };
+  expect(await replaceRejectedCandidateFromSession(input as never)).toHaveProperty("error");
+  expectNoProviderWork();
 });

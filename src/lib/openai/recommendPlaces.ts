@@ -1,4 +1,5 @@
 import type { DiscoverCandidate } from "@/features/places/types/place";
+import { after } from "next/server";
 import type { AIChatCard, DateChatTurn, PlaceAsk } from "@/features/planning/types/plan";
 import {
   PLACE_PICK_MAX,
@@ -168,7 +169,7 @@ export async function recommendPlacesWithOpenAi(input: {
     // A fresh menu/rating lookup must not renew an unrelated cached opening-hours value.
     const refreshed = grounded.filter(candidate => facts.some(fact => fact.id === dateCandidateKey(candidate)))
       .map(candidate => ({ ...candidate, openingHours: undefined }));
-    void writePlaceDetailCache(refreshed).catch(() => {});
+    after(() => writePlaceDetailCache(refreshed).catch(() => undefined));
   }
 
   const payload = {

@@ -1,6 +1,7 @@
 import { tracePlanningTransformation, type PlanningTransformation, type PlanningTransformationStage } from "./planningTransformations";
 import { resolveCuisineRequirement } from "./planningRequirementProvenance";
-import { fitSchedule, scheduleGapMinutes } from "./schedule";
+import { earliestFeasibleVisit, fitSchedule, scheduleGapMinutes } from "./schedule";
+import { verifiedOpeningAtVisit, verifiedOpeningWindows, type VerifiedOpeningWindow } from "./planningEvidence";
 import { tripLocalWindows } from "./planningSupport";
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
 import { distanceMeters } from "@/features/places/geo";
@@ -262,20 +263,24 @@ export function applyCourseDelta(input: {
   const { message, previousStops } = input;
   if (!previousStops.length) return input.state;
   const names = previousStops.map(stop => stop.name);
-  if (isSwapRequest(message) && !isRedoRequest(message)) {
+  // A venue question in the same turn is a separate task. Its category or
+  // ordinal must not become the target of the itinerary change.
+  const swapMessage = message.split(/[.!?\n]+|\s*(?:그리고|그런데|근데|또한)\s*/)
+    .find(clause => isSwapRequest(clause))?.trim() ?? message;
+  if (isSwapRequest(swapMessage) && !isRedoRequest(swapMessage)) {
     const activities = ["cafe", "meal", "walk", "exhibit", "movie", "performance", "indoor", "nightview"] as const;
     const slotsIn = (text: string) => activities.filter(activity => stopMatchesActivity({ name: text, category: text }, activity) || (
         activity === "cafe" && /카페/.test(text)
       ) || (
-        activity === "meal" && /식당|맛집|식사|밥집/.test(text)
+        activity === "meal" && /식당|맛집|식사|밥집|아침|점심|저녁|야식/.test(text)
       ));
-    const directional = message.match(/(.+?)(?:을|를)\s*(.+?)(?:으로|로)\s*(?:바꿔|변경|교체)/);
-    const fromSlots = directional ? slotsIn(directional[1]) : slotsIn(message);
+    const directional = swapMessage.match(/(.+?)(?:을|를)\s*(.+?)(?:으로|로)\s*(?:바꿔|변경|교체)/);
+    const fromSlots = directional ? slotsIn(directional[1]) : slotsIn(swapMessage);
     const targets = directional ? slotsIn(directional[2]) : fromSlots;
-    const ordinal = message.match(/(\d+)\s*번/);
-    const explicitStop = ordinal ? previousStops[Number(ordinal[1]) - 1] : previousStops.find(stop => message.includes(stop.name));
+    const ordinal = swapMessage.match(/(\d+)\s*번/);
+    const explicitStop = ordinal ? previousStops[Number(ordinal[1]) - 1] : previousStops.find(stop => swapMessage.includes(stop.name));
     const matchingStops = previousStops.filter(stop => fromSlots.some(activity => stopMatchesActivity(stop, activity)));
-    const toExclude = (explicitStop ? [explicitStop] : /전부|모두|전체/.test(message) ? matchingStops : matchingStops.slice(0, 1))
+    const toExclude = (explicitStop ? [explicitStop] : /전부|모두|전체/.test(swapMessage) ? matchingStops : matchingStops.slice(0, 1))
       .map(stop => stop.name);
     const keep = names.filter(name => !toExclude.includes(name));
     const oldNonCourseExclusions = input.state.excludedPlaces.filter(name => !names.includes(name));
@@ -294,8 +299,8 @@ export function applyCourseDelta(input: {
       preserveExistingPlaces: true,
       // If the requested kind does not exist, this behaves as an addition.
       addStop: toExclude.length === 0,
-      excludedPlaces: uniqueStrings([...oldNonCourseExclusions, ...toExclude], 12),
-      requiredPlaces: uniqueStrings([...keep, ...input.state.requiredPlaces.filter(place => !names.includes(place) && !toExclude.includes(place))], 12),
+      excludedPlaces: uniqueStrings([...oldNonCourseExclusions, ...toExclude], 500),
+      requiredPlaces: uniqueStrings([...keep, ...input.state.requiredPlaces.filter(place => !names.includes(place) && !toExclude.includes(place))], 500),
     };
   }
   if (isAdditiveRequest(message)) {
@@ -306,7 +311,7 @@ export function applyCourseDelta(input: {
       preserveExistingPlaces: true,
       addStop: true,
       excludedPlaces: input.state.excludedPlaces.filter(name => !names.includes(name)),
-      requiredPlaces: uniqueStrings([...names, ...input.state.requiredPlaces], 12),
+      requiredPlaces: uniqueStrings([...names, ...input.state.requiredPlaces], 500),
     };
   }
   if (!input.state.preserveExistingPlaces || input.state.intent === "reset") return input.state;
@@ -315,7 +320,7 @@ export function applyCourseDelta(input: {
     return {
       ...input.state,
       pinOrder: names,
-      requiredPlaces: uniqueStrings([...names.filter(name => !resolvedExclusions.includes(name)), ...input.state.requiredPlaces.filter(name => !resolvedExclusions.includes(name))], 12),
+      requiredPlaces: uniqueStrings([...names.filter(name => !resolvedExclusions.includes(name)), ...input.state.requiredPlaces.filter(name => !resolvedExclusions.includes(name))], 500),
     };
   }
   const instead = message.match(/(.+?)\s*대신\s+(.+)/);
@@ -328,8 +333,8 @@ export function applyCourseDelta(input: {
         intent: "modify",
         pinOrder: names,
         preserveExistingPlaces: true,
-        excludedPlaces: uniqueStrings([...input.state.excludedPlaces, from], 8),
-        requiredPlaces: uniqueStrings([...names.filter(name => name !== from), to, ...input.state.requiredPlaces], 8),
+        excludedPlaces: uniqueStrings([...input.state.excludedPlaces, from], 500),
+        requiredPlaces: uniqueStrings([...names.filter(name => name !== from), to, ...input.state.requiredPlaces], 500),
       };
     }
   }
@@ -347,8 +352,8 @@ export function applyCourseDelta(input: {
       intent: redo ? "create" : "remove",
       pinOrder: redo ? [] : names,
       preserveExistingPlaces: !redo,
-      excludedPlaces: uniqueStrings([...input.state.excludedPlaces, ...exclude], 8),
-      requiredPlaces: redo ? [] : uniqueStrings(kept, 8),
+      excludedPlaces: uniqueStrings([...input.state.excludedPlaces, ...exclude], 500),
+      requiredPlaces: redo ? [] : uniqueStrings(kept, 500),
     };
   }
 
@@ -374,7 +379,7 @@ export function applyCourseDelta(input: {
       ...input.state,
       pinOrder: names,
       preserveExistingPlaces: true,
-      requiredPlaces: uniqueStrings([...names.filter(name => !input.state.excludedPlaces.includes(name)), ...input.state.requiredPlaces], 8),
+      requiredPlaces: uniqueStrings([...names.filter(name => !input.state.excludedPlaces.includes(name)), ...input.state.requiredPlaces], 500),
     };
   }
   return input.state;
@@ -418,24 +423,53 @@ export function mealAnchorMinutes(state: AIPlannerState, dayStart: string) {
   return [18 * 60];
 }
 
-/** Anchor a dated, KOPIS-confirmed performance to its published showtime.
- * Other stops may shorten to 35 minutes, but the show itself never moves. */
+/** A dated showing cannot be bound to an unspecified visit date. Do not
+ * convert missing/invalid labels to today's date for performance guarantees. */
+export function performanceVisitDate(state: Pick<AIPlannerState, "dateLabel">): string | null {
+  const label = String(state.dateLabel ?? "").trim();
+  const compact = /^(20\d{2})(\d{2})(\d{2})$/.exec(label);
+  const separated = /(20\d{2})\s*(?:년|[.\-/])\s*(\d{1,2})\s*(?:월|[.\-/])\s*(\d{1,2})(?:일)?/.exec(label);
+  const match = compact ?? separated;
+  if (!match) return null;
+  const year = Number(match[1]); const month = Number(match[2]); const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return `${match[1]}${match[2].padStart(2, "0")}${match[3].padStart(2, "0")}`;
+}
+
+export type DateOpeningCache = Map<string, VerifiedOpeningWindow[] | null>;
+
+function sourceOpeningWindows(candidate: DiscoverCandidate, dayYmd: string | null, cache: DateOpeningCache) {
+  const key = `${dateCandidateKey(candidate)}:${dayYmd}`;
+  if (!cache.has(key)) cache.set(key, verifiedOpeningWindows(candidate, dayYmd));
+  return cache.get(key)!;
+}
+
+/** Anchor every dated, KOPIS-confirmed performance to a published showtime.
+ * Stops between performances may shorten to 35 minutes; shows never move. */
 export function schedulePerformanceCourse(
   rows: DateCourseRow[], candidates: DiscoverCandidate[], state: AIPlannerState, dayStart: string,
+  verifiedTravelMinutes?: number[], openingCache: DateOpeningCache = new Map(),
 ): DateCourseRow[] | null | undefined {
+  if (verifiedTravelMinutes && (verifiedTravelMinutes.length !== Math.max(0, rows.length - 1)
+    || verifiedTravelMinutes.some(minutes => !Number.isFinite(minutes) || minutes < 0))) return null;
   const days = courseSize(state).days;
-  if (!state.dateLabel) return undefined;
+  const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
+  if (!rows.some(row => byId.get(String(row.id ?? ""))?.performanceEvent)) return undefined;
+  if (!performanceVisitDate(state)) return null;
   if (days > 1) {
-    const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
-    if (!rows.some(row => byId.get(String(row.id ?? ""))?.performanceEvent)) return undefined;
     const windows = tripLocalWindows(state.userRequests ?? [], days);
     const result: DateCourseRow[] = [];
     for (let day = 0; day < days; day++) {
       const group = rows.filter(row => (row.day_index ?? 0) === day).map(row => ({ ...row, day_index: 0 }));
       if (!group.length) continue;
       const singleDayState: AIPlannerState = { ...state, stayKind: "daytrip", nights: 0,
-        dateLabel: tripDayYmd(state, day) };
-      const scheduled = assignStartTimes(group, candidates, singleDayState, windows[day]?.start ?? dayStart);
+        dateLabel: tripDayYmd(state, day),
+        startTime: windows[day]?.start ?? state.startTime, endTime: windows[day]?.end ?? state.endTime };
+      const positions = rows.map((row, index) => ({ row, index })).filter(entry => (entry.row.day_index ?? 0) === day);
+      if (verifiedTravelMinutes && positions.some((entry, index) => index > 0 && entry.index !== positions[index - 1].index + 1)) return null;
+      const dailyLegs = verifiedTravelMinutes ? positions.slice(1).map(entry => verifiedTravelMinutes[entry.index - 1]) : undefined;
+      const scheduled = assignStartTimes(group, candidates, singleDayState, windows[day]?.start ?? dayStart, dailyLegs, openingCache);
       if (!scheduled.length) return null;
       const last = scheduled.at(-1)!;
       const finish = clockMinutes(last.start_time!) + Number(last.duration_minutes ?? 0);
@@ -445,48 +479,101 @@ export function schedulePerformanceCourse(
     }
     return result;
   }
-  const dateYmd = state.dateLabel.replace(/\D/g, "").slice(0, 8);
-  const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
-  const anchored = rows.map((row, index) => ({ row, index, candidate: byId.get(String(row.id ?? "")) }))
-    .find(item => item.candidate?.performanceEvent?.dateYmd === dateYmd);
-  if (!anchored?.candidate?.performanceEvent) return undefined;
-  const event = anchored.candidate.performanceEvent;
+  const dateYmd = tripDayYmd(state, 0);
+  const anchors = rows.flatMap((row, index) => {
+    const event = byId.get(String(row.id ?? ""))?.performanceEvent;
+    return event ? [{ index, event }] : [];
+  });
+  if (!anchors.length) return undefined;
+  if (anchors.some(anchor => anchor.event.dateYmd !== dateYmd)) return null;
   const begin = clockMinutes(dayStart);
   const window = assumedTimeWindow(state);
   const end = window.specified ? clockMinutes(window.endTime) : 23 * 60 + 59;
+  if (!Number.isFinite(begin) || !Number.isFinite(end) || end <= begin) return null;
   const mode = state.discovery?.transport ?? (isTravelPlan(state) ? "transit" : "walk");
-  const gap = rows.map((row, index) => index ? scheduleGapMinutes(
+  const gap = rows.map((row, index) => index ? verifiedTravelMinutes?.[index - 1] ?? scheduleGapMinutes(
     byId.get(String(rows[index - 1].id ?? ""))?.coordinates, byId.get(String(row.id ?? ""))?.coordinates, mode) : 0);
+  const openingWindows = rows.map(row => {
+    const candidate = byId.get(String(row.id ?? ""));
+    return candidate ? sourceOpeningWindows(candidate, dateYmd, openingCache) : null;
+  });
   const desired = rows.map(row => {
     const candidate = byId.get(String(row.id ?? ""));
     return Math.max(35, Math.min(180, Number(row.duration_minutes) || (candidate ? defaultDuration(candidate, state.pace) : 70)));
   });
-  desired[anchored.index] = Math.max(90, desired[anchored.index]);
-  const before = anchored.index;
-  const travelBefore = gap.slice(1, before + 1).reduce((sum, value) => sum + value, 0);
-  for (const showtime of event.showtimes) {
-    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(showtime)) continue;
-    const show = clockMinutes(showtime);
-    const available = show - begin - travelBefore - (before ? 10 : 0);
-    if (available < before * 35 || show < begin) continue;
-    const durations = [...desired];
-    const wanted = durations.slice(0, before).reduce((sum, value) => sum + value, 0);
-    if (wanted > available) {
-      const flex = wanted - before * 35;
-      const allowed = available - before * 35;
-      for (let index = 0; index < before; index++) durations[index] = 35 + Math.floor((durations[index] - 35) * allowed / Math.max(1, flex));
-    }
-    const result: DateCourseRow[] = [];
-    let cursor = begin;
-    for (let index = 0; index < rows.length; index++) {
-      if (index === before) cursor = show;
-      else if (index > 0) cursor += gap[index];
-      result.push({ ...rows[index], day_index: 0, start_time: formatClock(cursor), duration_minutes: durations[index] });
-      cursor += durations[index];
-    }
-    if (cursor <= end) return result;
+  const earliest = rows.map(row => {
+    const venue = byId.get(String(row.id ?? ""));
+    return venue && (state.discovery?.requiredActivities ?? state.activities).includes("nightview")
+      && candidateActivitySlot(venue) === "nightview" ? 18 * 60 : begin;
+  });
+  for (const anchor of anchors) {
+    const runtime = anchor.event.durationMinutes;
+    desired[anchor.index] = Number.isFinite(runtime) && runtime! >= 15 && runtime! <= 720
+      ? runtime! : Math.max(90, desired[anchor.index]);
   }
-  return null;
+  const result: DateCourseRow[] = [];
+  let cursor = begin;
+  let segmentStart = 0;
+  for (const { index: anchorIndex, event } of anchors) {
+    const count = anchorIndex - segmentStart;
+    const entrance = anchorIndex ? 10 : 0;
+    const segmentFinish = (durations: number[]) => {
+      let finish = cursor;
+      for (let index = segmentStart; index < anchorIndex; index++) {
+        const allowed = earliestFeasibleVisit(Math.max(finish + gap[index], earliest[index]),
+          durations[index - segmentStart], openingWindows[index]);
+        if (allowed == null) return Infinity;
+        finish = allowed + durations[index - segmentStart];
+      }
+      return finish + gap[anchorIndex] + entrance;
+    };
+    // The earliest feasible confirmed showing leaves at least as much room for
+    // every later anchor, without a combinatorial search over all showtimes.
+    const show = event.showtimes.filter(time => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))
+      .map(clockMinutes).sort((a, b) => a - b)
+      .find(time => time >= segmentFinish(Array.from({ length: count }, () => 35))
+        && time + desired[anchorIndex] <= end
+        && earliestFeasibleVisit(time, desired[anchorIndex], openingWindows[anchorIndex]) === time);
+    if (show == null) return null;
+    let durations = desired.slice(segmentStart, anchorIndex);
+    if (segmentFinish(durations) > show) {
+      let low = 0; let high = 1;
+      for (let iteration = 0; iteration < 14; iteration++) {
+        const fraction = (low + high) / 2;
+        const values = durations.map(duration => 35 + Math.floor((duration - 35) * fraction));
+        if (segmentFinish(values) <= show) low = fraction;
+        else high = fraction;
+      }
+      durations = durations.map(duration => 35 + Math.floor((duration - 35) * low));
+    }
+    for (let index = segmentStart; index < anchorIndex; index++) {
+      const duration = durations[index - segmentStart];
+      const allowed = earliestFeasibleVisit(Math.max(cursor + gap[index], earliest[index]), duration, openingWindows[index]);
+      if (allowed == null) return null;
+      cursor = allowed;
+      result.push({ ...rows[index], day_index: 0, start_time: formatClock(cursor), duration_minutes: duration });
+      cursor += duration;
+    }
+    result.push({ ...rows[anchorIndex], day_index: 0, start_time: formatClock(show), duration_minutes: desired[anchorIndex] });
+    cursor = show + desired[anchorIndex];
+    segmentStart = anchorIndex + 1;
+  }
+  if (segmentStart < rows.length) {
+    const tailBegin = cursor + gap[segmentStart];
+    if (tailBegin >= end) return null;
+    const tail = fitSchedule(rows.slice(segmentStart).map((row, offset) => {
+      const index = segmentStart + offset;
+      return { row, dayIndex: 0, durationMinutes: desired[index],
+        earliestStartTime: formatClock(earliest[index]), visitWindows: openingWindows[index],
+        coordinates: byId.get(String(row.id ?? ""))?.coordinates };
+    }), formatClock(tailBegin), formatClock(end), mode, {},
+    verifiedTravelMinutes?.slice(segmentStart));
+    if (!tail) return null;
+    result.push(...tail.map(stop => ({ ...stop.row, day_index: 0, start_time: stop.startTime,
+      duration_minutes: stop.durationMinutes })));
+    cursor = clockMinutes(result.at(-1)!.start_time!) + result.at(-1)!.duration_minutes!;
+  }
+  return cursor <= end ? result : null;
 }
 
 export function assignStartTimes(
@@ -494,8 +581,9 @@ export function assignStartTimes(
   candidates: DiscoverCandidate[],
   state: AIPlannerState,
   dayStart = assumedTimeWindow(state).startTime,
+  verifiedTravelMinutes?: number[], openingCache: DateOpeningCache = new Map(),
 ): DateCourseRow[] {
-  const performanceSchedule = schedulePerformanceCourse(rows, candidates, state, dayStart);
+  const performanceSchedule = schedulePerformanceCourse(rows, candidates, state, dayStart, verifiedTravelMinutes, openingCache);
   if (performanceSchedule !== undefined) return performanceSchedule ?? [];
   const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
   const localWindows = tripLocalWindows(state.userRequests ?? [], courseSize(state).days);
@@ -505,10 +593,13 @@ export function assignStartTimes(
       row,
       dayIndex: Math.max(0, Math.min(courseSize(state).days - 1, Math.floor(Number(row.day_index) || 0))),
       coordinates: candidate?.coordinates,
+      visitWindows: candidate ? sourceOpeningWindows(candidate, tripDayYmd(state, Math.max(0, Math.floor(Number(row.day_index) || 0))), openingCache) : null,
+      earliestStartTime: candidate && (state.discovery?.requiredActivities ?? state.activities).includes("nightview")
+        && candidateActivitySlot(candidate) === "nightview" ? "18:00" : undefined,
       durationMinutes: Number(row.duration_minutes) || (candidate ? defaultDuration(candidate, state.pace) : 70),
     };
   }), dayStart, assumedTimeWindow(state).specified ? assumedTimeWindow(state).endTime : "23:59",
-  state.discovery?.transport ?? (isTravelPlan(state) ? "transit" : "walk"), localWindows);
+  state.discovery?.transport ?? (isTravelPlan(state) ? "transit" : "walk"), localWindows, verifiedTravelMinutes);
   if (!scheduled) return [];
   // Keep dinner in the evening when an afternoon course has room to wait.
   // This only delays the meal and following stops, and never exceeds the window.
@@ -522,12 +613,30 @@ export function assignStartTimes(
     });
     if (mealIndex < 0) continue;
     const meal = group[mealIndex];
+    const mealTime = clockMinutes(meal.startTime);
+    // A lunch already between noon and 14:30 must not jump to 18:00 merely
+    // because it missed the single noon anchor. Likewise retain dinner times.
+    if (mealTime >= 12 * 60 && mealTime <= 14 * 60 + 30
+      || mealTime >= 17 * 60 && mealTime <= 20 * 60 + 30) continue;
     const anchor = mealAnchorMinutes(state, dayStartTime).find(value => value >= clockMinutes(meal.startTime));
     if (anchor == null || clockMinutes(meal.startTime) >= anchor) continue;
     const delay = anchor - clockMinutes(meal.startTime);
-    const last = group.at(-1)!;
-    if (clockMinutes(last.startTime) + last.durationMinutes + delay > end) continue;
-    group.slice(mealIndex).forEach(stop => { stop.startTime = formatClock(clockMinutes(stop.startTime) + delay); });
+    const tail = group.slice(mealIndex);
+    const starts = [clockMinutes(meal.startTime) + delay];
+    for (let index = 1; index < tail.length; index++) {
+      const position = scheduled.indexOf(tail[index]);
+      const gap = verifiedTravelMinutes?.[position - 1]
+        ?? scheduleGapMinutes(tail[index - 1].coordinates, tail[index].coordinates,
+          state.discovery?.transport ?? (isTravelPlan(state) ? "transit" : "walk"));
+      starts.push(Math.max(clockMinutes(tail[index].startTime), starts[index - 1] + tail[index - 1].durationMinutes + gap));
+    }
+    if (starts.at(-1)! + tail.at(-1)!.durationMinutes > end) continue;
+    if (tail.some((stop, index) => {
+      const candidate = byId.get(String(stop.row.id ?? ""));
+      return candidate && verifiedOpeningAtVisit(candidate, tripDayYmd(state, day),
+        formatClock(starts[index]), stop.durationMinutes) === "closed";
+    })) continue;
+    tail.forEach((stop, index) => { stop.startTime = formatClock(starts[index]); });
   }
   return scheduled.map(stop => ({ ...stop.row, day_index: stop.dayIndex, start_time: stop.startTime, duration_minutes: stop.durationMinutes }));
 }

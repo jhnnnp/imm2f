@@ -2,15 +2,18 @@ import { blocksCourse, type PlanningIssueCode } from "@/features/ai/planningPoli
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
 import type { AIPlanCondition, AIPlaceRecommendation, AIPlannerReply, AIPlannerState, DateChatTurn, DatePreviousStop, PlanItem } from "@/features/planning/types/plan";
 import { discoverPlaceId } from "@/features/places/discover";
-import { courseSize, extractCuisine, isTravelPlan, matchesActivity, matchesCuisine } from "@/features/ai/dateBrief";
+import { assumedTimeWindow, courseSize, extractCuisine, isTravelPlan, matchesActivity, matchesCuisine } from "@/features/ai/dateBrief";
 import {
   assignStartTimes, bothWantNames, candidateActivitySlot, courseSuggestions, dateCandidateKey,
   dateCategoryLabel, defaultDuration, pickCourseMessage,
   preferredSavedNames, travelGapMinutes, type DateCourseRow,
 } from "@/features/ai/dateCourse";
 import { completeJson } from "./client";
+import { courseProposalSchema } from "./courseProposalSchema";
+import { dateDesignRuntime } from "./dateDesignRuntime";
+import { selectedDateFeasibility } from "@/features/ai/dateFeasibility";
 import { enrichDateVenues } from "./enrichDateVenues";
-import { buildFallbackCourse, courseSelectionScore, discoveryCatalog, evaluateCourse, evaluatePreparedCourse, feasibleCourseSeeds, hasCafeSpaceEvidence, hasRequestedVenueEvidence, parseCourseProposals, planningStopGuidance, usefulVenueEvidence, wantsCafeAtmosphere, type CourseEvaluation } from "@/features/ai/courseDesign";
+import { buildFallbackCourse, courseSelectionScore, discoveryCatalog, evaluateCourse, evaluatePreparedCourse, feasibleCourseSeeds, hasCafeSpaceEvidence, hasRequestedVenueEvidence, joinComplementaryDayProposals, parseCourseProposals, planningStopGuidance, usefulVenueEvidence, wantsCafeAtmosphere, type CourseEvaluation } from "@/features/ai/courseDesign";
 import { isOpenAiConfigured } from "./env";
 import { distanceMeters } from "@/features/places/geo";
 import { fetchFootRoute, type FootLeg, type FootRoute } from "@/lib/routing/footRoute";
@@ -45,16 +48,27 @@ function hopBands(candidate: DiscoverCandidate, pool: DiscoverCandidate[]) {
 }
 
 export async function footRouteForDays(rows: DateCourseRow[], byId: Map<string, DiscoverCandidate>, days: number,
-  maxDailyMeters: number): Promise<FootRoute | null> {
+  maxDailyMeters: number, signal?: AbortSignal): Promise<FootRoute | null> {
+  if (rows.some((row, index) => index > 0 && (row.day_index ?? 0) < (rows[index - 1].day_index ?? 0))) return null;
   const groups = Array.from({ length: days }, (_, day) => rows.filter(row => (row.day_index ?? 0) === day));
   const routes = await Promise.all(groups.map(async group => {
     if (group.length < 2) return { provider: "osm_foot" as const, meters: 0, seconds: 0, legs: [] };
     const coordinates = group.map(row => byId.get(String(row.id ?? ""))?.coordinates)
       .filter((value): value is [number, number] => Boolean(value));
-    return coordinates.length === group.length ? fetchFootRoute(coordinates) : null;
+    if (coordinates.length !== group.length) return null;
+    // Each provider request has a small waypoint budget. Overlapping chunks
+    // preserve every leg when the user chooses eight or more stops in a day.
+    const chunks = Array.from({ length: Math.ceil((coordinates.length - 1) / 6) }, (_, index) =>
+      coordinates.slice(index * 6, index * 6 + 7));
+    const routes = await Promise.all(chunks.map(chunk => fetchFootRoute(chunk, signal)));
+    if (routes.some(route => !route)) return null;
+    const valid = routes as FootRoute[];
+    return { provider: "osm_foot" as const,
+      meters: valid.reduce((sum, route) => sum + route.meters, 0),
+      seconds: valid.reduce((sum, route) => sum + route.seconds, 0), legs: valid.flatMap(route => route.legs) };
   }));
   if (routes.some(route => !route || route.meters > maxDailyMeters)) return null;
-  const valid = routes as FootRoute[];
+  const valid = routes.filter((_, day) => groups[day].length) as FootRoute[];
   return { provider: "osm_foot", meters: valid.reduce((sum, route) => sum + route.meters, 0),
     seconds: valid.reduce((sum, route) => sum + route.seconds, 0),
     legs: valid.flatMap((route, day) => day < valid.length - 1
@@ -118,7 +132,8 @@ function buildReply(
     const bothWant = Boolean(savedMatch && ["want", "must_visit", "revisit"].includes(savedMatch.userStatus)
       && ["want", "must_visit", "revisit"].includes(savedMatch.partnerStatus));
     seen.add(id);
-    const durationMinutes = clamp(row.duration_minutes, 30, 180, defaultDuration(candidate, state.pace));
+    // Preserve the validated schedule; changing a stay here can overlap the next stop.
+    const durationMinutes = clamp(row.duration_minutes, 15, 720, defaultDuration(candidate, state.pace));
     const previousItem = items.at(-1)?.dayIndex === Number(row.day_index ?? 0) ? items.at(-1) : undefined;
     const previousRec = previousItem ? recommendations.at(-1) : undefined;
     const gap = travelGapMinutes(previousRec?.coordinates, candidate.coordinates);
@@ -157,7 +172,7 @@ function buildReply(
       mapUrl: candidate.mapUrl,
       coordinates: candidate.coordinates,
       durationMinutes,
-      expectedCost: 0,
+      expectedCost: Math.max(0, Number.isFinite(candidate.expectedCostTwo) ? candidate.expectedCostTwo! : 0),
       reasons: [reason],
       isSaved: prefers,
       distanceFromPreviousMeters: meters,
@@ -173,7 +188,7 @@ function buildReply(
       category: dateCategoryLabel(candidate),
       startTime,
       durationMinutes,
-      expectedCost: 0,
+      expectedCost: Math.max(0, Number.isFinite(candidate.expectedCostTwo) ? candidate.expectedCostTwo! : 0),
       order: items.length,
       memo: reason,
       dayIndex: Math.max(0, Number(row.day_index ?? 0)),
@@ -194,7 +209,7 @@ function buildReply(
   const courseLine = festivalMeta?.openingHours
     ? `${talk} · ${festivalMeta.openingHours}`
     : talk;
-  const line = [courseLine, state.budgetWon ? `두 분 합계 ${state.budgetWon.toLocaleString("ko-KR")}원 예산을 기준으로 골랐어요. 메뉴·입장료가 모두 확인된 것은 아니라 예산 안이라고 확정할 수는 없어요.` : ""].filter(Boolean).join(" ");
+  const line = courseLine;
 
   return {
     status: "plan",
@@ -239,13 +254,15 @@ const DESIGN_PROMPT = [
   "You are an expert Korean date curator. Design coherent, enjoyable courses from the supplied real venues. Return JSON only.",
   "The research brief contains the user's taste, possible concepts, travel mode and explicit requirements. Do not force meal-cafe-walk. Every stop must contribute a different worthwhile experience unless this is an explicit themed tour.",
   "dateIntent.hardConstraints are mandatory. dateIntent.preferences, inferredPreferences and memorySuggestions guide ranking only; inferred confidence lowers their weight. Check excludedFoods against known menu facts and never treat an unknown menu as proof of safety.",
-  "Produce three meaningfully different complete courses, not the same course reordered. Prefer one memorable anchor with complementary nearby venues. A restaurant should fit the requested dish/cuisine; a cafe needs a sourced reason to visit; a landmark should offer a real experience, not just fill a slot.",
+  "The service does not manage budgets or collect menu costs. Do not rank venues by price, offer value-for-money alternatives, ask for a budget, or claim that any spending limit was verified. Design around experiences, dates, pace and route feasibility.",
+  "Produce up to proposalCount complete itinerary alternatives. Each courses entry is an ENTIRE trip covering every requiredDayIndex; never return one day per courses entry or divide selectedAnchorIds between alternatives. When proposalCount is 1, return exactly one complete itinerary containing every selectedAnchorId exactly once. Prefer one memorable anchor with complementary nearby venues. A restaurant should fit the requested dish/cuisine; a cafe needs a sourced reason to visit; a landmark should offer a real experience, not just fill a slot.",
   "Use venue-specific observations for food, architecture, atmosphere and highlights only when they distinguish the exact branch. Missing observations mean unknown, not bad. Never invent facts, ratings, popularity, beauty, opening hours or prices. Provider IDs bind candidate identities; source URLs alone do not prove every statement. User-saved venues are useful preferences, not mandatory winners.",
   "Read the CURRENT message and conversation. For a swap keep every keepPlace, exclude the old venue, and replace only that experience. For an addition preserve existing stops and add one. Follow requested activity order and do not reintroduce rejected venues. An area change starts a new geographic course unless the user explicitly connects both areas.",
   "Evaluate full-route cohesion: avoid backtracking, unnecessary detours, repeating the same experience, and geographically disconnected picks. Coordinates and straight-line neighbor distances are provided. They are not actual walking routes. Prefer compact clusters for walking; driving trips can cover a wider area.",
   "Dates are about the quality of venues, not filling every hour. Let arrival/departure windows and requested pace determine the number of stops, including one stop on a short travel day when feasible. Treat target.min as a day-coverage guide, not a mandatory venue quota. Respect explicit keepPlaces and cover every travel day. Do not add or remove stops merely to pad time.",
   "All selected IDs must exist in candidates. Each day_index must be 0..days-1. Include every requiredActivity and keepPlace. Never include excludedPlaces. Theme is a short Korean statement of the concept, not an unsupported claim about a venue.",
   "selectedAnchorIds are the user's chosen provider entities and must all appear by exact ID. Interest categories used during exploration are not mandatory itinerary activities. sameComplexGroups identify venues backed by provider names and addresses; place related stops on one day rather than revisiting the same complex on different days.",
+  "There is no fixed selection-count quota. Include every selectedAnchorId even when that exceeds target.max; target.max is only guidance for unselected supporting stops. Use the supplied per-day time windows, transport, default durations, dated performances and known hours. Plan feasible stay durations plus travel time; never invent an earlier arrival or later departure. With many selected anchors, compare geographic day clusters before choosing their order. Do not add unnecessary supporting venues.",
   "If experiencePlan, researchNeeds or explorationPreferences are supplied, use them to design the trip's day rhythm, search-supported experiences and pace. Their interests and research priorities are soft planning context; only dateIntent.hardConstraints, selectedAnchorIds and explicit keepPlaces are mandatory. Do not claim an unsupported venue quality merely because it appears in a preference.",
   "Design the course yourself from candidates and return exact provider IDs. The validator checks venue identity, day coverage, schedule, route and user anchors after your proposal. Search-linked observations have not been independently fact-checked.",
   "planningPlaybook is curated advice on how to compare experiences. It is not evidence that any named venue is open, beautiful, tasty, or holding an event. User constraints and provider-verified facts always take precedence.",
@@ -253,7 +270,7 @@ const DESIGN_PROMPT = [
 ].join(" ");
 
 const SEMANTIC_COURSE_PROMPT = [
-  "semanticPlanningHints are approved current-turn wishes for the overall experience, not venue facts or hard requirements. Respect dateIntent.hardConstraints, keepPlaces, exclusions, budget, candidate eligibility, schedule and route feasibility first.",
+  "semanticPlanningHints are approved current-turn wishes for the overall experience, not venue facts or hard requirements. Respect dateIntent.hardConstraints, keepPlaces, exclusions, candidate eligibility, schedule and route feasibility first.",
   "For pace=relaxed, avoid unnecessary stops, overly packed sequencing and repeated long moves; allow natural time at each stop. For novelty=high, compare visitedRecently and currentCourse with supported alternatives within candidates and avoid repetitive combinations; never drop a required place or favor an unsuitable venue just because its name sounds unusual.",
   "For activityLevel=high, favor active experiences only where the supplied candidates support them. For atmosphere, crowdPreference and noisePreference, use branch-specific observations only when provided. A missing observation is unknown and neutral, never proof of a match or conflict.",
   "Session feedback describes a reaction in this turn, not a permanent trait or a fact about any other candidate. Negative noise or crowd feedback can guide the experience only when a candidate has matching branch-specific evidence; positive aesthetic feedback can guide atmosphere only when sourced. Never invent venue properties to satisfy a semantic wish. Every selected ID must still come from candidates and pass all existing checks.",
@@ -292,9 +309,19 @@ export async function recommendDatePlanWithOpenAi(input: {
   const startedAt = performance.now();
   const saved = preferredSavedNames(input.saved);
   const anchorIds = [...new Set(input.anchorCandidateIds ?? [])];
-  const pool = [...input.candidates.filter(candidate => anchorIds.includes(dateCandidateKey(candidate))),
+  const feasibility = selectedDateFeasibility(input.candidates, anchorIds, input.state);
+  if (feasibility) {
+    const reply = buildReply([], input.candidates, input.condition, feasibility.message, "fallback", input.state, input.saved);
+    reply.message = feasibility.message;
+    reply.card.lines = [feasibility.message];
+    reply.design = { theme: "", alternativesConsidered: 0, routeBasis: "straight_line", totalDistanceMeters: 0,
+      evidenceCount: 0, degraded: true, feasibility, rejectionReasons: [feasibility.message] };
+    return reply;
+  }
+  const pool = [...new Map([...input.candidates.filter(candidate => anchorIds.includes(dateCandidateKey(candidate))),
     ...discoveryCatalog(input.candidates, input.state, saved, 54)
-      .filter(candidate => !anchorIds.includes(dateCandidateKey(candidate)))];
+      .filter(candidate => !anchorIds.includes(dateCandidateKey(candidate)))].map(venue => [dateCandidateKey(venue), venue])).values()];
+  const runtime = dateDesignRuntime();
   const candidateGraph = buildCandidateGraph(pool);
   const complexGroups = new Map<string, Set<string>>();
   for (const relation of candidateGraph.relations) {
@@ -303,15 +330,15 @@ export async function recommendDatePlanWithOpenAi(input: {
     complexGroups.set(relation.complexKey, members);
   }
   const days = courseSize(input.state).days;
-  // Draft from the already cached/verified facts while fresh research runs.
-  // Every proposed course is re-evaluated against the researched pool below.
-  const catalog = pool.map(candidate => ({
+  const serializeCatalog = (venues: DiscoverCandidate[]) => venues.map(candidate => ({
     id: dateCandidateKey(candidate), name: candidate.name,
     category: candidate.detailedCategory || dateCategoryLabel(candidate),
     address: candidate.roadAddress || candidate.address, coordinates: candidate.coordinates,
     saved: saved.has(candidate.name), bothWant: bothWantNames(input.saved).has(candidate.name),
     visitedRecently: input.recentlyVisited?.includes(candidate.name) ?? false,
     observations: candidate.evidence ?? [], performanceEvent: candidate.performanceEvent ?? null,
+    knownHours: candidate.openingHours ?? null,
+    defaultDurationMinutes: defaultDuration(candidate, input.state.pace),
     knownMenu: candidate.factSourceUrl ? candidate.dishes : undefined,
     sourceUrl: candidate.factSourceUrl,
     neighbors: hopBands(candidate, pool),
@@ -319,7 +346,14 @@ export async function recommendDatePlanWithOpenAi(input: {
   const payload = {
     latestMessage: input.prompt.slice(0, 800), recentTurns: (input.conversation ?? []).slice(-10),
     brief: input.state.discovery, dateIntent: toDateIntent(input.state), areas: input.state.areas,
-    days, target: planningStopGuidance(input.state),
+    days, requiredDayIndices: Array.from({ length: days }, (_, day) => day),
+    proposalCount: anchorIds.length ? 1 : 3,
+    target: { ...planningStopGuidance(input.state),
+      max: Math.max(planningStopGuidance(input.state).max, anchorIds.length) },
+    schedule: { ...assumedTimeWindow(input.state),
+      localDayWindows: tripLocalWindows(input.state.userRequests ?? [], days),
+      transport: input.state.discovery?.transport ?? (isTravelPlan(input.state) ? "transit" : "walk"),
+      nightviewNotBefore: (input.state.discovery?.requiredActivities ?? input.state.activities).includes("nightview") ? "18:00" : null },
     keepPlaces: input.state.requiredPlaces, excludedPlaces: input.state.excludedPlaces,
     selectedAnchorIds: anchorIds,
     sameComplexGroups: [...complexGroups].slice(0, 20).map(([complex, ids]) =>
@@ -327,8 +361,8 @@ export async function recommendDatePlanWithOpenAi(input: {
         ?.evidence.slice(0, 3).map(item => item.text) ?? [] })),
     currentCourse: input.currentCourse, pinOrder: input.state.pinOrder,
     cuisine: input.state.cuisine, addStop: input.state.addStop,
-    budgetWon: input.state.budgetWon, walkingPreference: input.state.walkingPreference,
-    couple: input.coupleTaste, memory: input.memory, candidates: catalog,
+    walkingPreference: input.state.walkingPreference,
+    couple: input.coupleTaste, memory: input.memory, candidates: serializeCatalog(pool),
     explorationPreferences: input.explorationPreferences ? {
       interests: input.explorationPreferences.activities,
       cafeQualities: input.explorationPreferences.cafeQualities,
@@ -355,23 +389,31 @@ export async function recommendDatePlanWithOpenAi(input: {
   };
   let researchDoneAt = startedAt;
   let modelDoneAt = startedAt;
-  const researchPromise = (input.researchPlanActive ? Promise.resolve(pool)
-    : enrichDateVenues(pool, input.state, undefined, isTravelPlan(input.state) ? "background" : "interactive")).then(value => {
+  const proposalTokens = Math.min(16000, Math.max(2400 + Math.max(0, days - 3) * 750,
+    (Math.max(anchorIds.length, days * 3) + 2) * 150 * (anchorIds.length ? 1 : 3)));
+  const researchPromise = runtime.untilDeadline(input.researchPlanActive ? Promise.resolve(pool)
+    : enrichDateVenues(pool, input.state, undefined, isTravelPlan(input.state) ? "background" : "interactive", runtime.signal), pool).then(value => {
     researchDoneAt = performance.now();
     return value;
   });
-  const modelPromise = isOpenAiConfigured() && pool.length >= 2
+  const modelPromise = isOpenAiConfigured() && pool.length >= 1
     ? (async () => {
-      const [selection, editing, response] = await Promise.all([
-        retrieveDatePlaybook(input.prompt, input.state, "selection", isTravelPlan(input.state) ? 11 : 8, input.saved.length ? ["personalized"] : []),
-        input.state.intent === "modify" ? retrieveDatePlaybook(input.prompt, input.state, "editing", isTravelPlan(input.state) ? 3 : 2) : Promise.resolve([]),
-        retrieveDatePlaybook(input.prompt, input.state, "response", isTravelPlan(input.state) ? 4 : 3),
-      ]);
+      const [selection, editing, response] = await runtime.untilDeadline(Promise.all([
+        retrieveDatePlaybook(input.prompt, input.state, "selection", isTravelPlan(input.state) ? 11 : 8, input.saved.length ? ["personalized"] : [], runtime.signal),
+        input.state.intent === "modify" ? retrieveDatePlaybook(input.prompt, input.state, "editing", isTravelPlan(input.state) ? 3 : 2, [], runtime.signal) : Promise.resolve([]),
+        retrieveDatePlaybook(input.prompt, input.state, "response", isTravelPlan(input.state) ? 4 : 3, [], runtime.signal),
+      ]), [[], [], []]);
+      // Curation must see the new observations, not merely validate against them later.
+      const researchedPool = await researchPromise;
+      if (!runtime.canGenerate()) return null;
       return completeJson<{ courses?: unknown }>({
-        messages: courseProposalMessages({ ...payload, planningPlaybook: [...selection, ...editing, ...response] }, input.semanticPlanningHints),
+        messages: courseProposalMessages({ ...payload, candidates: serializeCatalog(researchedPool),
+          planningPlaybook: [...selection, ...editing, ...response] }, input.semanticPlanningHints),
+        jsonSchema: courseProposalSchema(researchedPool.map(dateCandidateKey), days, anchorIds.length),
         reasoningEffort: "low", temperature: 0.2,
-        maxTokens: Math.min(5800, 2400 + Math.max(0, days - 3) * 750),
-        timeoutMs: isTravelPlan(input.state) ? 22000 + Math.max(0, days - 3) * 2500 : 16000,
+        maxTokens: proposalTokens,
+        signal: runtime.signal, retryOnTruncation: false,
+        timeoutMs: Math.min(runtime.remainingMs(), isTravelPlan(input.state) ? 22000 + Math.max(0, days - 3) * 2500 : 16000),
       });
     })().then(value => { modelDoneAt = performance.now(); return value; })
     : Promise.resolve(null);
@@ -394,7 +436,7 @@ export async function recommendDatePlanWithOpenAi(input: {
   let winner: CourseEvaluation | undefined;
   let feasibleModels: CourseEvaluation[] = [];
   const rank = (raw: unknown) => {
-    const proposals = parseCourseProposals(raw, days);
+    const proposals = joinComplementaryDayProposals(parseCourseProposals(raw, days, grounded.length), days, anchorIds);
     considered += proposals.length;
     if (!proposals.length) rejectionReasons.add("모델이 유효한 코스 구조를 반환하지 않음");
     const groundedIds = new Set(grounded.map(dateCandidateKey));
@@ -411,20 +453,24 @@ export async function recommendDatePlanWithOpenAi(input: {
       return [evaluated];
     }).sort((a, b) => a.hardIssues.length - b.hardIssues.length || b.score - a.score);
   };
-  if (isOpenAiConfigured() && grounded.length >= 2) {
+  if (isOpenAiConfigured() && grounded.length >= 1) {
     let evaluated = rank(modelResult?.courses);
     winner = evaluated.find(course => !blocksCourse(course.issues, "model_proposal"));
-    if (!winner && evaluated.length && !input.state.foodAllergy) {
+    if (!winner && modelResult && !input.state.foodAllergy && runtime.claimRepair()) {
       // One bounded repair based on concrete failures; never silently replace selected venues.
       const base = evaluated[0];
       const affectedDays = base ? affectedRepairDays(base, groundedConstraints) : new Set<number>();
       const repaired = await completeJson<{ courses?: unknown }>({
-        messages: courseProposalMessages({ ...payload, rejected: evaluated.map(course => ({ selected: course.rows,
+        messages: courseProposalMessages({ ...payload, candidates: serializeCatalog(grounded),
+          rejected: evaluated.map(course => ({ selected: course.rows,
           problems: course.hardIssues.map(issue => issue.message), warnings: course.softIssues.map(issue => issue.message) })),
           lockedDayRows: base?.rows.filter(row => !affectedDays.has(row.day_index ?? 0)) ?? [],
           affectedDays: [...affectedDays],
-          instruction: "Repair hard failures only. Keep selectedAnchorIds. If affectedDays is nonempty, preserve lockedDayRows exactly, including order and duration; change only affected days. Group stops in the same named complex on one day. Return two complete courses." }, input.semanticPlanningHints),
-        reasoningEffort: "low", temperature: 0.2, maxTokens: 1800, timeoutMs: 10000,
+          structureProblems: evaluated.length ? [] : [...rejectionReasons],
+          instruction: "Repair hard failures only. Every returned courses entry must contain the entire trip, every requiredDayIndex and every selectedAnchorId exactly once. Never distribute days or selected IDs across separate alternatives. If affectedDays is nonempty, preserve lockedDayRows exactly, including order and duration; change only affected days. Group stops in the same named complex on one day. Return up to proposalCount complete itineraries." }, input.semanticPlanningHints),
+        jsonSchema: courseProposalSchema(grounded.map(dateCandidateKey), days, anchorIds.length),
+        reasoningEffort: "low", temperature: 0.2, maxTokens: proposalTokens,
+        signal: runtime.signal, retryOnTruncation: false, timeoutMs: Math.min(15000, runtime.remainingMs()),
       });
       evaluated = rank(repaired?.courses).filter(course => !base || !affectedDays.size
         || preservesUnchangedDays(base.rows, course.rows, affectedDays));
@@ -458,12 +504,13 @@ export async function recommendDatePlanWithOpenAi(input: {
   degraded = rankedOptions[0]?.deterministicSeed ?? true;
   let walkingRoute: FootRoute | null = null;
   const routeOptions = rankedOptions.slice(0, 5);
-  const wantsWalkingRoute = days === 1 && !isTravelPlan(input.state) && input.state.discovery?.transport !== "drive"
-    || input.state.discovery?.transport === "walk";
+  const transport = input.state.discovery?.transport;
+  const wantsWalkingRoute = transport === "walk"
+    || !transport && days === 1 && !isTravelPlan(input.state);
   if (wantsWalkingRoute) {
     const byId = new Map(grounded.map(candidate => [dateCandidateKey(candidate), candidate]));
     const inspectRoutes = async (options: RankedOption[]) => Promise.all(options.map(async option => {
-      const route = await footRouteForDays(option.course.rows, byId, days, 50_000);
+      const route = await footRouteForDays(option.course.rows, byId, days, 50_000, runtime.signal);
       const verification = verifyDateItinerary({ course: option.course, candidates: grounded,
         state: input.state, condition: input.condition, route });
       return { ...option, route, verification };
@@ -471,20 +518,23 @@ export async function recommendDatePlanWithOpenAi(input: {
     const inspected = await inspectRoutes(routeOptions);
     let valid = inspected.filter((item): item is RankedOption & { route: FootRoute; verification: ReturnType<typeof verifyDateItinerary> } =>
       Boolean(item.route && item.verification.passed));
-    if (!valid.length && inspected.some(item => item.route) && isOpenAiConfigured() && !input.state.foodAllergy) {
+    if (!valid.length && inspected.some(item => item.route) && modelResult
+      && isOpenAiConfigured() && !input.state.foodAllergy && runtime.claimRepair()) {
       const base = inspected[0];
       const affectedDays = new Set(base.verification.hardIssues.flatMap(issue =>
         issue.scope.dayIndex == null ? [] : [issue.scope.dayIndex]));
       const repaired = await completeJson<{ courses?: unknown }>({
-        messages: courseProposalMessages({ ...payload,
+        messages: courseProposalMessages({ ...payload, candidates: serializeCatalog(grounded),
           rejected: inspected.map(item => ({ selected: item.course.rows,
             problems: item.verification.issues.length ? item.verification.issues : ["실제 보행 경로 미확인"],
             actualWalkMeters: item.route?.meters ?? null,
             actualWalkSeconds: item.route?.seconds ?? null })),
           affectedDays: [...affectedDays],
           lockedDayRows: base.course.rows.filter(row => !affectedDays.has(row.day_index ?? 0)),
-          instruction: "The route verifier rejected the checked course. Repair only affectedDays; keep lockedDayRows exactly unchanged and keep every selectedAnchorId. Return two complete courses." }, input.semanticPlanningHints),
-        reasoningEffort: "low", temperature: 0.2, maxTokens: 1800, timeoutMs: 10000,
+          instruction: "The route verifier rejected the checked course. Repair only affectedDays; keep lockedDayRows exactly unchanged and keep every selectedAnchorId. Return up to proposalCount complete courses covering every requiredDayIndex." }, input.semanticPlanningHints),
+        jsonSchema: courseProposalSchema(grounded.map(dateCandidateKey), days, anchorIds.length),
+        reasoningEffort: "low", temperature: 0.2, maxTokens: proposalTokens,
+        signal: runtime.signal, retryOnTruncation: false, timeoutMs: Math.min(15000, runtime.remainingMs()),
       });
       const repairedOptions = rank(repaired?.courses).filter(course => !blocksCourse(course.issues, "model_proposal")
         && (!affectedDays.size || preservesUnchangedDays(base.course.rows, course.rows, affectedDays)))
@@ -499,7 +549,7 @@ export async function recommendDatePlanWithOpenAi(input: {
     if (valid.length) {
       winner = valid[0].course;
       walkingRoute = valid[0].route;
-      if (!valid[0].deterministicSeed) degraded = false;
+      degraded = valid[0].deterministicSeed;
     }
     else if (inspected.some(item => item.route)) {
       winner = undefined;
@@ -509,7 +559,8 @@ export async function recommendDatePlanWithOpenAi(input: {
     }
   }
   const selectionDoneAt = performance.now();
-  let rows = winner ? assignStartTimes(winner.rows, grounded, input.state, input.condition.startTime) : [];
+  let rows = winner ? assignStartTimes(winner.rows, grounded, input.state, input.condition.startTime,
+    walkingRoute?.legs.map(leg => Math.ceil(leg.seconds / 60))) : [];
   let reply = buildReply(rows, grounded, input.condition, "", degraded ? "fallback" : "openai", input.state, input.saved, walkingRoute?.legs);
   if (rows.length && !itineraryOrderMatchesItems(rows, reply.items)) {
     rejectionReasons.add("날짜별 지도 순서와 일정이 일치하지 않음");
@@ -529,20 +580,29 @@ export async function recommendDatePlanWithOpenAi(input: {
     return activityNames[place.activitySlot ?? ""] ?? place.category;
   });
   const opening = !reply.items.length
-    ? "조건과 장소 근거를 함께 만족하는 코스를 아직 찾지 못했어요."
+    ? observedIssueCodes.has("performance_time_unverified")
+      ? "공연의 방문 날짜와 회차를 확인해야 일정을 정할 수 있어요. 방문 날짜를 알려주시거나 공연 장소를 바꿔 주세요."
+      : "조건과 장소 근거를 함께 만족하는 코스를 아직 찾지 못했어요."
+    : days > 1
+    ? `${input.condition.region} ${days - 1}박 ${days}일에 맞춰 ${reply.items.length}곳을 날짜별로 묶었어요.`
     : actualRoles.length > 1
     ? `${input.condition.region}에서 ${actualRoles.join(" → ")} 순서로 ${reply.items.length}곳을 골랐어요.`
     : focus ? `${focus} 경험을 담은 ${reply.items.length}곳을 골랐어요.`
       : `${input.condition.region}에서 이어갈 ${reply.items.length}곳을 골랐어요.`;
   const qualifiers = [
-    degraded && winner ? "AI가 제안한 코스는 조건 검증을 통과하지 못해, 검색된 장소로 구성한 대안을 보여드려요." : "",
+    degraded && winner ? modelResult
+      ? "검색된 장소를 바탕으로 선택한 장소와 이동·시간 조건을 만족하는 일정으로 다시 구성했어요."
+      : "AI 응답을 받지 못해 검색된 장소와 확인된 조건으로 일정을 구성했어요. 다시 요청할 수 있어요." : "",
+    requested.includes("nightview") && winner?.rows.some(row => {
+      const venue = grounded.find(candidate => dateCandidateKey(candidate) === row.id);
+      return venue && candidateActivitySlot(venue) === "nightview";
+    }) ? "야경 장소는 18시 이후로 배정했어요. 실제 일몰과 야간 개방·접근 가능 여부는 방문일 기준으로 확인해 주세요." : "",
     wantsCafeAtmosphere(input.state) && winner?.rows.some(row => {
       const candidate = grounded.find(item => dateCandidateKey(item) === row.id);
       return candidate && candidateActivitySlot(candidate) === "cafe" && !hasCafeSpaceEvidence(candidate);
     }) ? "요청하신 카페의 공간 분위기는 확인하지 못했어요. 가까운 카페를 임시로 넣었으니 상세 사진을 확인해 주세요." : "",
     winner?.rows.some(row => grounded.some(candidate => dateCandidateKey(candidate) === row.id && matchesActivity(candidate, "performance") && !candidate.performanceEvent))
       ? "공연장은 장소만 확인했어요. 방문일의 공연·좌석·예매 가능 여부는 장소 정보에서 확인해 주세요." : "",
-    input.state.budgetWon ? `두 분 합계 ${input.state.budgetWon.toLocaleString("ko-KR")}원 예산은 메뉴와 입장료 확인이 더 필요해요.` : "",
     (input.state.excludedFoods?.length ?? 0) > 0 && rows.some(row => grounded.some(candidate =>
       dateCandidateKey(candidate) === row.id && candidateActivitySlot(candidate) === "meal"))
       ? `${input.state.excludedFoods!.join("·")} 제외 조건을 반영했지만, 주문 전 재료와 조리 방식을 식당에 확인해 주세요.` : "",
@@ -551,7 +611,7 @@ export async function recommendDatePlanWithOpenAi(input: {
       : "숙소와 도착·귀가 교통편은 아직 반영되지 않았어요. 숙소 위치와 교통 시간을 정하면 일자별 동선을 다시 맞춰야 해요." : "",
     isTravelPlan(input.state) && !walkingRoute ? "여행지 사이 이동은 직선거리와 이동 수단별 추정으로 검토했어요. 실제 도로·환승 시간은 확인이 필요해요." : "",
     !isTravelPlan(input.state) && wantsWalkingRoute && !walkingRoute && winner
-      ? "보행 경로 공급자가 응답하지 않아 이동 시간은 실제 경로로 확인하지 못했어요." : "",
+      ? "실제 보행 경로를 확인하지 못해 이동 시간은 추정이에요. 방문 전에 경로를 확인해 주세요." : "",
   ].filter(Boolean);
   reply.message = [opening, ...qualifiers].join(" ");
   reply.card.lines = [opening, ...qualifiers];
@@ -582,6 +642,7 @@ export async function recommendDatePlanWithOpenAi(input: {
     targetedRepairCandidateCount: failedCourses.filter(course => course.hardIssues.some(issue =>
       issue.code === "repeated_complex_day" || issue.code === "confirmed_closed")).length,
     seedCount: seeds.length, modelProposalCount: considered, degraded,
+    designTimeoutMs: runtime.timeoutMs, designRepairCount: runtime.repairs,
     semanticHintDimensions: input.semanticPlanningHints && hasSemanticPlanningHints(input.semanticPlanningHints)
       ? Object.keys(input.semanticPlanningHints) : [],
     semanticPlanningHints: process.env.NODE_ENV === "development" ? input.semanticPlanningHints ?? {} : undefined,

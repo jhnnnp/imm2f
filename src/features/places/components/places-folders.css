@@ -1,0 +1,72 @@
+.saved-place-file {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+}
+
+.saved-place-file > .place-card { flex: 1; }
+.saved-place-file.is-picked > .place-card { outline: 2px solid var(--sage, #536f63); outline-offset: 2px; }
+.saved-place-file[draggable="true"] { cursor: grab; }
+.saved-place-file[draggable="true"]:active { cursor: grabbing; }
+.saved-place-file .place-info { cursor: pointer; }
+.saved-place-file .place-image img { pointer-events: none; }
+
+.saved-place-organization {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 7px 4px;
+  font-size: .75rem;
+  color: var(--muted, #7c857d);
+}
+
+.saved-place-select, .saved-place-selection-bar > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.saved-place-organization input, .saved-place-selection-bar input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--sage, #536f63);
+}
+
+.saved-place-organization > .folder-move-select {
+  width: 138px;
+  min-width: 0;
+  max-width: calc(100% - 55px);
+}
+
+.saved-place-selection-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  min-height: 39px;
+  margin: 0 0 14px;
+  padding: 8px 11px;
+  border: 1px solid var(--line, #deded6);
+  border-radius: 10px;
+  background: rgba(255, 253, 248, .7);
+  font-size: .75rem;
+  color: var(--muted, #7c857d);
+}
+
+.saved-place-selection-bar > span { flex: 1; }
+.saved-place-selection-bar > button { border: 0; background: none; color: var(--sage, #536f63); padding: 5px; }
+.saved-place-file.is-list { flex-direction: row; align-items: center; gap: 10px; padding-right: 8px; }
+.saved-place-file.is-list > .kakao-result { flex: 1; min-width: 0; }
+.saved-place-file.is-list > .saved-place-organization { padding: 7px 0; }
+
+@media (max-width: 620px) {
+  .saved-place-file.is-list { flex-direction: column; align-items: stretch; gap: 0; padding-right: 0; }
+  .saved-place-file.is-list > .saved-place-organization { padding: 6px 8px 10px; }
+  .saved-place-selection-bar > span { flex-basis: 100%; order: 1; font-size: .72rem; }
+  .saved-place-organization { gap: 5px; padding-inline: 3px; }
+}

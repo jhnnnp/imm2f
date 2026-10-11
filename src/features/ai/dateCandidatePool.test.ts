@@ -25,9 +25,9 @@ describe("date candidate pool", () => {
     ];
     const pool = buildDateCandidatePool(candidates, state);
     expect(pool.records).toHaveLength(5);
-    expect(pool.eligible.map(item => item.name)).toEqual(["안전한 식당"]);
+    expect(pool.eligible.map(item => item.name)).toEqual(["안전한 식당", "고급 식당"]);
     expect(pool.records.map(item => item.rejectedReasons)).toEqual([
-      [], ["excluded_food"], ["over_budget"], ["excluded_place"], ["event_date_mismatch"],
+      [], ["excluded_food"], [], ["excluded_place"], ["event_date_mismatch"],
     ]);
     expect(pool.records[4].evidence[0]).toEqual(expect.objectContaining({ attribute: "event", venueId: "kakao:5" }));
   });

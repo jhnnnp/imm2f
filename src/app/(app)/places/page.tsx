@@ -3,6 +3,7 @@ import { RouteSuspense } from "@/components/layout/RouteSuspense";
 import { PlacesExperience } from "@/features/places/components/PlacesExperience";
 import { listPlaces } from "@/features/places/actions";
 import { listArchivedTripPlans, loadCouplePlan } from "@/features/planning/actions";
+import { listFolderWorkspace } from "@/features/folders/actions";
 
 export const metadata: Metadata = { title: "Places" };
 
@@ -16,10 +17,11 @@ export default function PlacesPage({ searchParams }: { searchParams: Promise<{ s
 
 async function PlacesPageContent({ searchParams }: { searchParams: Promise<{ selected?: string }> }) {
   const params = await searchParams;
-  const [{ places, persist }, tripPlan, archivedTrips] = await Promise.all([
+  const [{ places, persist }, tripPlan, archivedTrips, folders] = await Promise.all([
     listPlaces(),
     loadCouplePlan("trip"),
     listArchivedTripPlans(),
+    listFolderWorkspace("places"),
   ]);
   return (
     <PlacesExperience
@@ -29,6 +31,7 @@ async function PlacesPageContent({ searchParams }: { searchParams: Promise<{ sel
       initialTripItems={tripPlan.items}
       tripPlanTitle={tripPlan.title}
       initialArchivedTrips={archivedTrips}
+      initialFolderWorkspace={folders}
     />
   );
 }

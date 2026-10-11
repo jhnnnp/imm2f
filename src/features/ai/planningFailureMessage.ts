@@ -13,8 +13,8 @@ export function planningFailureMessage(state: AIPlannerState, rejectionReasons: 
     return "요청하신 영업시간을 장소별로 확인하지 못했어요. 운영시간이 확인된 장소로 다시 찾거나 시간 조건을 조정해 주세요.";
   if (codes.has("schedule_infeasible") || codes.has("actual_route_schedule_conflict"))
     return "알려주신 시간 안에 이동과 체류를 마치기 어려워요. 시간 범위를 넓히거나 필수 장소를 조정해 주세요.";
-  if (codes.has("budget_exceeded"))
-    return "확인된 비용이 예산을 초과했어요. 예산이나 필수 장소를 조정해 주세요.";
+  if (codes.has("performance_time_unverified"))
+    return "공연의 방문 날짜와 회차를 확인해야 일정을 정할 수 있어요. 방문 날짜를 알려주시거나 공연 장소를 바꿔 주세요.";
   if (codes.has("required_place_missing"))
     return "지정하신 필수 장소를 확인된 후보에 모두 포함하지 못했어요. 장소 이름이나 위치를 확인해 주세요.";
   if (codes.has("excluded_place") || codes.has("excluded_food"))

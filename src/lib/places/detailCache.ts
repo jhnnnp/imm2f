@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import "server-only";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { dateCategoryLabel } from "@/features/ai/dateCourse";
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
 import { loadTourPlaceDetail, loadTourPlaceOverview } from "@/lib/tourapi/client";
@@ -108,7 +109,7 @@ export async function readPlaceDetailCache(
 export async function writePlaceDetailCache(candidates: DiscoverCandidate[]) {
   if (!candidates.length) return;
   try {
-    const supabase = await createClient();
+    const supabase = createServiceClient();
     if (!supabase) return;
     const rows = candidates.map(candidate => ({
       external_source: candidate.externalSource,

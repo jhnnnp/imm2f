@@ -1,7 +1,8 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import type { AIPlannerState } from "@/features/planning/types/plan";
+import { getAppSession } from "@/features/auth/session";
+import type { AIPlannerState, PlanKind } from "@/features/planning/types/plan";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import { interpretDateRequest } from "@/lib/openai/interpretDateRequest";
 import { geocodeKakaoAddressRemote, searchKakaoPlacesRemote } from "@/lib/kakao/local";
@@ -13,7 +14,7 @@ import { placeToCandidate } from "@/features/places/discover";
 import { isTourApiConfigured } from "@/lib/tourapi/env";
 import { observeExperiencePlan } from "@/lib/openai/experiencePlan";
 import { enrichResearchNeedEvidence } from "@/lib/openai/enrichDateVenues";
-import { applyDateDefaults, courseSize, extractAreasFromText, extractStay, selectedAreas, tripDayYmd, withAreas } from "./dateBrief";
+import { applyDateDefaults, courseSize, extractRequestedAreasFromText, extractStay, selectedAreas, tripDayYmd, withAreas } from "./dateBrief";
 import { explicitDateConstraints } from "./dateConstraints";
 import { explicitFoodExclusions } from "./dateIntent";
 import { buildDateContext } from "./dateContext";
@@ -28,12 +29,35 @@ import { groupExplorationCandidates, initialExplorationPreferences,
   type CandidateExplorationPreferences, type ExplorationActivity,
   type ExplorationCard, type ExplorationRetrievalSignal } from "./candidateExploration";
 import { providerCategoryForResearchIntent, researchSearchIntents,
-  validateResearchPlan, type ResearchPlan } from "./researchPlan";
+  validateResearchPlan as validateResearchPlanShape, type ResearchPlan } from "./researchPlan";
 import { emptySessionCandidates, markExplorationCandidates, mergeSessionCandidates,
   sealSessionCandidates, sessionCandidateSigningReady, verifiedSessionCandidates,
   type SessionCandidateContext } from "./sessionCandidates";
-import type { ExperiencePlan } from "./experiencePlan";
+import { validateExperiencePlanHandoff as validateExperiencePlanShape, type ExperiencePlan } from "./experiencePlan";
 import { candidateExplorationMode } from "./candidateExplorationMode";
+import { boundedPlannerData, validPlannerState, validateDatePlannerInput } from "./plannerInputValidation";
+import { resolveRequiredActivities } from "./planningRequirementProvenance";
+
+const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const validSessionId = (value: unknown): value is string => typeof value === "string"
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+const validIds = (value: unknown, max: number, optional = false): value is string[] | undefined => value === undefined && optional
+  || Array.isArray(value) && value.length <= max && new Set(value).size === value.length
+    && value.every(id => typeof id === "string" && Boolean(id.trim()) && id.length <= 160);
+const validPreferences = (value: unknown): value is CandidateExplorationPreferences => record(value)
+  && validExplorationPreferences(value as CandidateExplorationPreferences) && record(value.provenance)
+  && Object.values(value.provenance).every(origin => typeof origin === "string"
+    && ["user_selected", "explicit_text", "inferred", "legacy_default"].includes(origin));
+const validInput = (value: unknown): value is Record<string, unknown> => record(value) && boundedPlannerData(value);
+const invalidInputError = "장소 탐색 정보를 확인하지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
+function validateResearchPlan(value: unknown): value is ResearchPlan {
+  try { return validateResearchPlanShape(value); }
+  catch { return false; }
+}
+function validateExperiencePlanHandoff(value: unknown, input: Parameters<typeof validateExperiencePlanShape>[1]) {
+  try { return validateExperiencePlanShape(value, input); }
+  catch { return null; }
+}
 
 function requestLimiter(concurrency: number) {
   let active = 0;
@@ -49,7 +73,11 @@ function requestLimiter(concurrency: number) {
 const MAX_EXPLORATION_PROVIDER_CALLS = 32;
 const MAX_EXPLORATION_EVIDENCE_TARGETS = 12;
 
-export async function prepareCandidateExploration(input: { message: string; previousState?: AIPlannerState }) {
+export async function prepareCandidateExploration(input: { message: string; previousState?: AIPlannerState; planKind?: PlanKind }) {
+  if ((await getAppSession()).mode !== "authenticated") return { error: "로그인 후 장소 후보를 찾을 수 있어요." } as const;
+  if (!validInput(input) || typeof input.message !== "string") return { error: invalidInputError } as const;
+  const validationError = validateDatePlannerInput(input);
+  if (validationError) return { error: validationError } as const;
   if (candidateExplorationMode() !== "active") return { error: "candidate_exploration_disabled" } as const;
   if (!sessionCandidateSigningReady()) return { error: "candidate_session_unavailable" } as const;
   const message = input.message.trim().slice(0, 800);
@@ -61,12 +89,13 @@ export async function prepareCandidateExploration(input: { message: string; prev
     interpretationMs: Math.round(performance.now() - startedAt),
   }));
   const explicitStay = extractStay(message);
-  const travelRequested = interpreted.journeyType === "trip" || /여행|휴가|관광|놀러\s*가/.test(message);
-  const previousSpan = !travelRequested && (input.previousState?.stayKind === "overnight" || input.previousState?.stayKind === "daytrip")
+  const travelRequested = input.planKind === "trip" || interpreted.journeyType === "trip" || /여행|휴가|관광|놀러\s*가/.test(message);
+  const resetSpan = interpreted.state.intent === "reset" || /새로운?\s*여행|새\s*여행|처음부터|기간.{0,8}(?:다시|미정|정하지)/.test(message);
+  const previousSpan = !resetSpan && (input.previousState?.stayKind === "overnight" || input.previousState?.stayKind === "daytrip")
     ? { stayKind: input.previousState.stayKind, nights: input.previousState.nights } : null;
-  const groundedAreas = extractAreasFromText(message);
+  const groundedAreas = extractRequestedAreasFromText(message);
   const state = applyDateDefaults(withAreas({ ...interpreted.state,
-    ...(travelRequested && !explicitStay ? { stayKind: null, nights: 0 } : explicitStay ?? previousSpan),
+    ...(explicitStay ?? previousSpan ?? (travelRequested ? { stayKind: null, nights: 0 } : null)),
     userRequests: [...(interpreted.state.userRequests ?? []), message].slice(-8) },
     groundedAreas.length ? groundedAreas : selectedAreas(interpreted.state)));
   const tripIntent = travelRequested || interpreted.state.stayKind === "overnight" || interpreted.state.stayKind === "daytrip";
@@ -79,14 +108,19 @@ export async function updateCandidateExplorationChoices(input: {
   planningSessionId: string; sessionCandidates: SessionCandidateContext | null;
   selectedIds: string[]; rejectedIds: string[];
 }): Promise<SessionCandidateContext | null> {
+  const appSession = await getAppSession();
+  if (appSession.mode !== "authenticated") return null;
+  const scope = { actorId: appSession.userId, coupleId: appSession.coupleId };
+  if (!validInput(input) || !validSessionId(input.planningSessionId)
+    || !validIds(input.selectedIds, 500) || !validIds(input.rejectedIds, 500)) return null;
   if (candidateExplorationMode() !== "active") return null;
-  const previous = verifiedSessionCandidates(input.sessionCandidates, input.planningSessionId);
+  const previous = verifiedSessionCandidates(input.sessionCandidates, input.planningSessionId, scope);
   if (!previous) return null;
   const updated = markExplorationCandidates(previous, {
-    selectedIds: input.selectedIds.slice(0, 32), rejectedIds: input.rejectedIds.slice(0, 64),
+    selectedIds: input.selectedIds, rejectedIds: input.rejectedIds,
     turnId: `${input.planningSessionId}:choice:${randomUUID()}`, observedAt: new Date().toISOString(),
   });
-  return sealSessionCandidates(updated);
+  return sealSessionCandidates(updated, scope);
 }
 
 /** Fill one rejected slot from the signed, unseen inventory without another provider or model call. */
@@ -95,17 +129,22 @@ export async function replaceRejectedCandidateFromSession(input: {
   planningSessionId: string; sessionCandidates: SessionCandidateContext | null;
   groupId: ExplorationActivity; selectedIds: string[]; rejectedIds: string[];
 }): Promise<{ card: ExplorationCard | null; sessionCandidates: SessionCandidateContext } | { error: string }> {
+  const appSession = await getAppSession();
+  if (appSession.mode !== "authenticated") return { error: "로그인 후 장소 후보를 찾을 수 있어요." };
+  const scope = { actorId: appSession.userId, coupleId: appSession.coupleId };
+  if (!validInput(input) || !validPlannerState(input.state) || !validSessionId(input.planningSessionId)
+    || !validIds(input.selectedIds, 500) || !validIds(input.rejectedIds, 500)) return { error: invalidInputError };
   if (candidateExplorationMode() !== "active") return { error: "candidate_exploration_disabled" };
-  if (!validExplorationPreferences(input.preferences) || !input.preferences.activities.includes(input.groupId)
+  if (!validPreferences(input.preferences) || !input.preferences.activities.includes(input.groupId)
     || !validateResearchPlan(input.researchPlan)
     || !input.researchPlan.needs.some(need => need.id === `explore-${input.groupId}`)
     || !Array.isArray(input.selectedIds) || !Array.isArray(input.rejectedIds))
     return { error: "invalid_group" };
-  const session = verifiedSessionCandidates(input.sessionCandidates, input.planningSessionId);
+  const session = verifiedSessionCandidates(input.sessionCandidates, input.planningSessionId, scope);
   if (!session) return { error: "invalid_candidate_session" };
   const now = new Date().toISOString();
-  const selectedIds = input.selectedIds.slice(0, 32);
-  const rejectedIds = input.rejectedIds.slice(0, 64);
+  const selectedIds = input.selectedIds;
+  const rejectedIds = input.rejectedIds;
   const marked = markExplorationCandidates(session, { selectedIds, rejectedIds,
     turnId: `${session.sessionId}:reject:${randomUUID()}`, observedAt: now });
   const state = explorationStateForActivities(input.state, input.preferences);
@@ -127,7 +166,7 @@ export async function replaceRejectedCandidateFromSession(input: {
   const updated = card ? markExplorationCandidates(marked, { shownIds: [card.candidateId],
     selectedIds, rejectedIds, turnId: `${session.sessionId}:replacement:${randomUUID()}`,
     observedAt: now }) : marked;
-  return { card, sessionCandidates: sealSessionCandidates(updated) };
+  return { card, sessionCandidates: sealSessionCandidates(updated, scope) };
 }
 
 export async function exploreCandidateGroups(input: {
@@ -137,18 +176,45 @@ export async function exploreCandidateGroups(input: {
   groupId?: ExplorationActivity; groupIds?: ExplorationActivity[]; refinement?: string;
   selectedIds?: string[]; rejectedIds?: string[];
 }) {
+  const appSession = await getAppSession();
+  if (appSession.mode !== "authenticated") return { error: "로그인 후 장소 후보를 찾을 수 있어요." } as const;
+  const scope = { actorId: appSession.userId, coupleId: appSession.coupleId };
+  if (!validInput(input) || typeof input.message !== "string" || !input.message.trim()
+    || !validPlannerState(input.state) || !validSessionId(input.planningSessionId)
+    || !validIds(input.selectedIds, 500, true) || !validIds(input.rejectedIds, 500, true)
+    || input.refinement !== undefined && (typeof input.refinement !== "string" || input.refinement.length > 160)
+    || input.groupId !== undefined && typeof input.groupId !== "string"
+    || input.groupIds !== undefined && !Array.isArray(input.groupIds)) return { error: invalidInputError } as const;
+  const validationError = validateDatePlannerInput({ message: input.message, previousState: input.state });
+  if (validationError) return { error: validationError } as const;
   const startedAt = performance.now();
   const limitedProviderCall = requestLimiter(6);
   let providerCalls = 0;
   if (candidateExplorationMode() !== "active") return { error: "candidate_exploration_disabled" } as const;
   if (!sessionCandidateSigningReady()) return { error: "candidate_session_unavailable" } as const;
-  if (!validExplorationPreferences(input.preferences) || !input.preferences.activities.length)
+  if (!validPreferences(input.preferences) || !input.preferences.activities.length)
     return { error: "choose_activity" } as const;
   const area = selectedAreas(input.state)[0];
   if (!area) return { error: "missing_area" } as const;
   const groupIds = input.groupId ? [input.groupId] : input.groupIds ?? input.preferences.activities;
   if (!groupIds.length || new Set(groupIds).size !== groupIds.length
     || groupIds.some(id => !input.preferences.activities.includes(id))) return { error: "invalid_group" } as const;
+  const state = explorationStateForActivities({ ...input.state,
+    ...explicitDateConstraints(input.message, input.state),
+    excludedFoods: [...new Set([...(input.state.excludedFoods ?? []), ...explicitFoodExclusions(input.message)])],
+  }, input.preferences);
+  const suppliedResearch = input.researchPlan == null ? null
+    : validateResearchPlan(input.researchPlan) ? input.researchPlan : null;
+  if (input.researchPlan != null && !suppliedResearch) return { error: "invalid_research_plan" } as const;
+  const suppliedPlan = input.experiencePlan == null ? null : validateExperiencePlanHandoff(input.experiencePlan, {
+    days: state.nights + 1, pace: state.pace,
+    requiredElements: resolveRequiredActivities(state).filter(requirement => requirement.explicit).map(requirement => requirement.activity),
+    requiredPlaces: state.requiredPlaces, excludedPlaces: state.excludedPlaces,
+  });
+  if (input.experiencePlan != null && !suppliedPlan) return { error: "invalid_experience_plan" } as const;
+  const sessionId = input.planningSessionId;
+  const previous = verifiedSessionCandidates(input.sessionCandidates, sessionId, scope);
+  if (input.sessionCandidates != null && !previous) return { error: "invalid_candidate_session" } as const;
   const shoppingGeocodeNeeded = groupIds.includes("shopping") && !isBroadExplorationArea(area);
   const providerBudgetPerGroup = Math.floor((MAX_EXPLORATION_PROVIDER_CALLS - Number(shoppingGeocodeNeeded))
     / input.preferences.activities.length);
@@ -156,23 +222,13 @@ export async function exploreCandidateGroups(input: {
     ? limitedProviderCall(() => { providerCalls++; return geocodeKakaoAddressRemote(area); })
       .catch(() => null) : Promise.resolve(null);
   const savedPromise = listPlaces().then(result => result.places).catch(() => []);
-  const sessionId = /^[0-9a-f-]{36}$/i.test(input.planningSessionId)
-    ? input.planningSessionId : randomUUID();
   const now = new Date().toISOString();
-  const previous = verifiedSessionCandidates(input.sessionCandidates, sessionId);
   const session = previous ? markExplorationCandidates(previous, {
     selectedIds: input.selectedIds, rejectedIds: input.rejectedIds,
     turnId: `${sessionId}:choices:${randomUUID()}`, observedAt: now,
   }) : emptySessionCandidates(sessionId);
-  const state = explorationStateForActivities({ ...input.state,
-    ...explicitDateConstraints(input.message, input.state),
-    excludedFoods: [...new Set([...(input.state.excludedFoods ?? []), ...explicitFoodExclusions(input.message)])],
-  }, input.preferences);
   const message = explorationPrompt(input.message, input.preferences);
   const context = buildDateContext({ state, observedAt: now, sessionCandidates: session });
-  const suppliedPlan = input.experiencePlan && Array.isArray(input.experiencePlan.days) ? input.experiencePlan : null;
-  const suppliedResearch = input.researchPlan && validateResearchPlan(input.researchPlan)
-    ? input.researchPlan : null;
   const experienceStartedAt = performance.now();
   const observed = suppliedPlan || suppliedResearch || input.groupId ? null
     : await observeExperiencePlan({ message, state, context, explorationEnabled: true });
@@ -188,8 +244,10 @@ export async function exploreCandidateGroups(input: {
     return { error: "invalid_research_plan" } as const;
   const activeNeeds = researchPlan.needs.filter(need => groupIds.some(id => need.id === `explore-${id}`
     || need.id === `explore-${id}-evidence`));
-  const evidenceGroupCount = input.preferences.activities.filter(id => researchPlan.needs.some(need =>
-    need.id === `explore-${id}-evidence` && need.evidenceNeeded.length > 0)).length;
+  // Every activity gets a bounded description budget, even when the user did
+  // not select extra atmosphere filters. Otherwise food/lookout cards contain
+  // only a provider category such as "갈비" or "전망대".
+  const evidenceGroupCount = input.preferences.activities.length;
   const evidenceLimitPerGroup = Math.min(4, Math.max(1,
     Math.floor(MAX_EXPLORATION_EVIDENCE_TARGETS / Math.max(1, evidenceGroupCount))));
   const shoppingLocation = await shoppingLocationPromise;
@@ -294,7 +352,7 @@ export async function exploreCandidateGroups(input: {
         || (left?.bestRank ?? Number.MAX_SAFE_INTEGER) - (right?.bestRank ?? Number.MAX_SAFE_INTEGER);
     }).slice(0, 12);
     const enriched = await enrichResearchNeedEvidence(evidenceShortlist, state,
-      activeNeeds.filter(item => item.id === `${need.id}-evidence`), evidenceLimitPerGroup)
+      activeNeeds.filter(item => item.id === need.id || item.id === `${need.id}-evidence`), evidenceLimitPerGroup)
       .catch(() => evidenceShortlist);
     const byId = new Map(enriched.map(venue => [dateCandidateKey(venue), venue]));
     const checked = fresh.map(venue => byId.get(dateCandidateKey(venue)) ?? venue);
@@ -334,6 +392,6 @@ export async function exploreCandidateGroups(input: {
     groupMs: Object.fromEntries(work.map(item => [item.groupId, item.elapsedMs])),
     elapsedMs: Math.round(performance.now() - startedAt),
   }));
-  return { experiencePlan, researchPlan, groups, sessionCandidates: sealSessionCandidates(resultSession),
+  return { experiencePlan, researchPlan, groups, sessionCandidates: sealSessionCandidates(resultSession, scope),
     searchedGroups: work.filter(item => item.searched).map(item => item.groupId) };
 }

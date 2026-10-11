@@ -4,7 +4,7 @@ import { candidateActivitySlot, dateCandidateKey } from "@/features/ai/dateCours
 import { dateResearchCallKey, needsDateResearch, planNextDateResearch, type DateResearchToolCall } from "./dateResearchAgent";
 
 export type DateTaskObjective = {
-  id: "candidate_coverage" | "event_date" | "food_restriction" | "weather" | "budget"
+  id: "candidate_coverage" | "event_date" | "food_restriction" | "weather"
     | "schedule" | "route" | "venue_evidence" | "preference_fit";
   reason: string;
   required: boolean;
@@ -29,7 +29,6 @@ export function dateTaskObjectives(state: AIPlannerState): DateTaskObjective[] {
   if (/비\s*(?:오|온|올)|우천|날씨|눈\s*(?:오|온|올)|폭염|한파/.test(requests)) {
     tasks.push({ id: "weather", reason: "방문일 날씨와 실내 대안 확인", required: true });
   }
-  if (state.budgetWon != null) tasks.push({ id: "budget", reason: "두 사람의 알려진 비용과 예산 비교", required: true });
   if (state.startTime || state.endTime) tasks.push({ id: "schedule", reason: "각 장소 체류와 종료 시각 검사", required: true });
   if (state.walkingPreference || state.startTime || state.endTime) {
     tasks.push({ id: "route", reason: "장소 간 실제 이동 거리와 소요 시간 검사", required: true });
@@ -91,8 +90,8 @@ export async function runDateTaskPlanner(input: {
     && observation.candidates.some(candidate => candidateActivitySlot(candidate) === "performance"
       && !candidate.performanceEvent && !input.attempted.has(`verify_performance:${dateCandidateKey(candidate)}`)));
   const hasPendingDetails = () => Boolean(input.canInspectPlaces
-    && (input.state.budgetWon != null || input.state.startTime || input.state.endTime)
-    && observation.candidates.some(candidate => (!candidate.openingHours || candidate.expectedCostTwo == null)
+    && (input.state.startTime || input.state.endTime)
+    && observation.candidates.some(candidate => !candidate.openingHours
       && !input.attempted.has(`get_place_details:${dateCandidateKey(candidate)}`)));
 
   for (let round = 0; round < maxRounds && callsUsed < maxCalls; round++) {

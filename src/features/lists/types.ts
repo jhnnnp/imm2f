@@ -9,6 +9,7 @@ export type CoupleNote = {
   extra: string;
   createdAt: string;
   createdBy?: string;
+  updatedAt?: string;
 };
 
 export const NOTE_STATUS: Record<NoteKind, ReadonlyArray<{ id: string; label: string }>> = {

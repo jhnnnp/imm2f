@@ -3,7 +3,7 @@ import { RouteSuspense } from "@/components/layout/RouteSuspense";
 import { loadTasteSeed } from "@/features/taste/actions";
 import { DatePlanner } from "@/features/date/components/DatePlanner";
 import { listArchivedDatePlans, listDateDrafts, loadCouplePlan } from "@/features/planning/actions";
-import { seoulTodayIso } from "@/lib/dates";
+import { isIsoDate, seoulTodayIso } from "@/lib/dates";
 import { candidateExplorationMode } from "@/features/ai/candidateExplorationMode";
 
 export const metadata: Metadata = { title: "Date" };
@@ -28,7 +28,7 @@ async function DatePageContent({ searchParams }: { searchParams: Promise<{ from?
   return (
     <DatePlanner
       key={params.day ?? "today"}
-      today={/^\d{4}-\d{2}-\d{2}$/.test(params.day ?? "") ? params.day! : seoulTodayIso()}
+      today={isIsoDate(params.day) ? params.day : seoulTodayIso()}
       initialPlan={plan}
       initialArchives={archives.dates}
       initialDrafts={drafts}

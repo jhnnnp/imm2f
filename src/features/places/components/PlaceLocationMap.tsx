@@ -1,79 +1,91 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-
-type KakaoMap = { relayout: () => void };
-type KakaoMarker = { setMap: (map: KakaoMap | null) => void };
-type KakaoMaps = {
-  load: (callback: () => void) => void;
-  LatLng: new (lat: number, lng: number) => unknown;
-  Map: new (container: HTMLElement, options: { center: unknown; level: number; draggable: boolean; scrollwheel: boolean }) => KakaoMap;
-  Marker: new (options: { map: KakaoMap; position: unknown; title: string }) => KakaoMarker;
-};
-
-declare global {
-  interface Window {
-    kakao?: { maps: KakaoMaps };
-  }
-}
-
-let kakaoMapsPromise: Promise<KakaoMaps> | null = null;
-
-function loadKakaoMaps() {
-  if (window.kakao?.maps) {
-    return new Promise<KakaoMaps>(resolve => window.kakao!.maps.load(() => resolve(window.kakao!.maps)));
-  }
-  if (kakaoMapsPromise) return kakaoMapsPromise;
-  kakaoMapsPromise = fetch("/api/kakao-map-key")
-    .then(response => response.json() as Promise<{ key?: string }>)
-    .then(({ key }) => new Promise<KakaoMaps>((resolve, reject) => {
-      if (!key) {
-        reject(new Error("Kakao JavaScript key is not configured."));
-        return;
-      }
-      const script = document.createElement("script");
-      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&autoload=false`;
-      script.async = true;
-      script.onload = () => window.kakao?.maps.load(() => resolve(window.kakao!.maps));
-      script.onerror = () => reject(new Error("Kakao Maps SDK failed to load."));
-      document.head.appendChild(script);
-    }));
-  return kakaoMapsPromise;
-}
+import type { Map as MapLibreMap, Marker } from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import { loadKakaoMaps, type KakaoMap, type KakaoMarker } from "@/features/map/kakaoSdk";
+import { isLngLat } from "@/features/map/routing/fetchRoadRoute";
 
 export function PlaceLocationMap({ name, coordinates }: { name: string; coordinates: [number, number] }) {
   const container = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<KakaoMap | null>(null);
-  const markerRef = useRef<KakaoMarker | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [attempt, setAttempt] = useState(0);
   const [lng, lat] = coordinates;
 
   useEffect(() => {
-    if (!container.current) return;
+    const node = container.current;
+    if (!node) return;
     let disposed = false;
+    let kakaoMap: KakaoMap | null = null;
+    let kakaoMarker: KakaoMarker | null = null;
+    let fallbackMap: MapLibreMap | null = null;
+    let fallbackMarker: Marker | null = null;
+    let resizeObserver: ResizeObserver | undefined;
+    let resizeFrame = 0;
+    let fallbackTimer = 0;
     setStatus("loading");
+    if (!isLngLat([lng, lat])) { setStatus("error"); return; }
+    const resize = () => {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(() => {
+        if (disposed) return;
+        kakaoMap?.relayout();
+        fallbackMap?.resize();
+      });
+    };
+    const observeSize = () => {
+      resizeObserver = new ResizeObserver(resize);
+      resizeObserver.observe(node);
+      resize();
+    };
     void loadKakaoMaps().then(maps => {
-      if (disposed || !container.current) return;
+      if (disposed) return;
       const position = new maps.LatLng(lat, lng);
-      const map = new maps.Map(container.current, { center: position, level: 4, draggable: false, scrollwheel: false });
-      mapRef.current = map;
-      markerRef.current = new maps.Marker({ map, position, title: name });
-      requestAnimationFrame(() => map.relayout());
+      kakaoMap = new maps.Map(node, { center: position, level: 4, draggable: false, scrollwheel: false });
+      kakaoMarker = new maps.Marker({ map: kakaoMap, position, title: name });
+      observeSize();
       setStatus("ready");
-    }).catch(() => {
-      if (!disposed) setStatus("error");
+    }).catch(async () => {
+      if (disposed) return;
+      // A missing Kakao key must not make the saved location unusable.
+      try {
+        const maplibregl = await import("maplibre-gl");
+        if (disposed) return;
+        node.replaceChildren();
+        fallbackMap = new maplibregl.Map({
+          container: node,
+          style: {
+            version: 8,
+            sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, maxzoom: 19, attribution: "&copy; OpenStreetMap contributors" } },
+            layers: [{ id: "osm", type: "raster", source: "osm" }],
+          },
+          center: [lng, lat], zoom: 14, interactive: false,
+          pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5), attributionControl: { compact: true },
+        });
+        fallbackMarker = new maplibregl.Marker().setLngLat([lng, lat]).addTo(fallbackMap);
+        fallbackTimer = window.setTimeout(() => { if (!disposed) setStatus("error"); }, 10_000);
+        fallbackMap.once("load", () => {
+          window.clearTimeout(fallbackTimer);
+          if (!disposed) setStatus("ready");
+        });
+        observeSize();
+      } catch { if (!disposed) setStatus("error"); }
     });
     return () => {
       disposed = true;
-      markerRef.current?.setMap(null);
-      markerRef.current = null;
-      mapRef.current = null;
+      window.cancelAnimationFrame(resizeFrame);
+      window.clearTimeout(fallbackTimer);
+      resizeObserver?.disconnect();
+      kakaoMarker?.setMap(null);
+      fallbackMarker?.remove();
+      fallbackMap?.remove();
+      node.replaceChildren();
     };
-  }, [lat, lng, name]);
+  }, [lat, lng, name, attempt]);
 
-  return <div className="place-location-map" aria-label={`${name} 위치 지도`}>
+  return <div className="place-location-map" aria-label={`${name} 위치 지도`} aria-busy={status === "loading"}>
     <div ref={container} className="kakao-place-map" />
-    {status === "loading" && <div className="place-location-loading">위치를 불러오는 중이에요.</div>}
-    {status === "error" && <div className="place-location-loading is-error">지도를 불러오지 못했어요.<small>아래 지도 링크에서 위치를 확인해 주세요.</small></div>}
+    {status === "loading" && <div className="place-location-loading" role="status">위치를 불러오는 중이에요.</div>}
+    {status === "error" && <div className="place-location-loading is-error" role="alert">지도를 불러오지 못했어요.<small>아래 지도 링크에서 위치를 확인해 주세요.</small><button type="button" className="outline-button" onClick={() => setAttempt(value => value + 1)}>다시 불러오기</button></div>}
   </div>;
 }

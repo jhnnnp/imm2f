@@ -4,6 +4,7 @@ import { courseSize, emptyDateBrief, withAreas } from "./dateBrief";
 import {
   allowsHarshDateMeal,
   applyCourseDelta,
+  assignStartTimes,
   claimContradictsPlace,
   courseQuickReplyMessage,
   courseOrderMessage,
@@ -222,6 +223,22 @@ describe("dateCourse", () => {
     expect(state.excludedPlaces).toContain("성수 카페");
     expect(state.requiredPlaces).toContain("성수 식당");
     expect(state.requiredPlaces).not.toContain("성수 카페");
+  });
+
+  it.each([
+    "저녁 바꿔줘. 그리고 지금 카페 주차 돼?",
+    "저녁 바꿔줘 그리고 왜 지금 카페 넣었어?",
+    "지금 카페 주차 돼? 그리고 점심 바꿔줘",
+    "저녁 바꿔줘. 그리고 2번 장소 주차 돼?",
+  ])("targets the meal without changing the venue mentioned in a separate question: %s", message => {
+    const state = applyCourseDelta({ message, state: withAreas(emptyDateBrief(), ["성수"]),
+      previousStops: [{ name: "성수 식당", category: "식당", activitySlot: "meal" },
+        { name: "성수 카페", category: "카페", activitySlot: "cafe" }],
+    });
+    expect(state.excludedPlaces).toEqual(["성수 식당"]);
+    expect(state.requiredPlaces).toEqual(["성수 카페"]);
+    expect(state.activities).toEqual(["meal"]);
+    expect(state.addStop).toBe(false);
   });
 
   it("treats a board-game cafe as an activity, not a cafe replacement target", () => {
@@ -815,5 +832,179 @@ describe("dateCourse", () => {
     const scheduled = schedulePerformanceCourse(rows, [meal, cafe, hall], state, "17:00");
     expect(scheduled?.map(row => row.start_time)).toEqual(["17:00", expect.any(String), "19:00"]);
     expect(schedulePerformanceCourse(rows, [meal, cafe, hall], { ...state, startTime: "18:30" }, "18:30")).toBeNull();
+  });
+
+  it("uses verified walking time when fitting stops before a fixed performance", () => {
+    const meal = candidate({ externalPlaceId: "m", name: "식당", category: "restaurant", coordinates: [127.035, 37.559] });
+    const hall = candidate({ externalPlaceId: "h", name: "공연장", category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: "show", title: "공연", dateYmd: "20261011", showtimes: ["19:00"], genre: "클래식",
+        sourceUrl: "https://kopis.or.kr/event", checkedAt: "2026-10-11" } });
+    const rows = [{ id: "kakao:m", day_index: 0, duration_minutes: 90 }, { id: "kakao:h", day_index: 0, duration_minutes: 90 }];
+    const scheduled = schedulePerformanceCourse(rows, [meal, hall], { ...emptyDateBrief(), dateLabel: "2026-10-11",
+      startTime: "17:00", endTime: "22:00" }, "17:00", [40]);
+    expect(scheduled?.map(row => row.start_time)).toEqual(["17:00", "19:00"]);
+    expect(scheduled?.[0].duration_minutes).toBe(70);
+  });
+
+  it("anchors both confirmed shows instead of starting the second when the first ends", () => {
+    const shows = ["19:00", "21:00"].map((time, index) => candidate({ externalPlaceId: `show-${index}`,
+      name: `공연 ${index}`, category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: `show-${index}`, title: `공연 ${index}`, dateYmd: "20261011", showtimes: [time],
+        genre: "클래식", sourceUrl: "https://kopis.or.kr/event", checkedAt: "2026-10-11" } }));
+    const rows = shows.map((show, index) => ({ id: `kakao:${show.externalPlaceId}`, day_index: 0,
+      start_time: index ? "20:40" : "18:00", duration_minutes: 90 }));
+    const state = { ...emptyDateBrief(), dateLabel: "2026-10-11", startTime: "18:00", endTime: "23:00",
+      preserveExistingPlaces: true, pinOrder: shows.map(show => show.name) };
+    const scheduled = assignStartTimes(rows, shows, state, "18:00", [10]);
+    expect(scheduled.map(row => row.start_time)).toEqual(["19:00", "21:00"]);
+    expect(scheduled.map(row => row.duration_minutes)).toEqual([90, 90]);
+    expect(scheduled.map(row => row.id)).toEqual(rows.map(row => row.id));
+    expect(assignStartTimes(rows, shows, { ...state, endTime: "22:00" }, "18:00", [10])).toEqual([]);
+    expect(assignStartTimes(rows, shows, state, "18:00", [50])).toEqual([]);
+  });
+
+  it("shortens only the flexible stop between performances using actual travel time", () => {
+    const first = candidate({ externalPlaceId: "first-show", category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: "first", title: "첫 공연", dateYmd: "20261011", showtimes: ["20:00", "19:00"],
+        genre: "클래식", sourceUrl: "https://kopis.or.kr/event", checkedAt: "2026-10-11" } });
+    const second = candidate({ externalPlaceId: "second-show", category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: "second", title: "둘째 공연", dateYmd: "20261011", showtimes: ["22:00"],
+        genre: "클래식", sourceUrl: "https://kopis.or.kr/event", checkedAt: "2026-10-11" } });
+    const rows = [{ id: "kakao:first-show", duration_minutes: 90 }, { id: "kakao:c1", duration_minutes: 120 },
+      { id: "kakao:second-show", duration_minutes: 90 }];
+    const state = { ...emptyDateBrief(), dateLabel: "2026년 10월 11일", startTime: "18:00", endTime: "23:59" };
+    const scheduled = assignStartTimes(rows, [first, cafe, second], state, "18:00", [10, 10]);
+    expect(scheduled.map(row => row.start_time)).toEqual(["19:00", "20:40", "22:00"]);
+    expect(scheduled.map(row => row.duration_minutes)).toEqual([90, 60, 90]);
+    expect(assignStartTimes(rows, [first, cafe, second], state, "18:00", [30, 20])).toEqual([]);
+  });
+
+  it.each(["20:00", "20:30", "미정"])("rejects an incompatible second confirmed showing at %s", time => {
+    const shows = ["19:00", time].map((showtime, index) => candidate({ externalPlaceId: `show-${index}`,
+      category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: `show-${index}`, title: `공연 ${index}`, dateYmd: "20261011", showtimes: [showtime],
+        genre: "클래식", sourceUrl: "https://kopis.or.kr/event", checkedAt: "2026-10-11" } }));
+    const rows = shows.map(show => ({ id: `kakao:${show.externalPlaceId}`, duration_minutes: 90 }));
+    expect(assignStartTimes(rows, shows, { ...emptyDateBrief(), dateLabel: "2026-10-11", startTime: "18:00",
+      endTime: "23:00" }, "18:00", [10])).toEqual([]);
+  });
+
+  it("anchors every performance independently on each of three travel days", () => {
+    const shows = Array.from({ length: 6 }, (_, index) => candidate({ externalPlaceId: `show-${index}`,
+      name: `공연 ${index}`, category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: `show-${index}`, title: `공연 ${index}`, dateYmd: `202610${11 + Math.floor(index / 2)}`,
+        showtimes: [index % 2 ? "21:00" : "19:00"], genre: "클래식", sourceUrl: "https://kopis.or.kr/event",
+        checkedAt: "2026-10-11" } }));
+    const rows = shows.map((show, index) => ({ id: `kakao:${show.externalPlaceId}`, day_index: Math.floor(index / 2),
+      duration_minutes: 90 }));
+    const state = { ...emptyDateBrief(), dateLabel: "2026-10-11", stayKind: "overnight" as const, nights: 2,
+      startTime: "18:00", endTime: "23:00" };
+    const scheduled = assignStartTimes(rows, shows, state, "18:00", [10, 0, 15, 0, 10]);
+    expect(scheduled.map(row => [row.day_index, row.start_time])).toEqual([
+      [0, "19:00"], [0, "21:00"], [1, "19:00"], [1, "21:00"], [2, "19:00"], [2, "21:00"],
+    ]);
+    expect(assignStartTimes(rows, shows, { ...state, userRequests: ["3일차 22:00 현지 출발"] }, "18:00",
+      [10, 0, 15, 0, 10])).toEqual([]);
+    const wrongDay = shows.map((show, index) => index === 5 ? { ...show,
+      performanceEvent: { ...show.performanceEvent!, dateYmd: "20261012" } } : show);
+    expect(assignStartTimes(rows, wrongDay, state, "18:00", [10, 0, 15, 0, 10])).toEqual([]);
+  });
+
+  it("keeps every place when adding to an existing fifteen-stop trip", () => {
+    const names = Array.from({ length: 15 }, (_, index) => `장소 ${index}`);
+    const updated = applyCourseDelta({ message: "카페 하나 더 추가해줘", previousStops: names.map(name => ({ name, category: "관광지" })),
+      state: { ...emptyDateBrief(), nights: 2, stayKind: "overnight", preserveExistingPlaces: true, requiredPlaces: names } });
+    expect(updated.requiredPlaces).toEqual(names);
+    expect(courseSize(updated).max).toBeGreaterThanOrEqual(16);
+  });
+
+  it("keeps night visits after dark even when a confirmed performance anchors the day", () => {
+    const view = candidate({ externalPlaceId: "night", name: "전망대", category: "tourist", categoryLabel: "관광명소",
+      kakaoCategoryGroupCode: "AT4", detailedCategory: "여행 > 전망대" });
+    const hall = candidate({ externalPlaceId: "show", name: "공연장", category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: "show", title: "공연", dateYmd: "20261011", showtimes: ["19:00"], genre: "클래식",
+        sourceUrl: "https://kopis.or.kr/event", checkedAt: "2026-10-11" } });
+    const rows = [view, hall].map(venue => ({ id: `kakao:${venue.externalPlaceId}`, day_index: 0, duration_minutes: 60 }));
+    const state = { ...emptyDateBrief(), dateLabel: "2026-10-11", startTime: "10:00", endTime: "22:00", activities: ["nightview" as const] };
+    const scheduled = assignStartTimes(rows, [view, hall], state, "10:00", [10]);
+    expect(scheduled.map(row => row.start_time)).toEqual(["18:00", "19:00"]);
+    expect(scheduled[0].duration_minutes).toBe(40);
+    const early = { ...hall, performanceEvent: { ...hall.performanceEvent!, showtimes: ["17:00"] } };
+    expect(assignStartTimes(rows, [view, early], state, "10:00", [10])).toEqual([]);
+  });
+
+  it("keeps a 12:30 lunch instead of postponing it to the dinner anchor", () => {
+    const scheduled = assignStartTimes([{ id: "kakao:meal", duration_minutes: 80 }],
+      [{ ...meal, externalPlaceId: "meal" }], { ...emptyDateBrief(), startTime: "12:30", endTime: "15:00" });
+    expect(scheduled[0]?.start_time).toBe("12:30");
+  });
+
+  it("waits for sourced opening and skips a restaurant break", () => {
+    const checked = (place: DiscoverCandidate, text: string): DiscoverCandidate => ({ ...place,
+      evidence: [{ id: "hours", venueId: `kakao:${place.externalPlaceId}`, attribute: "hours",
+        verification: "source_checked", url: "https://example.com/hours", checkedAt: new Date().toISOString(), text }] });
+    const a = checked({ ...cafe, externalPlaceId: "a" }, "매일 11:00~20:00");
+    const b = checked({ ...meal, externalPlaceId: "b" }, "매일 11:00~21:00; 브레이크타임 15:00~17:00");
+    const scheduled = assignStartTimes([{ id: "kakao:a", duration_minutes: 60 }, { id: "kakao:b", duration_minutes: 80 }],
+      [a, b], { ...emptyDateBrief(), dateLabel: "2026-10-11", startTime: "10:00", endTime: "21:00" }, "10:00", [180]);
+    expect(scheduled.map(row => row.start_time)).toEqual(["11:00", "17:00"]);
+  });
+
+  it("does not let a preferred dinner delay move a later cafe beyond verified closing", () => {
+    const checked = { ...cafe, externalPlaceId: "c", evidence: [{ id: "hours", venueId: "kakao:c",
+      attribute: "hours" as const, verification: "source_checked" as const, url: "https://example.com/hours",
+      checkedAt: new Date().toISOString(), text: "매일 10:00~17:00" }] };
+    const scheduled = assignStartTimes([{ id: "kakao:meal", duration_minutes: 60 }, { id: "kakao:c", duration_minutes: 60 }],
+      [{ ...meal, externalPlaceId: "meal" }, checked], { ...emptyDateBrief(), dateLabel: "2026-10-11",
+        startTime: "15:00", endTime: "21:00" }, "15:00", [0]);
+    expect(scheduled.map(row => row.start_time)).toEqual(["15:00", "16:00"]);
+  });
+
+  it("uses the last-day departure when compressing flexible stops after a fixed show", () => {
+    const show = candidate({ externalPlaceId: "show", name: "공연장", category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: "show", title: "공연", dateYmd: "20261012", showtimes: ["13:00"],
+        genre: "클래식", sourceUrl: "https://example.com/show", checkedAt: "2026-10-11" } });
+    const venues = [{ ...park, externalPlaceId: "park" }, show, { ...cafe, externalPlaceId: "c" }];
+    const rows = [{ id: "kakao:park", day_index: 0, duration_minutes: 60 },
+      { id: "kakao:show", day_index: 1, duration_minutes: 90 }, { id: "kakao:c", day_index: 1, duration_minutes: 60 }];
+    const state = { ...emptyDateBrief(), dateLabel: "2026-10-11", stayKind: "overnight" as const, nights: 1,
+      startTime: "10:00", endTime: "20:00", userRequests: ["마지막 날 15:00 출발"] };
+    const scheduled = assignStartTimes(rows, venues, state, "10:00", [0, 0]);
+    expect(scheduled.map(row => row.start_time)).toEqual(["10:00", "13:00", "14:30"]);
+    expect(scheduled.at(-1)?.duration_minutes).toBe(30);
+  });
+
+  it.each([20, 150, 240])("preserves a published %s-minute runtime ahead of the model stay estimate", runtime => {
+    const show = candidate({ externalPlaceId: "show", name: "공연장", category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: "show", title: "공연", dateYmd: "20261011", showtimes: ["18:00"], durationMinutes: runtime,
+        genre: "클래식", sourceUrl: "https://example.com/show", checkedAt: "2026-10-11" } });
+    const rows = [{ id: "kakao:show", duration_minutes: 30 }, { id: "kakao:c", duration_minutes: 60 }];
+    const venues = [show, { ...cafe, externalPlaceId: "c" }];
+    const scheduled = assignStartTimes(rows, venues, { ...emptyDateBrief(), dateLabel: "2026-10-11",
+      startTime: "17:00", endTime: "23:00" }, "17:00", [10]);
+    expect(scheduled[0]?.duration_minutes).toBe(runtime);
+    expect(scheduled[1]?.start_time).toBe(`${String(Math.floor((18 * 60 + runtime + 10) / 60)).padStart(2, "0")}:${String((runtime + 10) % 60).padStart(2, "0")}`);
+    expect(assignStartTimes(rows, venues, { ...emptyDateBrief(), dateLabel: "2026-10-11",
+      startTime: "17:00", endTime: "18:15" }, "17:00", [10])).toEqual([]);
+  });
+
+  it.each([null, "날짜 미정", "2026-02-30"])("never assigns a sourced showing on an unknown or invalid date: %s", dateLabel => {
+    const show = candidate({ externalPlaceId: "show", name: "공연장", category: "photo", categoryLabel: "공연장",
+      performanceEvent: { id: "show", title: "공연", dateYmd: "20261011", showtimes: ["19:00"], durationMinutes: 150,
+        genre: "뮤지컬", sourceUrl: "https://example.com/show", checkedAt: "2026-10-11" } });
+    const rows = [{ id: "kakao:show", duration_minutes: 30 }, { id: "kakao:c", duration_minutes: 60 }];
+    const venues = [show, { ...cafe, externalPlaceId: "c" }];
+    expect(assignStartTimes(rows, venues, { ...emptyDateBrief(), dateLabel, startTime: "17:00", endTime: "23:00" },
+      "17:00", [10])).toEqual([]);
+    const dated = assignStartTimes(rows, venues, { ...emptyDateBrief(), dateLabel: "2026-10-11",
+      startTime: "17:00", endTime: "23:00" }, "17:00", [10]);
+    expect(dated.map(row => [row.start_time, row.duration_minutes])).toEqual([["19:00", 150], ["21:40", 60]]);
+  });
+
+  it("can still recommend a performance venue as a place without claiming a sourced showing", () => {
+    const hall = candidate({ externalPlaceId: "hall", name: "공연장", category: "photo", categoryLabel: "공연장" });
+    const scheduled = assignStartTimes([{ id: "kakao:hall", duration_minutes: 60 }], [hall],
+      { ...emptyDateBrief(), dateLabel: null, startTime: "17:00", endTime: "19:00" });
+    expect(scheduled[0]).toMatchObject({ start_time: "17:00", duration_minutes: 60 });
   });
 });

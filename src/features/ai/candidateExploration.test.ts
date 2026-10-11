@@ -7,7 +7,7 @@ import { buildExperiencePlanInput } from "./experiencePlan";
 import { emptySessionCandidates, markExplorationCandidates, mergeSessionCandidates } from "./sessionCandidates";
 import { candidateCardFact, candidateQualityBadges, explorationPrompt, explorationResearchPlan,
   explorationGroupMatch, explorationSearchQueries, explorationStateForActivities, groupExplorationCandidates,
-  initialExplorationPreferences, maxSelectedExplorationPlaces, refineExplorationNeed, retainExplorationChoices,
+  initialExplorationPreferences, refineExplorationNeed, retainExplorationChoices,
   refinementGroupForMessage, validExplorationPreferences,
   type CandidateExplorationPreferences } from "./candidateExploration";
 
@@ -25,8 +25,15 @@ const prefs = (activities: CandidateExplorationPreferences["activities"]): Candi
 });
 
 describe("P3.25 candidate exploration", () => {
-  it("keeps selection limits aligned with trip length and the signed anchor cap", () => {
-    expect([0, 1, 2, 3, 4, 6].map(maxSelectedExplorationPlaces)).toEqual([4, 6, 8, 10, 12, 12]);
+  it("keeps atmosphere refinements without reviving price ranking from an old research plan", () => {
+    const old = explorationResearchPlan(null, prefs(["cafe"]), "부산");
+    old.needs[0].qualities = ["value_for_money"];
+    old.needs[0].evidenceNeeded = ["menu", "price"];
+    const refined = refineExplorationNeed(old, "cafe", "더 저렴하고 가성비 좋고 조용한 곳");
+    expect(refined.needs[0].qualities).toEqual(["quiet"]);
+    expect(refined.needs[0].evidenceNeeded).toEqual(["noise", "crowd"]);
+    expect(explorationResearchPlan(old, prefs(["cafe"]), "부산").needs[0])
+      .toMatchObject({ qualities: [], evidenceNeeded: [] });
   });
   it("recognizes festival requests and provider-specific experience and shopping types", () => {
     expect(initialExplorationPreferences("전주 축제랑 체험하고 쇼핑하고 싶어", state).activities)

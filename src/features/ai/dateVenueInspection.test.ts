@@ -102,6 +102,21 @@ describe("limited venue inspection", () => {
     expect(venueQuestionType("made_up", "주차 돼?")).toBe("general");
   });
 
+  it("does not research a venue fact the user explicitly dismissed", async () => {
+    expect(venueQuestionType("parking", "주차는 필요 없고 메뉴만 알려줘")).toBe("general");
+    expect(venueQuestionType("price", "가격은 상관없어. 주차 가능해?")).toBe("general");
+    expect(venueQuestionType("location", "주소는 알려주지 마. 대표 메뉴 알려줘")).toBe("general");
+    answer.mockClear();
+    const result = await executeSupplementaryInspections(input({ userMessage: "주차는 필요 없고 저녁만 바꿔줘" }), answer);
+    expect(result.results[0]).toMatchObject({ status: "skipped", failureCode: "unsupported_question" });
+    expect(answer).not.toHaveBeenCalled();
+  });
+
+  it("still answers a policy question containing negation", () => {
+    expect(venueQuestionType("reservation", "예약 안 해도 돼?")).toBe("reservation");
+    expect(venueQuestionType("parking", "주차 안 되는 곳이야?")).toBe("parking");
+  });
+
   it("keeps a source-free parking answer unknown and does not guess", async () => {
     const ungrounded = vi.fn(async () => ({ headline: cafe.name, lines: ["주차 가능해요."], suggestions: [] }));
     const result = await executeSupplementaryInspections(input(), ungrounded);

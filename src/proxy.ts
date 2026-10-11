@@ -51,8 +51,7 @@ export async function proxy(request: NextRequest) {
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", policy);
 
-  const securedRequest = NextResponse.next({ request: { headers: requestHeaders } });
-  const response = await updateSession(request, securedRequest);
+  const response = await updateSession(request, requestHeaders);
   return applySecurityHeaders(response, policy);
 }
 

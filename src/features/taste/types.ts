@@ -23,7 +23,8 @@ export type TasteProfile = {
   avoidFoods: string[];
   setting: TasteSetting;
   crowd: TasteCrowd;
-  budget: TasteBudget;
+  /** @deprecated Historical field; excluded from current preference matching. */
+  budget?: TasteBudget;
   timeWindow: DateTimeWindow;
   areaScope: DateAreaScope;
   dateFlow: TasteDateFlow;
@@ -81,7 +82,8 @@ export type TasteInput = {
   avoidFoods: string[];
   setting: TasteSetting | "";
   crowd: TasteCrowd | "";
-  budget: TasteBudget | "";
+  /** @deprecated Ignored for older clients; no budget input is required. */
+  budget?: TasteBudget | "";
   timeWindow: DateTimeWindow | "";
   areaScope: DateAreaScope | "";
   dateFlow: TasteDateFlow | "";

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { NavigationProgress } from "./NavigationProgress";
 import { useCallback, type ComponentProps, type FocusEvent, type MouseEvent } from "react";
 
 type PrefetchMode = "never" | "hover";
@@ -11,6 +12,8 @@ export function AppLink({
   onMouseEnter,
   onFocus,
   href,
+  prefetch,
+  children,
   ...props
 }: ComponentProps<typeof Link> & { prefetchMode?: PrefetchMode }) {
   const router = useRouter();
@@ -22,8 +25,8 @@ export function AppLink({
   return (
     <Link
       href={href}
-      prefetch={prefetchMode === "never" ? false : undefined}
       {...props}
+      prefetch={prefetch ?? false}
       onMouseEnter={(event: MouseEvent<HTMLAnchorElement>) => {
         warm();
         onMouseEnter?.(event);
@@ -32,6 +35,9 @@ export function AppLink({
         warm();
         onFocus?.(event);
       }}
-    />
+    >
+      {children}
+      <NavigationProgress />
+    </Link>
   );
 }

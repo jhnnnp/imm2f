@@ -1,17 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
+import { readPlacesWorkspace } from "@/features/collaboration/workspaceReads";
+import { SyncNotice } from "@/components/shared/SyncNotice";
 import { flushSync } from "react-dom";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ContextPanel } from "@/components/layout/ContextPanel";
+import { openContextPanel } from "@/components/layout/ContextPanelDrawer";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
 import { PLACE_CATEGORIES } from "../config/placeCategories";
 import { PLACE_ADMINISTRATIVE_AREAS, PLACE_AREA_GROUPS, areaGroupById, browseDiscoverInput } from "../config/regions";
 import { listPlaces, searchDiscoverPlaces, loadTourPlaceDetail, lookupPlaceLocation, updateMyPlaceStatus, updatePlaceDescription, updatePlaceLocation } from "../actions";
 import { applyPlaceLocation } from "../location";
 import { addItemToCouplePlan } from "@/features/planning/actions";
+import { placePlanDestination } from "../planDestination";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { isDiscoverPlace, mergeCandidateWithSaved, placeToCandidate, uniqueByExternalId } from "../discover";
 import type { DiscoverCandidate, Place, PlaceCategoryId, PlacePreferenceStatus } from "../types/place";
@@ -35,6 +39,12 @@ const PlacesMapPane = dynamic(
   },
 );
 import { withObjectParticle } from "@/lib/korean";
+import type { FolderWorkspace } from "@/features/folders/types";
+import { FOLDER_DRAG_MIME } from "@/features/folders/types";
+import { useFolderWorkspace } from "@/features/folders/useFolderWorkspace";
+import { FolderShelf } from "@/features/folders/components/FolderShelf";
+import { FolderMoveMenu } from "@/features/folders/components/FolderMoveMenu";
+import "./places-folders.css";
 
 type Section = "saved" | "search" | "browse" | "map";
 type Filter = "all" | "want" | "visited" | "revisit" | "not_interested" | "trip";
@@ -61,6 +71,7 @@ export function PlacesExperience({
   initialTripItems = [],
   tripPlanTitle = "",
   initialArchivedTrips = [],
+  initialFolderWorkspace,
 }: {
   initialPlaces: Place[];
   persist: boolean;
@@ -68,7 +79,9 @@ export function PlacesExperience({
   initialTripItems?: PlanItem[];
   tripPlanTitle?: string;
   initialArchivedTrips?: ArchivedTripPlan[];
+  initialFolderWorkspace?: FolderWorkspace;
 }) {
+  const folderController = useFolderWorkspace("places", initialFolderWorkspace);
   const searchParams = useSearchParams();
   const source = searchParams.get("from") === "date" ? "date" : searchParams.get("from") === "trip" ? "trip" : null;
   const selectedParam = searchParams.get("selected") ?? initialSelectedId ?? "";
@@ -77,16 +90,19 @@ export function PlacesExperience({
   const [selectedId, setSelectedId] = useState(
     selectedParam && initialPlaces.some(place => place.id === selectedParam)
       ? selectedParam
-      : initialPlaces.find(isKeptInArchive)?.id ?? "",
+      : "",
   );
   const [filter, setFilter] = useState<Filter>("all");
   const [savedCategory, setSavedCategory] = useState<SavedCategoryFilter>("all");
   const [tripItems, setTripItems] = useState<PlanItem[]>(initialTripItems);
-  const [archivedTrips] = useState<ArchivedTripPlan[]>(initialArchivedTrips);
+  const [archivedTrips, setArchivedTrips] = useState<ArchivedTripPlan[]>(initialArchivedTrips);
+  const [currentTripTitle, setCurrentTripTitle] = useState(tripPlanTitle);
+  const [syncError, setSyncError] = useState("");
   const [savedQuery, setSavedQuery] = useState("");
   const [layout, setLayout] = useState<Layout>("grid");
   const [notice, setNotice] = useState("");
-  const [noticeHref, setNoticeHref] = useState(source === "date" ? "/date" : "/trip");
+  const [noticePlanLink, setNoticePlanLink] = useState(false);
+  const [noticeHref, setNoticeHref] = useState(placePlanDestination(source ?? "trip", source, searchParams.get("day")).href);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("manual");
   const [pendingCandidate, setPendingCandidate] = useState<DiscoverCandidate | null>(null);
@@ -94,6 +110,7 @@ export function PlacesExperience({
   const [planPending, setPlanPending] = useState<"trip" | "date" | null>(null);
   const [statusPendingId, setStatusPendingId] = useState<string | null>(null);
   const [dialogPending, setDialogPending] = useState(false);
+  const [selectedPlaceIds, setSelectedPlaceIds] = useState<string[]>([]);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchCategory, setSearchCategory] = useState<PlaceCategoryId | "all">("all");
@@ -113,22 +130,38 @@ export function PlacesExperience({
   const [discoverError, setDiscoverError] = useState("");
   const [searched, setSearched] = useState(false);
   const placesRef = useRef(places);
+  const selectedParamRequestRef = useRef({ id: selectedParam, applied: false });
   const discoverRequestRef = useRef(0);
   const regionSearchRef = useRef<HTMLDivElement>(null);
+  const saveFolderIdRef = useRef<string | null>(null);
   placesRef.current = places;
-  useSharedRefresh(async () => {
+  const retrySync = useSharedRefresh(async ({ isCurrent }) => {
     const before = placesRef.current;
-    const result = await listPlaces();
-    if (before === placesRef.current && result.persist) setPlaces(result.places);
-  });
-
-  useEffect(() => {
-    if (!selectedParam) return;
-    if (places.some(place => place.id === selectedParam) || discover.some(place => place.id === selectedParam)) {
-      setSelectedId(selectedParam);
-      setSection("saved");
+    try {
+      const { places: result, trip, archives } = await readPlacesWorkspace();
+      if (!isCurrent() || before !== placesRef.current) return;
+      if (result.persist) {
+        setPlaces(result.places); setTripItems(trip.items); setArchivedTrips(archives); setCurrentTripTitle(trip.title);
+        setSyncError("");
+      }
+    } catch {
+      if (isCurrent()) setSyncError("파트너의 최신 장소와 일정을 불러오지 못했어요.");
     }
-  }, [selectedParam, places, discover]);
+  }, { tables: ["activities"], activityPrefixes: ["PLACE_", "TRIP_", "MEMORY_", "PARTNER_"] });
+
+  const selectedParamExists = places.some(place => place.id === selectedParam)
+    || discover.some(place => place.id === selectedParam);
+  useEffect(() => {
+    if (selectedParamRequestRef.current.id !== selectedParam) {
+      selectedParamRequestRef.current = { id: selectedParam, applied: false };
+    }
+    if (!selectedParam || !selectedParamExists || selectedParamRequestRef.current.applied) return;
+    // A URL selection opens once. Background refreshes must preserve later
+    // tab changes and the place the user chooses within this screen.
+    selectedParamRequestRef.current.applied = true;
+    setSelectedId(selectedParam);
+    setSection("saved");
+  }, [selectedParam, selectedParamExists]);
 
   useEffect(() => {
     if (!regionSuggestionsOpen) return;
@@ -140,18 +173,21 @@ export function PlacesExperience({
   }, [regionSuggestionsOpen]);
 
   const archivedPlaces = useMemo(() => places.filter(isKeptInArchive), [places]);
+  const folderPlaces = useMemo(() => archivedPlaces.filter(place => folderController.matchesFolder(place.id)),
+    [archivedPlaces, folderController.matchesFolder]);
+  const folderItems = useMemo(() => archivedPlaces.map(place => ({ id: place.id, title: place.name, image: place.image })), [archivedPlaces]);
 
   const counts = useMemo(() => ({
-    all: archivedPlaces.length,
-    want: archivedPlaces.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "want" || value === "must_visit")).length,
-    visited: archivedPlaces.filter(place => [place.userStatus, place.partnerStatus].includes("visited")).length,
-    revisit: archivedPlaces.filter(place => [place.userStatus, place.partnerStatus].includes("revisit")).length,
-    notInterested: archivedPlaces.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "not_interested" || value === "dislike")).length,
-  }), [archivedPlaces]);
+    all: folderPlaces.length,
+    want: folderPlaces.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "want" || value === "must_visit")).length,
+    visited: folderPlaces.filter(place => [place.userStatus, place.partnerStatus].includes("visited")).length,
+    revisit: folderPlaces.filter(place => [place.userStatus, place.partnerStatus].includes("revisit")).length,
+    notInterested: folderPlaces.filter(place => [place.userStatus, place.partnerStatus].some(value => value === "not_interested" || value === "dislike")).length,
+  }), [folderPlaces]);
 
   const tripPlaceCount = useMemo(
-    () => archivedPlaces.filter(place => placeIsOnAnyTrip(tripItems, archivedTrips, place)).length,
-    [archivedPlaces, tripItems, archivedTrips],
+    () => folderPlaces.filter(place => placeIsOnAnyTrip(tripItems, archivedTrips, place)).length,
+    [folderPlaces, tripItems, archivedTrips],
   );
 
   const tripLinkedPlaceIds = useMemo(
@@ -159,7 +195,7 @@ export function PlacesExperience({
     [archivedPlaces, tripItems, archivedTrips],
   );
 
-  const visibleSaved = useMemo(() => archivedPlaces.filter(place => {
+  const visibleSaved = useMemo(() => folderPlaces.filter(place => {
     const statuses: PlacePreferenceStatus[] = [place.userStatus, place.partnerStatus];
     const matchesStatus = filter === "trip"
       ? placeIsOnAnyTrip(tripItems, archivedTrips, place)
@@ -169,14 +205,16 @@ export function PlacesExperience({
         || statuses.includes(filter);
     const matchesCategory = savedCategory === "all" || place.category === savedCategory;
     return matchesStatus && matchesCategory && place.name.toLowerCase().includes(savedQuery.toLowerCase());
-  }), [archivedPlaces, filter, savedCategory, savedQuery, tripItems, archivedTrips]);
+  }), [folderPlaces, filter, savedCategory, savedQuery, tripItems, archivedTrips]);
+  const visibleSelectedIds = visibleSaved.filter(place => selectedPlaceIds.includes(place.id)).map(place => place.id);
+  const currentFolderName = folderController.workspace.folders.find(folder => folder.id === folderController.selectedFolderId)?.name;
+  const hasSavedFilters = filter !== "all" || savedCategory !== "all" || Boolean(savedQuery.trim());
 
-  const selected = (section === "saved" ? archivedPlaces : [...discover, ...places]).find(place => place.id === selectedId)
-    ?? (section === "saved" ? visibleSaved[0] : discover[0]);
+  const selected = (section === "saved" ? places : [...discover, ...places]).find(place => place.id === selectedId);
 
   const selectedTripStops = useMemo(
-    () => (selected ? tripScheduleStopsForPlace(tripItems, tripPlanTitle, archivedTrips, selected) : []),
-    [selected, tripItems, tripPlanTitle, archivedTrips],
+    () => (selected ? tripScheduleStopsForPlace(tripItems, currentTripTitle, archivedTrips, selected) : []),
+    [selected, tripItems, currentTripTitle, archivedTrips],
   );
 
   const runDiscover = useCallback(async (input: Parameters<typeof searchDiscoverPlaces>[0], append = false) => {
@@ -206,7 +244,11 @@ export function PlacesExperience({
       setDiscover(previous => uniqueByExternalId(append ? [...previous, ...merged] : merged));
       setDiscoverPage(result.page);
       setDiscoverIsEnd(result.isEnd);
-      if (!append && merged[0]) setSelectedId(merged[0].id);
+      if (!append) setSelectedId("");
+    } catch {
+      if (requestId === discoverRequestRef.current) {
+        setDiscoverError("장소를 불러오지 못했어요. 연결을 확인하고 다시 검색해 주세요.");
+      }
     } finally {
       if (requestId === discoverRequestRef.current) {
         setDiscoverPending(false);
@@ -216,7 +258,9 @@ export function PlacesExperience({
 
   async function persistStatus(id: string, status: PlacePreferenceStatus) {
     if (statusPendingId) return;
+    setNoticePlanLink(false);
     const previous = places.find(place => place.id === id) ?? discover.find(place => place.id === id);
+    const targetFolderId = selectedUserFolderId();
     const applyStatus = (current: Place[]) => current.map(place => place.id === id ? { ...place, userStatus: status } : place);
     setStatusPendingId(id);
     if (!persist) {
@@ -224,20 +268,21 @@ export function PlacesExperience({
       setStatusPendingId(null);
       return;
     }
-    const [result] = await Promise.all([
-      updateMyPlaceStatus(id, status),
-      new Promise(resolve => window.setTimeout(resolve, 450)),
-    ]);
+    const result = await updateMyPlaceStatus(id, status)
+      .catch(() => ({ error: "장소 상태를 저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
     if (!("error" in result)) {
-      const nextPlaces = applyStatus(places);
+      const nextPlaces = applyStatus(placesRef.current);
       const updated = nextPlaces.find(place => place.id === id);
       setPlaces(nextPlaces);
       setDiscover(applyStatus);
       if (updated && !isKeptInArchive(updated)) {
-        setSelectedId(nextPlaces.find(place => place.id !== id && isKeptInArchive(place))?.id ?? "");
+        setSelectedId("");
       }
       emitCoupleActivitiesChanged();
       setStatusPendingId(null);
+      if (updated && targetFolderId && previous && !isKeptInArchive(previous) && isKeptInArchive(updated)) {
+        void assignSavedToFolder(updated.id, targetFolderId, `${updated.name}을 저장했어요.`);
+      }
       return;
     }
     setNotice(result.error);
@@ -292,6 +337,7 @@ export function PlacesExperience({
         return;
       }
       setPendingCandidate(candidate);
+      saveFolderIdRef.current = selectedUserFolderId();
       setPendingInitialDescription(memoSeedForSaveDialog(place));
       setDialogMode("confirm");
       setDialogOpen(true);
@@ -302,14 +348,16 @@ export function PlacesExperience({
   }
 
   function openManual() {
+    saveFolderIdRef.current = selectedUserFolderId();
     setPendingCandidate(null);
     setDialogMode("manual");
     setDialogOpen(true);
   }
 
   function handleSaved(place: Place, message: string) {
+    const wasArchived = placesRef.current.some(item => item.id === place.id && isKeptInArchive(item));
     setPlaces(current => {
-      const index = current.findIndex(item => item.id === place.id || (place.externalPlaceId && item.externalPlaceId === place.externalPlaceId));
+      const index = current.findIndex(item => item.id === place.id || (place.externalPlaceId && item.externalPlaceId === place.externalPlaceId && item.externalSource === place.externalSource));
       if (index >= 0) {
         const next = [...current];
         next[index] = { ...current[index], ...place };
@@ -318,11 +366,63 @@ export function PlacesExperience({
       return [...current, place];
     });
     setDiscover(current => current.map(item => (
-      item.externalPlaceId && item.externalPlaceId === place.externalPlaceId ? place : item
+      item.externalPlaceId && item.externalPlaceId === place.externalPlaceId && item.externalSource === place.externalSource ? place : item
     )));
     setSelectedId(place.id);
     setNotice(message);
-    if (source) setNoticeHref(source === "date" ? "/date" : "/trip");
+    setNoticePlanLink(Boolean(source));
+    if (!wasArchived && saveFolderIdRef.current) void assignSavedToFolder(place.id, saveFolderIdRef.current, message);
+    if (source) setNoticeHref(placePlanDestination(source, source, searchParams.get("day")).href);
+  }
+
+  function selectedUserFolderId() {
+    const id = folderController.selectedFolderId;
+    return id !== "all" && id !== "unfiled" ? id : null;
+  }
+
+  async function assignSavedToFolder(itemId: string, folderId: string, savedMessage: string) {
+    const moved = await folderController.moveItems([itemId], folderId).catch(() => false);
+    if (!moved) {
+      setNoticePlanLink(false);
+      setNotice(`${savedMessage} 폴더 이동은 완료되지 않았어요. 저장한 장소에서 다시 옮길 수 있어요.`);
+    }
+  }
+
+  function togglePlaceSelection(id: string) {
+    setSelectedPlaceIds(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id]);
+  }
+
+  function selectPlaceFolder(id: string) {
+    folderController.setSelectedFolderId(id);
+    setFilter("all");
+    setSavedCategory("all");
+    setSavedQuery("");
+    setSelectedPlaceIds([]);
+  }
+
+  async function moveSelectedPlaces(folderId: string | null) {
+    const ids = visibleSelectedIds;
+    if (!ids.length) return;
+    if (await folderController.moveItems(ids, folderId)) setSelectedPlaceIds(current => current.filter(id => !ids.includes(id)));
+  }
+
+  function dragSavedPlaces(event: DragEvent<HTMLElement>, id: string) {
+    if (folderController.pending || !folderController.workspace.persist) { event.preventDefault(); return; }
+    const ids = visibleSelectedIds.includes(id) ? visibleSelectedIds : [id];
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(FOLDER_DRAG_MIME, JSON.stringify({ scope: "places", ids }));
+  }
+
+  function placeOrganization(place: Place) {
+    return <div className="saved-place-organization">
+      <label className="saved-place-select">
+        <input type="checkbox" checked={selectedPlaceIds.includes(place.id)} disabled={folderController.pending}
+          onChange={() => togglePlaceSelection(place.id)} aria-label={`${place.name} 정리할 장소로 선택`} />
+        <span>선택</span>
+      </label>
+      <FolderMoveMenu folders={folderController.workspace.folders} value={folderController.folderFor(place.id)}
+        disabled={folderController.pending || !folderController.workspace.persist} onMove={folderId => folderController.moveItems([place.id], folderId)} />
+    </div>;
   }
 
   function applyPlace(place: Place) {
@@ -358,6 +458,7 @@ export function PlacesExperience({
     setSection(next);
     if (next === "map") setLayout("grid");
     if (next !== section) {
+      setSelectedId("");
       setDiscover([]);
       setDiscoverError("");
       setSearched(false);
@@ -366,11 +467,12 @@ export function PlacesExperience({
 
   async function handleSelect(id: string) {
     setSelectedId(id);
+    openContextPanel();
     const place = [...discover, ...places].find(item => item.id === id);
     if (!place || place.externalSource !== "tourapi" || !place.externalPlaceId) return;
     if (place.tourDetailLoaded) return;
     const detail = await loadTourPlaceDetail(place.externalPlaceId, place.category,
-      place.tourContentTypeId);
+      place.tourContentTypeId).catch(() => null);
     setDiscover(current => current.map(item => (
       item.id === id
         ? detail
@@ -381,9 +483,11 @@ export function PlacesExperience({
   }
 
   async function addSelectedToPlan(kind: "trip" | "date") {
-    if (!selected) return;
+    if (!selected || planPending) return;
+    const destination = placePlanDestination(kind, source, searchParams.get("day"));
     const label = kind === "date" ? "데이트 일정" : "여행 일정";
-    setNoticeHref(kind === "date" ? "/date" : "/trip");
+    setNoticeHref(destination.href);
+    setNoticePlanLink(false);
     if (!persist) {
       setNotice("로그인과 데이터베이스 연결이 필요해요.");
       return;
@@ -399,15 +503,16 @@ export function PlacesExperience({
         expectedCost: selected.expectedCostTwo || 0,
         order: 0,
         memo: selected.description || "",
-        dayIndex: kind === "trip" ? Number(searchParams.get("day") || 0) : 0,
+        dayIndex: destination.dayIndex,
         coordinates: selected.coordinates,
-      }).catch(() => ({ error: `${label}에 담지 못했어요. 연결을 확인하고 다시 시도해 주세요.` }));
+      }, { targetDate: destination.targetDate }).catch(() => ({ error: `${label}에 담지 못했어요. 연결을 확인하고 다시 시도해 주세요.` }));
     if ("error" in result) {
       setNotice(result.error);
       setPlanPending(null);
       return;
     }
     setNotice(result.duplicate ? `${selected.name}은 이미 ${label}에 있어요.` : `${withObjectParticle(selected.name)} ${label}에 넣었어요.`);
+    setNoticePlanLink(true);
     if (kind === "trip") setTripItems(result.items);
     setPlanPending(null);
     emitCoupleActivitiesChanged();
@@ -504,6 +609,7 @@ export function PlacesExperience({
 
   return (
     <>
+      <SyncNotice message={syncError} onRetry={retrySync} />
       {selected && (
         <ContextPanel>
           <PlaceDetailPanel
@@ -541,7 +647,7 @@ export function PlacesExperience({
         <div className="segmented" role="tablist" aria-label="장소 탐색">
           {SECTIONS.map(item => (
             <button className={section === item.id ? "is-active" : ""} onClick={() => handleSection(item.id)} key={item.id} type="button" role="tab" aria-selected={section === item.id}>
-              {item.label}{item.id === "saved" ? <b>{counts.all}</b> : null}
+              {item.label}{item.id === "saved" ? <b>{archivedPlaces.length}</b> : null}
             </button>
           ))}
         </div>
@@ -554,6 +660,7 @@ export function PlacesExperience({
 
       {section === "saved" && (
         <>
+          <FolderShelf scope="places" controller={{ ...folderController, setSelectedFolderId: selectPlaceFolder }} items={folderItems} label="장소" />
           <div className="segmented status-tabs" role="tablist" aria-label="장소 상태">
             {([
               ["all", "전체", counts.all, null],
@@ -572,8 +679,18 @@ export function PlacesExperience({
           <div className="category-row">
             <button className={savedCategory === "all" ? "is-active" : ""} type="button" onClick={() => setSavedCategory("all")}>전체</button>
             {PLACE_CATEGORIES.map(item => <button className={savedCategory === item.id ? "is-active" : ""} type="button" onClick={() => setSavedCategory(item.id)} key={item.id}><PlaceCategoryIcon category={item.id} />{item.label}</button>)}
-            <label><span>⌕</span><input id="place-archive-search" value={savedQuery} onChange={event => setSavedQuery(event.target.value)} placeholder="저장한 이름만 찾기" /></label>
+            <label><span>⌕</span><input id="place-archive-search" value={savedQuery} onChange={event => setSavedQuery(event.target.value)} placeholder={currentFolderName ? "이 폴더에서 이름 찾기" : "저장한 이름만 찾기"} aria-label="저장한 장소 이름 검색" /></label>
           </div>
+          {visibleSaved.length > 0 && <div className="saved-place-selection-bar">
+            <label><input type="checkbox" disabled={folderController.pending} checked={visibleSelectedIds.length === visibleSaved.length}
+              onChange={event => setSelectedPlaceIds(event.target.checked ? visibleSaved.map(place => place.id) : [])} />현재 목록 모두 선택</label>
+            <span aria-live="polite">{visibleSelectedIds.length ? `${visibleSelectedIds.length}곳 선택` : `${visibleSaved.length}곳 · 이름 붙인 폴더에 함께 정리해요`}</span>
+            {visibleSelectedIds.length > 0 && <>
+              <FolderMoveMenu folders={folderController.workspace.folders} value={null} disabled={folderController.pending || !folderController.workspace.persist}
+                onMove={moveSelectedPlaces} />
+              <button type="button" onClick={() => setSelectedPlaceIds([])} disabled={folderController.pending}>선택 해제</button>
+            </>}
+          </div>}
         </>
       )}
 
@@ -733,39 +850,48 @@ export function PlacesExperience({
         </div>
       )}
 
-      {notice && <div className="inline-notice" role="status">{notice} <Link href={noticeHref}>{noticeHref === "/date" ? "데이트로 돌아가기" : "여행으로 돌아가기"}</Link><button type="button" onClick={() => setNotice("")} aria-label="알림 닫기">×</button></div>}
+      {notice && <div className="inline-notice" role="status">{notice} {noticePlanLink ? <Link href={noticeHref}>{noticeHref === "/date" ? "데이트로 돌아가기" : "여행으로 돌아가기"}</Link> : null}<button type="button" onClick={() => setNotice("")} aria-label="알림 닫기">×</button></div>}
 
       {section === "saved" && (
         visibleSaved.length ? (
           layout === "list" ? (
             <ul className="place-result-list">
               {visibleSaved.map(place => (
-                <li key={place.id}>
-                  <button type="button" className={`kakao-result ${selectedId === place.id ? "is-selected" : ""}`} onClick={() => setSelectedId(place.id)}>
+                <li key={place.id} className="saved-place-file is-list" draggable={folderController.workspace.persist && !folderController.pending}
+                  onDragStart={event => dragSavedPlaces(event, place.id)}>
+                  <button type="button" className={`kakao-result ${selectedId === place.id ? "is-selected" : ""}`} onClick={() => void handleSelect(place.id)}>
                     <b className="place-list-title">{place.name}{tripLinkedPlaceIds.has(place.id) ? <PlaceTripStamp compact /> : null}</b>
                     <small>{place.categoryLabel} · {place.district}</small>
                   </button>
+                  {placeOrganization(place)}
                 </li>
               ))}
             </ul>
           ) : (
             <div className="place-grid">{visibleSaved.map(place => (
+              <div key={place.id} className={`saved-place-file${selectedPlaceIds.includes(place.id) ? " is-picked" : ""}`}
+                draggable={folderController.workspace.persist && !folderController.pending} onDragStart={event => dragSavedPlaces(event, place.id)}>
               <PlaceCard
-                key={place.id}
                 place={place}
                 selected={selectedId === place.id}
                 onTripSchedule={tripLinkedPlaceIds.has(place.id)}
-                onSelect={() => setSelectedId(place.id)}
+                onSelect={() => void handleSelect(place.id)}
                 onToggleSave={() => toggleSave(place.id)}
                 savePending={isSavePending(place)}
               />
+              {placeOrganization(place)}
+              </div>
             ))}</div>
           )
         ) : (
           <div className="empty-soft">
-            <h1>{archivedPlaces.length ? "조건에 맞는 장소가 없어요" : "첫 장소를 골라 볼까요?"}</h1>
-            <p>{archivedPlaces.length ? "필터를 바꾸거나 다른 이름으로 찾아 보세요." : "이름을 검색하거나, 알고 있는 장소를 직접 남겨 보세요."}</p>
+            <h2>{hasSavedFilters ? "조건에 맞는 장소가 없어요" : currentFolderName ? `‘${currentFolderName}’에 첫 장소를 담아 볼까요?` : folderController.selectedFolderId === "unfiled" ? "모든 장소가 폴더에 정리되어 있어요" : "첫 장소를 골라 볼까요?"}</h2>
+            <p>{hasSavedFilters ? "이 폴더에서 필터를 바꾸거나 다른 이름으로 찾아 보세요." : currentFolderName ? "전체 장소에서 옮기거나, 새 장소를 저장하면 이 폴더에 담겨요." : folderController.selectedFolderId === "unfiled" ? "전체 장소나 다른 폴더를 열면 저장한 장소를 볼 수 있어요." : "이름을 검색하거나, 알고 있는 장소를 직접 남겨 보세요."}</p>
             <div className="dialog-actions">
+              {(hasSavedFilters || folderController.selectedFolderId !== "all") && <button className="outline-button" type="button" onClick={() => {
+                if (hasSavedFilters) { setFilter("all"); setSavedCategory("all"); setSavedQuery(""); }
+                else folderController.setSelectedFolderId("all");
+              }}>{hasSavedFilters ? "필터 초기화" : "전체 장소 보기"}</button>}
               <button className="primary-button" type="button" onClick={() => handleSection("search")}>장소 찾기</button>
               <button className="outline-button" type="button" onClick={openManual}>직접 입력</button>
             </div>

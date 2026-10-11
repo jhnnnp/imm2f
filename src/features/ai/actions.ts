@@ -14,7 +14,7 @@ import { semanticPlanningHintsForContext, hasSemanticPlanningHints } from "./sem
 import { orchestrateDateTurn, prepareDateExecutionPlan } from "./dateOrchestrator";
 import type { observeDateExecutionPlan } from "./dateExecutionPlan";
 import { getDateExecutionMode } from "./dateVenueInspection";
-import { legacyPlacesReuseEnabled, sessionPlaceRecommendationInputs } from "./datePlaceRecommendationExecution";
+import { currentSessionVenue, legacyPlacesReuseEnabled, sessionPlaceRecommendationInputs } from "./datePlaceRecommendationExecution";
 import { mergeSessionFeedback, placeSessionFeedbackSignals,
   type PlaceSessionFeedbackSignal, type SessionFeedbackEntry } from "./sessionFeedback";
 import { interpretDateRequest } from "@/lib/openai/interpretDateRequest";
@@ -61,6 +61,7 @@ import {
   fitsWantedActivities,
   isExclusiveCrawl,
   extractAreasFromText,
+  extractStay,
 } from "@/features/ai/dateBrief";
 import { allowsHarshDateMeal, applyCourseDelta, bothWantNames, candidateActivitySlot, dateCandidateKey, isOffDateVenue, preferredSavedNames, recentPlaceNames, toDateRanking } from "@/features/ai/dateCourse";
 import { chatSituationFromMessage, composeDateChat, dateChatCard, cardToText } from "@/lib/openai/composeDateChat";
@@ -77,7 +78,7 @@ import { applyDateMemory, collectDateMemory } from "@/features/ai/dateMemory";
 import { discoveryCatalog } from "./courseDesign";
 import { planningFailureMessage } from "./planningFailureMessage";
 import { buildDateCandidatePool, type DateCandidateRecord } from "./dateCandidatePool";
-import { maxSelectedExplorationPlaces, validExplorationPreferences,
+import { validExplorationPreferences,
   type ItineraryPlanningInput } from "./candidateExploration";
 import { buildDateContext, type DateContext } from "./dateContext";
 import { observeExperiencePlan } from "@/lib/openai/experiencePlan";
@@ -89,7 +90,7 @@ import { compareResearchSearches, evaluateResearchCoverage, executeResearchInten
   researchCoverageFallbackReason, researchSearchAuthority, researchSearchIntents, validateResearchPlan,
   type ResearchCoverage, type ResearchPlan } from "./researchPlan";
 import { enrichResearchNeedEvidence } from "@/lib/openai/enrichDateVenues";
-import { mergeSessionCandidates, sealSessionCandidates, sessionShownPlaces,
+import { emptySessionCandidates, mergeSessionCandidates, sealSessionCandidates, sessionShownPlaces,
   verifiedSessionCandidates, type SessionCandidateContext } from "./sessionCandidates";
 import { candidateSessionObservation } from "./dateObservation";
 import { buildDateTurnUnderstanding } from "./dateTurnUnderstanding";
@@ -111,6 +112,7 @@ import {
 } from "@/features/ai/placeRecommend";
 import type { AIChatCard, AIChatStop, AIPlannerClarification, AIPlannerResult, AIPlannerState, DateChatTurn, DateIntakeSlot, DatePreviousStop, PlaceAsk, PlanChange, PlanItem, PlanKind, PlanOption } from "@/features/planning/types/plan";
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
+import { validateBasicPlannerInput, validateDatePlannerInput } from "./plannerInputValidation";
 
 const INSIGHT_VERSION = "couple-taste-v2";
 
@@ -158,17 +160,23 @@ function forViewer(insight: PreferenceInsight, viewerUserId: string) {
 }
 
 function isPreferenceInsight(value: unknown): value is PreferenceInsight {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Partial<PreferenceInsight>;
+  const strings = (rows: unknown) => Array.isArray(rows) && rows.every(row => typeof row === "string");
+  const objects = (rows: unknown, keys: string[]) => Array.isArray(rows) && rows.every(row => row && typeof row === "object"
+    && keys.every(key => typeof row[key] === "string"));
+  const finite = (score: unknown) => typeof score === "number" && Number.isFinite(score) && score >= 0;
   return typeof item.summary === "string"
-    && typeof item.matchScore === "number"
-    && typeof item.confidence === "number"
-    && Array.isArray(item.youHighlights)
-    && Array.isArray(item.partnerHighlights)
-    && Array.isArray(item.commonTastes)
-    && Array.isArray(item.differences)
-    && Array.isArray(item.recommendations)
-    && Boolean(item.evidence);
+    && finite(item.matchScore) && item.matchScore! <= 100
+    && finite(item.confidence) && item.confidence! <= 100
+    && strings(item.youHighlights) && strings(item.partnerHighlights)
+    && Array.isArray(item.commonTastes) && item.commonTastes.every(row => row && typeof row.label === "string" && finite(row.score))
+    && objects(item.differences, ["you", "partner", "bridge"])
+    && objects(item.recommendations, ["title", "description", "reason"])
+    && Boolean(item.evidence) && [item.evidence?.youRatedCount, item.evidence?.partnerRatedCount,
+      item.evidence?.sharedPositivePlaceCount, item.evidence?.unratedCount].every(finite)
+    && typeof item.note === "string" && finite(item.sourceCount)
+    && (item.perspectiveUserId === undefined || typeof item.perspectiveUserId === "string");
 }
 
 export async function loadLatestCoupleInsight(): Promise<PreferenceInsight | null> {
@@ -213,6 +221,9 @@ export async function proposePlanEdits(input: {
   prompt: string;
   items: PlanItem[];
 }): Promise<{ changes: PlanChange[]; summary: string } | { error: string }> {
+  if ((await getAppSession()).mode !== "authenticated") return { error: "로그인 후 AI 플래너를 사용할 수 있어요." };
+  const inputError = validateBasicPlannerInput(input, "edit");
+  if (inputError) return { error: inputError };
   return proposePlanEditsWithOpenAi({
     kind: input.kind,
     prompt: input.prompt,
@@ -232,8 +243,12 @@ export async function generatePlanOptions(input: {
   prompt: string;
   places?: Place[];
 }): Promise<{ options: PlanOption[]; note: string } | { error: string }> {
+  if ((await getAppSession()).mode !== "authenticated") return { error: "로그인 후 AI 플래너를 사용할 수 있어요." };
+  const inputError = validateBasicPlannerInput(input, "options");
+  if (inputError) return { error: inputError };
   const places = input.places ?? (await listPlaces()).places;
-  const usable = places.filter(place => !["dislike", "not_interested"].includes(place.userStatus));
+  const usable = places.filter(place => !["dislike", "not_interested"].includes(place.userStatus)
+    && !["dislike", "not_interested"].includes(place.partnerStatus));
   return generatePlanOptionsWithOpenAi({
     kind: input.kind,
     prompt: input.prompt,
@@ -252,6 +267,7 @@ export async function generatePlanOptions(input: {
 
 export async function analyzeCouplePreferences(): Promise<PreferenceInsight | { error: string }> {
   const session = await getAppSession();
+  if (session.mode !== "authenticated") return { error: "로그인 후 취향을 분석할 수 있어요." };
   const { places } = await listPlaces();
   const youName = session.mode === "authenticated" ? session.displayName : "나";
   const partnerName = session.mode === "authenticated"
@@ -615,6 +631,7 @@ async function recommendPlacesForChat(input: {
 }
 
 type RecommendDatePlanInput = {
+  planKind?: PlanKind;
   currentPlan?: import("@/features/planning/types/plan").AIPlannerReply | null;
   message?: string;
   prompt?: string;
@@ -970,13 +987,17 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     };
   if (planningInput) interpretation.state = { ...interpretation.state,
     pace: planningInput.preferences.pace };
+  if (input.planKind === "trip" && !planningInput && !input.currentPlan && !extractStay(message)
+    && filledPrevious?.stayKind !== "overnight" && filledPrevious?.stayKind !== "daytrip") {
+    interpretation.state = { ...interpretation.state, stayKind: null, nights: 0, pendingSlot: "span" };
+  }
   const intentDone = performance.now();
   const selectedAnchorRecords = selectedCandidateIds?.length && sessionCapture?.previous
     ? sessionCapture.previous.records.filter(row => selectedCandidateIds.includes(row.candidateId)
       && sessionCapture.previous!.selectedCandidateIds.includes(row.candidateId) && row.venue) : [];
   const selectedAnchorIds = selectedAnchorRecords.map(row => row.candidateId);
-  if ((selectedCandidateIds?.length ?? 0) > maxSelectedExplorationPlaces(interpretation.state.nights))
-    return chatResult({ headline: "", lines: [`이 여행에서는 최대 ${maxSelectedExplorationPlaces(interpretation.state.nights)}곳까지 선택할 수 있어요. 장소를 줄인 뒤 다시 시도해 주세요.`] }, interpretation.state);
+  if (interpretation.state.nights > 6)
+    return chatResult({ headline: "", lines: ["현재 전체 일정 생성은 최대 6박 7일까지 지원해요. 선택한 장소는 유지하고, 먼저 계획할 구간을 알려 주세요."] }, interpretation.state);
   if (selectedCandidateIds?.length && selectedAnchorIds.length !== new Set(selectedCandidateIds).size)
     return chatResult({ headline: "", lines: ["선택한 장소를 확인하지 못했어요. 장소를 다시 선택해 주세요."] }, interpretation.state);
   const turnUnderstanding = message ? await observeTurn(interpretation.state, routed, true) : null;
@@ -1001,7 +1022,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       conversationNotes: message
         ? [...interpretation.state.conversationNotes.filter(note => note !== message), message].slice(-MAX_CONVERSATION_NOTES)
         : interpretation.state.conversationNotes,
-      userRequests: (interpretation.state.intent === "reset" || !interpretation.state.preserveExistingPlaces
+      userRequests: (planningInput ? [...(filledPrevious?.userRequests ?? []), message]
+        : interpretation.state.intent === "reset" || !interpretation.state.preserveExistingPlaces
         ? [message]
         : [...(filledPrevious?.userRequests?.length ? filledPrevious.userRequests
           : (input.conversation ?? []).filter(turn => turn.role === "user").map(turn => turn.text).slice(0, -1)), message])
@@ -1010,11 +1032,11 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       requiredPlaces: uniqueStrings([
         ...pickedPlaces,
         ...interpretation.state.requiredPlaces.filter(place => !/^(?:방탈출|보드게임|볼링|오락실|만화카페|VR(?:카페|\s*체험)?|실내(?:\s*놀거리)?)$/.test(place)),
-      ], 6),
+      ], 500),
     },
   });
   const interpreted = tasteSeed ? applyTasteFallback(interpretedRaw, tasteSeed) : interpretedRaw;
-  const slot = missingSlot(interpreted);
+  const slot = missingSlot(interpreted) ?? (input.planKind === "trip" && !interpreted.stayKind ? "span" : null);
   if (slot) {
     const question = slotQuestion(slot, interpreted);
     const card = slot === "area"
@@ -1057,8 +1079,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   let researchCoverage: ResearchCoverage[] = [];
   const researchIntents = researchActive ? researchSearchIntents(researchPlan!, selectedRegions[0]) : [];
   const searchedResearchNeeds = new Set(researchIntents.flatMap(intent => intent.needIds));
-  const retainedPlaces = state.preserveExistingPlaces ? previousStops.map(stop => stop.name.trim()).filter(Boolean).slice(0, 12) : [];
-  const directQueries = uniqueStrings([...state.requiredPlaces, ...retainedPlaces]).filter(name => !state.excludedPlaces.includes(name));
+  const retainedPlaces = state.preserveExistingPlaces ? previousStops.map(stop => stop.name.trim()).filter(Boolean) : [];
+  const directQueries = uniqueStrings([...state.requiredPlaces, ...retainedPlaces], 500).filter(name => !state.excludedPlaces.includes(name));
   const prefetchedKeywords = new Map<string, ReturnType<typeof searchKakaoPlacesRemote>>();
   const keywordSearch = (intent: DateSearchIntent, page: number) => {
     const key = JSON.stringify([intent.region, intent.category, intent.query, page]);
@@ -1073,20 +1095,28 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   };
   // The explicit activity searches are known before the discovery model runs.
   // Reuse these promises if its brief asks for the same query.
-  for (const intent of primarySearchIntents(researchActive, researchPlan, selectedRegions[0], searchIntents(state))) {
+  for (const intent of planningInput ? [] : primarySearchIntents(researchActive, researchPlan, selectedRegions[0], searchIntents(state))) {
     void keywordSearch(intent, 1);
     void keywordSearch(intent, 2);
   }
-  const explicitSearchesPromise = Promise.all(directQueries.map(query => searchKakaoPlacesRemote({ query, region: searchRegions.at(-1), page: 1 })));
-  const areaSearchesPromise = Promise.all(selectedRegions.map(region => searchKakaoPlacesRemote({ query: region, page: 1 })));
+  const snapshotNow = new Date().toISOString();
+  const currentSnapshotVenues = new Map((sessionCapture?.previous?.records ?? []).flatMap(record => {
+    const venue = currentSessionVenue(record, snapshotNow, state);
+    return venue ? [[record.candidateId, venue] as const] : [];
+  }));
+  const unlocatedQueries = directQueries.filter(name => !planningInput
+    || ![...currentSnapshotVenues.values()].some(venue => matchesTerm(venue, name)));
+  const explicitSearchesPromise = Promise.all(unlocatedQueries.map(query => searchKakaoPlacesRemote({ query, region: searchRegions.at(-1), page: 1 })));
+  const areaSearchesPromise = Promise.all((planningInput ? [] : selectedRegions).map(region => searchKakaoPlacesRemote({ query: region, page: 1 })));
   const leadStartedAt = performance.now();
   let leadDoneAt = leadStartedAt;
-  const venueLeadsPromise = (researchActive ? Promise.resolve([]) : discoverVenueLeads(state))
+  const venueLeadsPromise = (researchActive || planningInput ? Promise.resolve([]) : discoverVenueLeads(state))
     .then(leads => { leadDoneAt = performance.now(); return leads; });
   // Venue design only needs the brief. Account context can be fetched during
   // that model call instead of extending the critical path afterward.
   const [discoveryBrief, [{ places: saved }, insight, archives]] = await Promise.all([
-    designDateDiscovery({ message, state, conversation: input.conversation, taste: tasteBoard.compare?.overlaps ?? [] }),
+    designDateDiscovery({ message, state, conversation: input.conversation, taste: tasteBoard.compare?.overlaps ?? [],
+      useExistingBrief: Boolean(planningInput) }),
     Promise.all([listPlaces(), loadLatestCoupleInsight(), listArchivedDatePlans()]),
   ]);
   state.discovery = discoveryBrief;
@@ -1101,7 +1131,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     dateLabel: state.dateLabel || "날짜 미정",
     startTime: time.startTime,
     endTime: time.endTime,
-    budget: state.budgetWon ?? null,
+    budget: null,
     region: selectedRegions.join(" · "),
     timeSpecified: time.specified || Object.keys(explicitTripWindows).length > 0,
   };
@@ -1126,10 +1156,10 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     qualitativeNeedLostCount: researchComparison?.qualitativeNeedLostCount,
     unnecessaryLegacySupportSearchCount: researchComparison?.unnecessaryLegacySupportSearchCount,
   }));
-  const geoIntents = researchActive ? [] : activitySearchIntents(state);
+  const geoIntents = researchActive || planningInput ? [] : activitySearchIntents(state);
   const allowHarsh = applyTasteHarshAllow(allowsHarshDateMeal(message, state.cuisine), message, avoidFoods);
-  const searchKeyword = (page: number) => executeResearchIntents(keywordIntents, page, keywordSearch);
-  const tourIntents = isTourApiConfigured()
+  const searchKeyword = (page: number) => planningInput ? Promise.resolve([]) : executeResearchIntents(keywordIntents, page, keywordSearch);
+  const tourIntents = !planningInput && isTourApiConfigured()
     ? (researchActive ? researchIntents : keywordIntents)
       .map(intent => ({ ...intent, tourType: tourContentTypeForIntent(intent) }))
       .filter(intent => intent.tourType != null)
@@ -1142,7 +1172,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       .map(intent => searchTourPlacesRemote({ category: intent.category, region: intent.region,
         query: tourDiscoveryQuery(intent.tourType!, intent.query),
         tourContentTypeId: intent.tourType!, page: 1 }))) : Promise.resolve([]);
-  const shortlist = (state.shownPlaces ?? [])
+  const shortlist = (planningInput ? [] : state.shownPlaces ?? [])
     .filter(name => !directQueries.includes(name) && !state.excludedPlaces.includes(name))
     .slice(0, 6);
   // Editorial lead search is slower than Kakao search. Let it continue while
@@ -1166,9 +1196,13 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   };
   // Signed provider snapshots are the user's chosen entities. Keep their IDs
   // through search, ranking and planning even if a later provider page omits them.
-  for (const record of selectedAnchorRecords) if (record.venue) remember(record.venue, undefined, true);
+  for (const record of selectedAnchorRecords) {
+    const venue = currentSnapshotVenues.get(record.candidateId);
+    if (venue) remember(venue, undefined, true);
+  }
   if (planningInput) for (const record of sessionCapture?.previous?.records ?? []) {
-    if (record.venue && !rejectedCandidateIds.has(record.candidateId)) remember(record.venue);
+    const venue = currentSnapshotVenues.get(record.candidateId);
+    if (venue && !rejectedCandidateIds.has(record.candidateId)) remember(venue);
   }
   // Keep the exact entities already shown on screen available during edits.
   // Provider search can omit a venue on a later request even though it is a
@@ -1389,7 +1423,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   if (researchActive) {
     try {
       const eligibleForResearch = (candidatePoolSnapshot as ReturnType<typeof buildDateCandidatePool> | null)?.eligible ?? pool;
-      const enriched = await enrichResearchNeedEvidence(eligibleForResearch, state, researchPlan!.needs);
+      const enriched = planningInput ? eligibleForResearch.map(freshResearchCandidateEvidence)
+        : await enrichResearchNeedEvidence(eligibleForResearch, state, researchPlan!.needs);
       for (const candidate of enriched) {
         const key = dateCandidateKey(candidate);
         const previous = unique.get(key);
@@ -1405,7 +1440,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     const eligibleForCoverage = (candidatePoolSnapshot as ReturnType<typeof buildDateCandidatePool> | null)?.eligible ?? pool;
     researchCoverage = evaluateResearchCoverage(researchPlan!, eligibleForCoverage, searchedResearchNeeds);
     const coverageFallback = researchCoverageFallbackReason(researchPlan!, researchCoverage);
-    if (coverageFallback) {
+    if (coverageFallback && !planningInput) {
       researchFallbackReason = coverageFallback;
       const fallbackIntents = [...discoveryBrief.queries, ...searchIntents(state)];
       const fallbackSearches = await Promise.all(fallbackIntents.flatMap(intent => [1, 2].map(page => keywordSearch(intent, page))));
@@ -1423,7 +1458,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       pool = currentPool();
     }
   }
-  if (!researchActive || researchFallbackReason) {
+  if ((!researchActive || researchFallbackReason) && !planningInput) {
     if (pool.length < 8 || missingWantedSlots(poolSlots(), wantedSlots).length) {
     const extras = await Promise.all(selectedRegions.flatMap(region => (
       rescueSearchQueries(region, wantedSlots).map(query => searchKakaoPlacesRemote({ query, page: 1 }))
@@ -1518,13 +1553,32 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   });
   candidateContextSnapshot.current = dateContext;
   const searchDone = performance.now();
-  if (candidates.length < 2) {
+  const missingRetainedPlace = state.preserveExistingPlaces && Boolean(input.currentPlan?.items.length)
+    && state.requiredPlaces.some(name => !candidates.some(candidate => matchesTerm(candidate, name)));
+  const existingVenues = input.currentPlan?.recommendations ?? [];
+  const excludedExistingCount = existingVenues.filter(place => state.excludedPlaces
+    .some(name => normalizeVenuePart(name) === normalizeVenuePart(place.name))).length;
+  const newVenueCount = new Set(candidates.filter(candidate => !existingVenues.some(place =>
+    place.id === dateCandidateKey(candidate)
+      || place.placeId.replace(/^discover:/, "") === dateCandidateKey(candidate)
+      || (normalizeVenuePart(place.name) === normalizeVenuePart(candidate.name)
+        && normalizeVenuePart(place.address) === normalizeVenuePart(candidate.roadAddress || candidate.address))))
+    .map(dateCandidateKey)).size;
+  const missingMutationCandidates = state.preserveExistingPlaces && Boolean(input.currentPlan?.items.length)
+    && state.intent === "modify" && newVenueCount < (state.addStop ? 1 : excludedExistingCount);
+  if (!candidates.length || missingRetainedPlace || missingMutationCandidates) {
     console.info("date_course_pipeline", JSON.stringify({ traceId, outcome: "insufficient_candidates", candidateCount: candidates.length,
       candidateObservations: dateContext.observations.length,
       intentMs: Math.round(intentDone - traceStarted), briefMs: Math.round(discoveryDone - intentDone),
       discoveryMs: Math.round(discoveryDone - traceStarted), searchMs: Math.round(searchDone - discoveryDone) }));
     const suggestions = nearbyAreaSuggestions(state);
-    const card = dateChatCard({
+    const card = missingMutationCandidates ? {
+      headline: "", lines: [state.addStop
+        ? "기존 장소와 다른 추가 후보를 확인하지 못해 변경을 적용하지 않았어요. 기존 코스를 유지하고 다른 후보를 더 찾아 주세요."
+        : "교체할 새 장소를 확인하지 못해 변경을 적용하지 않았어요. 기존 코스를 유지하고 다른 후보를 더 찾아 주세요."],
+    } : missingRetainedPlace ? {
+      headline: "", lines: ["기존 일정의 유지할 장소를 모두 확인하지 못해 변경을 적용하지 않았어요. 기존 코스를 유지하고 다른 후보를 더 찾아 주세요."],
+    } : dateChatCard({
       situation: "no_places",
       userMessage: message,
       state,
@@ -1551,7 +1605,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     state,
     recentlyVisited,
     memory,
-    researchPlanActive: researchActive && !researchFallbackReason,
+    researchPlanActive: Boolean(planningInput) || (researchActive && !researchFallbackReason),
     experiencePlan: handoffExperiencePlan,
     researchPlan: planningInput?.researchPlan ?? null,
     explorationPreferences: planningInput?.preferences,
@@ -1679,6 +1733,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
         : mutationProblems.includes("새 카페의 공간 근거 부족")
           ? "기존 코스는 그대로 두었어요. 새 카페의 공간 분위기를 확인할 근거가 없어 교체하지 않았어요. 다른 동네까지 넓혀 찾거나 원하시는 카페 이름을 알려 주세요."
         : "기존 코스는 그대로 유지했어요. 요청한 변경을 만족하는 새 장소와 동선을 아직 확보하지 못했어요. 원하는 음식이나 활동을 알려 주시면 그 조건으로 다시 찾아볼게요."
+      : recommendation.design?.feasibility?.passed === false ? recommendation.message
       : planningFailureMessage(state, recommendation.design?.rejectionReasons);
     return withLimitedTasks(() => chatResult({ headline: "", lines: [text] },
       editingExisting ? input.currentPlan!.state : state), state);
@@ -1691,6 +1746,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
 /** Existing action and AIPlannerResult contract stay unchanged. */
 export async function recommendDatePlan(input: RecommendDatePlanInput):
   Promise<AIPlannerResult | { error: string }> {
+  if ((await getAppSession()).mode !== "authenticated") return { error: "로그인 후 AI 플래너를 사용할 수 있어요." };
+  const inputError = validateDatePlannerInput(input);
+  if (inputError) return { error: inputError };
   return recommendDatePlanCore(input);
 }
 
@@ -1698,9 +1756,17 @@ export async function recommendDatePlan(input: RecommendDatePlanInput):
 export async function recommendDatePlanWithSession(input: RecommendDatePlanInput & {
   planningSessionId: string; sessionCandidates?: SessionCandidateContext | null;
 }): Promise<{ result: AIPlannerResult | { error: string }; sessionCandidates: SessionCandidateContext }> {
+  const appSession = await getAppSession();
+  if (appSession.mode !== "authenticated") return {
+    result: { error: "로그인 후 AI 플래너를 사용할 수 있어요." },
+    sessionCandidates: emptySessionCandidates("")
+  };
+  const scope = { actorId: appSession.userId, coupleId: appSession.coupleId };
+  const inputError = validateDatePlannerInput(input);
+  if (inputError) return { result: { error: inputError }, sessionCandidates: emptySessionCandidates("") };
   const sessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
     .test(input.planningSessionId) ? input.planningSessionId : randomUUID();
-  const previous = verifiedSessionCandidates(input.sessionCandidates, sessionId);
+  const previous = verifiedSessionCandidates(input.sessionCandidates, sessionId, scope);
   const capture = { previous, records: [] as DateCandidateRecord[],
     supplementaryRecords: [] as DateCandidateRecord[],
     supplementaryShown: [] as Array<{ name: string; address?: string }>,
@@ -1709,7 +1775,7 @@ export async function recommendDatePlanWithSession(input: RecommendDatePlanInput
   const result = await recommendDatePlanCore(input, capture);
   if ("error" in result) return { result, sessionCandidates: previous
     ?? sealSessionCandidates(mergeSessionCandidates(null, [], { sessionId,
-      observedAt: new Date().toISOString(), turnId: `${sessionId}:0` })) };
+      observedAt: new Date().toISOString(), turnId: `${sessionId}:0` }), scope) };
   try {
     const observedAt = new Date().toISOString();
     const resetSession = input.previousState?.intent === "reset"
@@ -1728,11 +1794,11 @@ export async function recommendDatePlanWithSession(input: RecommendDatePlanInput
       resetSession ? [] : capture.feedbackEntries);
     const observation = candidateSessionObservation(previous, next, capturedRecords, observedAt);
     if (process.env.NODE_ENV === "development") console.info("date_candidate_session", JSON.stringify(observation.data));
-    return { result, sessionCandidates: sealSessionCandidates(next) };
+    return { result, sessionCandidates: sealSessionCandidates(next, scope) };
   } catch {
     // Session history is supplemental; it cannot fail the legacy result.
     return { result, sessionCandidates: previous ?? sealSessionCandidates(mergeSessionCandidates(null, [], {
       sessionId, observedAt: new Date().toISOString(),
-      turnId: `${sessionId}:0` })) };
+      turnId: `${sessionId}:0` }), scope) };
   }
 }

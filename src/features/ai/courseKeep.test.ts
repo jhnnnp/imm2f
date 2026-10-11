@@ -4,6 +4,7 @@ import {
   DATE_KEEP_LABEL,
   TRIP_KEEP_LABEL,
   courseDayCount,
+  courseKeepError,
   courseKeepTitle,
   datesInRange,
   keepIntent,
@@ -27,6 +28,13 @@ function stop(name: string, dayIndex = 0): PlanItem {
 }
 
 describe("courseKeep", () => {
+  it("prevents a multiple-day trip from being flattened into a single date", () => {
+    const input = { destination: "date" as const, items: [stop("첫날"), stop("둘째날", 1)], startDate: null, dayCount: 2, title: "여행" };
+    expect(courseKeepError(input)).toContain("여행에 담아");
+    expect(courseKeepError({ ...input, dayCount: 1 })).toContain("여행에 담아");
+    expect(courseKeepError({ ...input, destination: "trip" })).toBeNull();
+    expect(courseKeepError({ ...input, dayCount: 1, items: [stop("첫날")] })).toBeNull();
+  });
   it("asks where to keep a confirmed course unless the destination is already named", () => {
     expect(keepIntent("이걸로 하자")).toBe("ask");
     expect(keepIntent("이 코스 담아줘")).toBe("ask");

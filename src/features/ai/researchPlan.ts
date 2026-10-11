@@ -56,7 +56,7 @@ const qualityEvidence: Record<string, string[]> = {
   spacious: ["seating", "space"],
   traditional: ["architecture", "interior"],
   hanok: ["architecture", "interior"],
-  dessert: ["menu"], value_for_money: ["menu", "price"], local_feel: [],
+  dessert: ["menu"], local_feel: [],
 };
 const unique = (values: string[]) => [...new Set(values)];
 const qualityNames = (qualities: ExperienceQuality[]) => unique(qualities.map(item => item.dimension));

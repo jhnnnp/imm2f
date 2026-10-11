@@ -19,10 +19,16 @@ type EditPayload = {
   }>;
 };
 
-function clampMinutes(value: unknown, fallback: number) {
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(30, Math.min(240, Math.round(n / 10) * 10));
+function editMinutes(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 30 && value <= 240
+    && value % 10 === 0 ? value : null;
+}
+
+function explicitlyRemovesAll(prompt: string, itemCount: number) {
+  const remove = /빼|삭제|제외|지워|지우|없애|취소|비워|비우/.test(prompt);
+  const negated = /(?:빼|삭제하|제외하|지우|없애|취소하|비우)지\s*(?:말|않)|(?:삭제|제외|취소)\s*(?:금지|하지\s*마)/.test(prompt);
+  const all = /전부|모두|전체|싹|다\s*(?:빼|삭제|제외|지워|지우|없애|취소|비워|비우)/.test(prompt);
+  return remove && !negated && (all || itemCount === 1);
 }
 
 export async function proposePlanEditsWithOpenAi(input: {
@@ -47,7 +53,6 @@ export async function proposePlanEditsWithOpenAi(input: {
     category: item.category,
     startTime: item.startTime,
     durationMinutes: item.durationMinutes,
-    expectedCost: item.expectedCost,
   }));
 
   try {
@@ -78,14 +83,13 @@ export async function proposePlanEditsWithOpenAi(input: {
     }
     const changes: PlanChange[] = [];
     const seen = new Set<string>();
-    const explicitlyClearAll = /전부|모두|전체|싹|다\s*빼|다\s*지워/.test(prompt)
-      || (input.items.length === 1 && /빼|삭제|제외/.test(prompt));
+    const explicitlyClearAll = explicitlyRemovesAll(prompt, input.items.length);
     let removals = 0;
 
     for (const row of Array.isArray(parsed.changes) ? parsed.changes : []) {
-      if (!row || typeof row !== "object") continue;
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
       if (changes.length >= 4) break;
-      const itemId = String(row.itemId ?? "");
+      const itemId = typeof row.itemId === "string" ? row.itemId : "";
       const item = allowed.get(itemId);
       if (!item || seen.has(itemId)) continue;
       if (row.type === "remove") {
@@ -101,8 +105,8 @@ export async function proposePlanEditsWithOpenAi(input: {
         continue;
       }
       if (row.type === "duration") {
-        const minutes = clampMinutes(row.minutes, item.durationMinutes);
-        if (minutes === item.durationMinutes) continue;
+        const minutes = editMinutes(row.minutes);
+        if (minutes === null || minutes === item.durationMinutes) continue;
         seen.add(itemId);
         changes.push({
           type: "duration",

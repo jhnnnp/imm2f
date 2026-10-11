@@ -81,7 +81,7 @@ describe("limited execution conversation evaluation", () => {
     }));
   });
 
-  it("A/B/C: a fixed pool avoids shown venues, passes verified noise feedback softly, and keeps budget hard", () => {
+  it("A/B/C: a fixed pool avoids shown venues and uses verified noise feedback while ignoring budgets", () => {
     const history = session();
     const ask = { kind: "cafe" as const, query: "카페", area: "성수" };
     // A is the first generic request; B and C must not silently recommend A or B again.
@@ -101,7 +101,7 @@ describe("limited execution conversation evaluation", () => {
     expect(other.excludedCandidateIds).toEqual(expect.arrayContaining(["kakao:A", "kakao:B"]));
     expect(soft).toEqual([{ attribute: "noise", sentiment: "negative",
       targetName: "카페 A", targetCandidateId: "kakao:A", priority: "current_feedback" }]);
-    expect(constrained.reusable.map(row => row.externalPlaceId)).toEqual(["C"]);
+    expect(constrained.reusable.map(row => row.externalPlaceId)).toEqual(["C", "D"]);
   });
 
   it("D: comparison leaves unsupported noise and stale hours unknown", async () => {
@@ -136,7 +136,7 @@ describe("limited execution conversation evaluation", () => {
         sources: [{ label: "a", url: "https://example.com/a" },
           { label: "b", url: "https://example.com/a" }] } };
     const metrics = evaluateLimitedDateTurn({ fixture, understanding, plan,
-      primary, merged: flawed, state: { ...state, budgetWon: 100000 }, sessionCandidates: history,
+      primary, merged: flawed, state: { ...state, excludedPlaces: ["카페 D"] }, sessionCandidates: history,
       taskResults: [{ taskId: "recommend", taskType: "recommend_places", status: "success",
         source: "existing_place_recommendation", coveredByLegacyRoute: false,
         reusedCount: 0, searched: false, selectedCandidateIds: ["kakao:A", "kakao:D"] },

@@ -1,6 +1,7 @@
 export type ActivityAction =
   | "PLACE_ADDED"
   | "PLACE_LIKED"
+  | "PLACE_FOLDERS_UPDATED"
   | "TRIP_CREATED"
   | "TRIP_UPDATED"
   | "DATE_CREATED"
@@ -38,11 +39,3 @@ export function hrefForActivity(action: string) {
   if (action === "TASTE_UPDATED") return "/insights";
   return "/";
 }
-
-export type BudgetBucketId = "food" | "cafe" | "transport" | "stay" | "tour" | "shop" | "other";
-
-export type BudgetBreakdown = {
-  id: BudgetBucketId;
-  label: string;
-  amount: number;
-};

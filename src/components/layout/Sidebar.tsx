@@ -9,20 +9,16 @@ import { signOut } from "@/features/auth/session";
 import { initialFromName } from "@/features/auth/types";
 import { pairLabel } from "@/features/auth/koreanName";
 import { BrandMark, SidebarIcon } from "./SidebarIcon";
+import { useDialogFocus } from "@/components/shared/useDialogFocus";
 
 export function Sidebar() {
   const pathname = usePathname();
   const session = useAppSession();
   const [ready, setReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useDialogFocus<HTMLDivElement>({ open: menuOpen, onClose: () => setMenuOpen(false) });
   useEffect(() => setReady(true), []);
   useEffect(() => setMenuOpen(false), [pathname]);
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenuOpen(false); };
-    document.addEventListener("keydown", onEscape);
-    return () => document.removeEventListener("keydown", onEscape);
-  }, [menuOpen]);
   const hasIdentity = session.mode === "authenticated" || session.mode === "setup_error";
   const youName = hasIdentity ? session.displayName : "나";
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? null : null;
@@ -58,7 +54,7 @@ export function Sidebar() {
       </nav>
       {menuOpen && <div className="mobile-menu-layer">
         <button className="mobile-menu-scrim" type="button" aria-label="전체 메뉴 닫기" onClick={() => setMenuOpen(false)} />
-        <div className="mobile-menu-sheet" id="mobile-all-menu" role="dialog" aria-label="전체 메뉴">
+        <div ref={menuRef} tabIndex={-1} className="mobile-menu-sheet" id="mobile-all-menu" role="dialog" aria-modal="true" aria-label="전체 메뉴">
           <div className="mobile-menu-head"><strong>전체 메뉴</strong><button type="button" onClick={() => setMenuOpen(false)} aria-label="닫기">×</button></div>
           <div className="mobile-menu-grid">
             {NAVIGATION.filter((item): item is Extract<(typeof NAVIGATION)[number], { href: string }> => "href" in item).map(item => <AppLink href={item.href} key={item.href} className={pathname === item.href ? "is-active" : ""} onClick={() => setMenuOpen(false)}>

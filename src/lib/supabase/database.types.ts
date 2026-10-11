@@ -3,6 +3,18 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 export type Database = {
   public: {
     Tables: {
+      couple_folders: {
+        Row: { id: string; couple_id: string; scope: "vault" | "places"; name: string; color: "sage" | "blue" | "rose" | "sand" | "lavender"; created_at: string; updated_at: string };
+        Insert: { id?: string; couple_id: string; scope: "vault" | "places"; name: string; color?: "sage" | "blue" | "rose" | "sand" | "lavender"; created_at?: string; updated_at?: string };
+        Update: { name?: string; color?: "sage" | "blue" | "rose" | "sand" | "lavender" };
+        Relationships: [];
+      };
+      couple_folder_items: {
+        Row: { id: string; couple_id: string; scope: "vault" | "places"; folder_id: string; place_id: string | null; note_id: string | null; item_id: string };
+        Insert: { id?: string; couple_id: string; scope: "vault" | "places"; folder_id: string; place_id?: string | null; note_id?: string | null };
+        Update: { folder_id?: string };
+        Relationships: [];
+      };
       profiles: {
         Row: {
           id: string;
@@ -514,6 +526,12 @@ export type Database = {
         };
         Relationships: [];
       };
+      memory_update_attempts: {
+        Row: { attempt_id: string; memory_id: string; couple_id: string; actor_user_id: string; request: Json; created_at: string };
+        Insert: { attempt_id: string; memory_id: string; couple_id: string; actor_user_id: string; request: Json; created_at?: string };
+        Update: never;
+        Relationships: [];
+      };
       memory_photos: {
         Row: {
           id: string;
@@ -766,6 +784,7 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      move_couple_folder_items: { Args: { p_scope: string; p_item_ids: string[]; p_folder_id: string | null }; Returns: number };
       match_date_playbook: {
         Args: { query_embedding: string; target_stage: string | null; match_count?: number };
         Returns: { id: string; similarity: number }[];
@@ -785,6 +804,14 @@ export type Database = {
       accept_couple_invite: { Args: { invite_token: string }; Returns: string };
       get_invite_preview: { Args: { invite_token: string }; Returns: Json };
       leave_couple: { Args: Record<string, never>; Returns: string };
+      create_memory_atomic: {
+        Args: { target_id: string; target_couple: string; target_memory: Json; target_photos?: Json };
+        Returns: Json;
+      };
+      update_memory_atomic: {
+        Args: { target_attempt: string; target_id: string; target_couple: string; target_expected: Json; target_memory: Json; target_photos?: Json };
+        Returns: Json;
+      };
       save_couple_plan_atomic: {
         Args: {
           target_kind: string;

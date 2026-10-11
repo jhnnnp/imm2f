@@ -29,8 +29,58 @@ export function requestedActivityOrder(message: string, required: DateActivityId
   }).sort((a, b) => a.position - b.position).map(item => item.slot);
 }
 
+type Transport = Discovery["transport"];
+const TRANSPORT_TERMS = /(?:자차|자동차|차량|렌터카|렌트카|운전|도보|걸어서|걸어\s*다니|대중교통|지하철|버스)(?=$|[\s,.!?;]|로|으로|는|은|를|을|가|이|만|도|여행|위주|해|하)|(?<![가-힣])차로/g;
+const rejectedTransport = /^(?:(?:로|으로|는|은|을|를|이|가|도|만)\s*)*(?:말고|말아|말자|아니|없|없이|싫|불가|안\s*(?:가|갈|타|탈|이용|이동|운전)|못\s*(?:가|갈|타|탈|이용|이동|운전)|(?:이용|이동|운전|타)(?:하지|지)\s*않|(?:가|타|이동하|이용하|운전하|걷|다니)(?:는|기|긴|지)[가-힣\s]{0,5}(?:싫|않))/;
+
+/** Only user-authored transport choices establish the fast-path mode.
+ * Parking, a walk attraction, proximity to a station, and assistant suggestions
+ * are not choices. Later corrections supersede earlier raw user requests. */
+export function explicitDiscoveryTransport(input: { message: string; userRequests?: string[];
+  conversation?: DateChatTurn[]; previous?: Transport }): Transport {
+  let selected: Transport | undefined = input.previous;
+  const texts = [...(input.userRequests ?? []), ...(input.conversation ?? [])
+    .filter(turn => turn.role === "user").map(turn => turn.text), input.message];
+  for (const text of texts) {
+    const normalized = text.normalize("NFKC");
+    for (const clause of normalized.match(/[^,.!?;\n]+[,.!?;\n]?/g) ?? []) {
+      // An option being discussed is not an instruction to change transport.
+      if (/또는|혹은|둘\s*중|고민|갈지|탈지/.test(clause)
+        || /\?|어때|가능(?:해|할까)|갈까|할까/.test(clause)
+          && !/갈게|가자|가고\s*싶|다닐게|이동할게|짜\s*줘|만들어\s*줘|추천해\s*줘/.test(clause)) continue;
+      const choices: Transport[] = [];
+      for (const match of clause.matchAll(TRANSPORT_TERMS)) {
+        const term = match[0];
+        const mode: Transport = /도보|걸어/.test(term) ? "walk"
+          : /대중교통|지하철|버스/.test(term) ? "transit" : "drive";
+        const after = clause.slice(match.index + term.length).trimStart();
+        const before = clause.slice(0, match.index).slice(-12);
+        if (rejectedTransport.test(after) || /(?:^|\s)(?:안|못)\s*$/.test(before)) {
+          if (selected === mode) selected = undefined;
+          continue;
+        }
+        const chosen = clause.trim().replace(/[,.!?;]$/, "") === term
+          || /차로|걸어서|걸어\s*다니/.test(term)
+          || /^(?:(?:는|은|를|을|이|가)\s*)*(?:로|으로|타고|탈게|탈래|타자|이동|다니|여행|위주|만|이용)/.test(after)
+          || term === "운전" && /^(?:해|하|할게|할래)/.test(after);
+        // Merely owning a car or liking a bus is not a request to use it.
+        if (!chosen) continue;
+        choices.push(mode);
+      }
+      const distinct = [...new Set(choices)];
+      if (distinct.length === 1) selected = distinct[0];
+      // Mixed alternatives need context that this three-mode contract cannot
+      // express; retain the previous mode until a clear correction is given.
+      else if (distinct.length > 1 && /대신|말고|아니고|바꿔|바꾸|바꿀|변경|이번|이제|했는데|였는데|하지만/.test(clause)) selected = choices.at(-1);
+    }
+  }
+  return selected ?? "transit";
+}
+
 /** Plan the research before venue selection. A cuisine/category is not a complete date brief. */
-export async function designDateDiscovery(input: { message: string; state: AIPlannerState; conversation?: DateChatTurn[]; taste: string[] }): Promise<Discovery> {
+export async function designDateDiscovery(input: { message: string; state: AIPlannerState; conversation?: DateChatTurn[]; taste: string[];
+  /** Exploration already supplies verified candidates; retain its brief without another model pass. */
+  useExistingBrief?: boolean }): Promise<Discovery> {
   const areas = selectedAreas(input.state);
   const previous = input.state.discovery;
   const trip = isTravelPlan(input.state);
@@ -45,19 +95,21 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
   const size = courseSize(input.state);
   const pinnedCount = input.state.preserveExistingPlaces ? input.state.pinOrder.length : 0;
   const swapping = input.state.intent === "modify" && input.state.pinOrder.some(name => input.state.excludedPlaces.includes(name));
-  const additionCount = pinnedCount && (input.state.addStop || swapping) ? Math.min(12, pinnedCount + (input.state.addStop ? 1 : 0)) : 0;
+  const additionCount = pinnedCount && (input.state.addStop || swapping) ? pinnedCount + (input.state.addStop ? 1 : 0) : 0;
   const defaults = trip ? ["대표 관광명소", "지역 음식 맛집", "전망 좋은 카페", "산책 명소"] : ["데이트 레스토랑", "디저트 카페", "독립서점", "전시 갤러리", "가볼만한곳"];
   const queries = areas.flatMap(region => defaults.map(query => ({ region, query })));
+  const transport = explicitDiscoveryTransport({ message: input.message,
+    userRequests: input.state.userRequests, conversation: input.conversation, previous: previous?.transport });
   const fallback: Discovery = {
     themes: previous?.themes ?? [trip ? "지역의 음식과 풍경을 함께 즐기는 코스" : "식사와 공간, 동네의 볼거리를 함께 즐기는 코스"],
     priorities: previous?.priorities ?? [], queries: queries.slice(0, 12),
-    transport: previous?.transport ?? "transit",
+    transport,
     requiredActivities: [...new Set(lockedActivities)],
     activityOrder: userOrder.length >= 2 ? userOrder : retainedOrder,
     minStops: additionCount || size.min,
     maxStops: additionCount || size.max,
   };
-  if (!isOpenAiConfigured()) return fallback;
+  if (input.useExistingBrief || !isOpenAiConfigured()) return fallback;
   const playbook = await retrieveDatePlaybook(input.message, input.state, "discovery", trip ? 8 : 6);
   const raw = await completeJson<Record<string, unknown>>({
     timeoutMs: 15000, maxTokens: 1800, reasoningEffort: "low", temperature: 0.3,
@@ -93,7 +145,7 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
   return {
     themes: list(raw.themes, 3).length ? list(raw.themes, 3) : fallback.themes,
     priorities: list(raw.priorities, 8), queries: modelQueries.length ? modelQueries : fallback.queries,
-    transport: raw.transport === "drive" || raw.transport === "transit" || raw.transport === "walk" ? raw.transport : fallback.transport,
+    transport: fallback.transport,
     requiredActivities: fallback.requiredActivities,
     activityOrder: userOrder.length >= 2 ? userOrder : retainedOrder,
     minStops: min, maxStops: max,

@@ -10,6 +10,8 @@ export function PlanTimeline({
   onReorder,
   onRemove,
   onUpdate,
+  onMoveDay,
+  dayCount = 1,
   onDragSessionStart,
   onDragSessionEnd,
   consumeExternalDrop,
@@ -22,6 +24,8 @@ export function PlanTimeline({
   onReorder: (items: PlanItem[]) => void;
   onRemove?: (id: string) => void;
   onUpdate?: (id: string, patch: Pick<PlanItem, "startTime" | "durationMinutes">) => void;
+  onMoveDay?: (id: string, day: number) => void;
+  dayCount?: number;
   onDragSessionStart?: (id: string) => void;
   onDragSessionEnd?: () => void;
   /** Return true when a drop was handled outside this list (e.g. another day). */
@@ -50,6 +54,11 @@ export function PlanTimeline({
     const reordered = [...items];
     const from = reordered.findIndex(item => item.id === dragged.current);
     const to = reordered.findIndex(item => item.id === targetId);
+    if (from < 0 || to < 0) {
+      setDraggingId(null);
+      setOverId(null);
+      return;
+    }
     const [moved] = reordered.splice(from, 1);
     reordered.splice(to, 0, moved);
     onReorder(reordered.map((item, order) => ({ ...item, order })));
@@ -98,6 +107,18 @@ export function PlanTimeline({
             onRemove={onRemove}
             onEdit={setEditingId}
             onUpdate={onUpdate}
+            onMovePrevious={index > 0 ? () => {
+              const next = [...items];
+              [next[index - 1], next[index]] = [next[index], next[index - 1]];
+              onReorder(next.map((row, order) => ({ ...row, order })));
+            } : undefined}
+            onMoveNext={index < items.length - 1 ? () => {
+              const next = [...items];
+              [next[index], next[index + 1]] = [next[index + 1], next[index]];
+              onReorder(next.map((row, order) => ({ ...row, order })));
+            } : undefined}
+            onMoveDay={onMoveDay}
+            dayCount={dayCount}
             editing={editingId === item.id}
             dragging={draggingId === item.id}
             dropTarget={overId === item.id && draggingId !== item.id && !dismissing}

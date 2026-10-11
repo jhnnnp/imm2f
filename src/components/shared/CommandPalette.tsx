@@ -68,6 +68,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           value={query}
           onChange={event => setQuery(event.target.value)}
           placeholder="장소, 추억, 일정을 찾아 보세요"
+          aria-label="전체 검색어"
         />
         {searching ? <i className="button-spinner" aria-label="검색 중" /> : query && <button type="button" className="text-button" onClick={() => setQuery("")} aria-label="검색어 지우기">×</button>}
       </div>

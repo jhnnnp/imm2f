@@ -1,3 +1,5 @@
+import "server-only";
+
 export function getOpenAiApiKey() {
   return process.env.OPENAI_API_KEY?.trim() ?? "";
 }
@@ -18,6 +20,10 @@ export function isOpenAiConfigured() {
 }
 
 export function getOpenAiSearchModel() {
-  // Chat-only models can still write replies while a supported model searches.
-  return normalizeOpenAiModel(process.env.OPENAI_SEARCH_MODEL) || getOpenAiModel();
+  const configured = normalizeOpenAiModel(process.env.OPENAI_SEARCH_MODEL) || getOpenAiModel();
+  // These chat models support JSON/function calls, but not the hosted
+  // Responses web_search tool. Keep the user's chat model and use a
+  // documented search-capable model for this separate operation.
+  return /^(?:gpt-4o(?:-mini)?(?:-\d{4}-\d{2}-\d{2})?|gpt-4(?:-turbo)?(?:-[\w-]+)?|gpt-3\.5-turbo(?:-[\w-]+)?|gpt-4\.1-nano(?:-\d{4}-\d{2}-\d{2})?|o1(?:-mini|-preview)?(?:-\d{4}-\d{2}-\d{2})?|o3-mini(?:-\d{4}-\d{2}-\d{2})?)$/i.test(configured)
+    ? "gpt-4.1-mini" : configured;
 }

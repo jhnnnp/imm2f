@@ -17,6 +17,13 @@ export type CourseKeepInput = {
 
 export type CourseKeepResult = { ok: true } | { error: string };
 
+/** A single-date draft cannot represent multiple travel days. */
+export function courseKeepError(input: CourseKeepInput): string | null {
+  if (input.destination === "date" && (input.dayCount > 1 || input.items.some(item => item.dayIndex !== 0)))
+    return "여러 날의 코스는 여행에 담아 주세요. 데이트에는 하루 코스만 담을 수 있어요.";
+  return null;
+}
+
 export function courseDayCount(items: PlanItem[], nights = 0) {
   const fromItems = items.reduce((max, item) => Math.max(max, (item.dayIndex ?? 0) + 1), 1);
   const fromStay = nights > 0 ? nights + 1 : 1;

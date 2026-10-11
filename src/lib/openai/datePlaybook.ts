@@ -168,9 +168,9 @@ export const DATE_PLAYBOOK: DatePlaybookCard[] = [
     example: "작년 블로그의 영업시간으로 이번 주 토요일의 이용 가능성을 확정하지 않는다.",
   },
   {
-    id: "budget-and-access", version: 1, title: "비용과 접근성 확인", stage: "selection", tags: ["budget", "accessible", "low_walking"], priority: 90, active: true,
-    guidance: "예산·계단·휠체어·긴 도보처럼 사용자가 명시한 제약은 추정 가격이나 직선거리로 충족 처리하지 않는다. 핵심 정보가 없으면 확인이 필요한 후보로 표시하고 무리한 확정 코스를 피한다.",
-    example: "메뉴 가격을 모르는 식당을 두 사람 5만원 예산 안이라고 단정하지 않는다.",
+    id: "budget-and-access", version: 2, title: "접근성과 이동 확인", stage: "selection", tags: ["accessible", "low_walking"], priority: 90, active: true,
+    guidance: "계단·휠체어·긴 도보처럼 사용자가 명시한 접근성 제약은 추정 정보나 직선거리로 충족 처리하지 않는다. 핵심 정보가 없으면 확인이 필요한 후보로 표시하고 무리한 확정 코스를 피한다.",
+    example: "계단과 출입구 정보를 모르는 장소를 휠체어로 이용할 수 있다고 단정하지 않는다.",
   },
   {
     id: "food-exclusion-check", version: 1, title: "음식 제외 조건 검증", stage: "selection", tags: ["all", "food_safety"], requiredTags: ["food_safety"], priority: 96, active: true,
@@ -304,7 +304,6 @@ export function datePlaybookTags(message: string, state: AIPlannerState) {
   if (/휠체어|유모차|계단\s*없/.test(text)) tags.add("accessible");
   if (state.dateLabel || /오늘|내일|이번\s*주|\d{1,2}월\s*\d{1,2}일/.test(text)) tags.add("date_specific");
   if (state.startTime || state.endTime || /\d{1,2}시|오전|오후|저녁\s*\d/.test(text)) tags.add("time_specific");
-  if (state.budgetWon || /예산|만원|비용/.test(text)) tags.add("budget");
   if (/기념일|생일|프로포즈|특별한\s*날|화해/.test(text)) tags.add("occasion");
   if (/짧게|잠깐|한\s*두\s*시간/.test(text)) tags.add("short_date");
   if (state.requiredPlaces.length || state.excludedPlaces.length || state.pinOrder.length) tags.add("personalized");
@@ -327,13 +326,16 @@ export function selectDatePlaybook(cards: DatePlaybookCard[], tags: ReadonlySet<
     .slice(0, limit).map(item => item.card);
 }
 
-export async function retrieveDatePlaybook(message: string, state: AIPlannerState, stage: DatePlaybookStage, limit = 5, extraTags: string[] = []) {
+export async function retrieveDatePlaybook(message: string, state: AIPlannerState, stage: DatePlaybookStage, limit = 5, extraTags: string[] = [], signal?: AbortSignal) {
+  if (signal?.aborted) return [];
   const tags = datePlaybookTags(message, state);
   extraTags.forEach(tag => tags.add(tag));
   const all = await loadPlaybook();
+  if (signal?.aborted) return [];
   const query = [message, state.objective, ...(state.preferences?.vibe ?? []), ...(state.discovery?.priorities ?? [])]
     .filter(Boolean).join(" ").slice(0, 700);
-  const similarity = !query ? new Map<string, number>() : await playbookSemanticScores(query, all, stage);
+  const similarity = !query ? new Map<string, number>() : await playbookSemanticScores(query, all, stage, signal);
+  if (signal?.aborted) return [];
   const cards = similarity.size ? all.filter(card => card.active && card.stage === stage
     && (card.requiredTags ?? []).every(tag => tags.has(tag))
     && !(card.excludedTags ?? []).some(tag => tags.has(tag)))

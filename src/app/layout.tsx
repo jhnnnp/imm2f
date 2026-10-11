@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { Nanum_Pen_Script } from "next/font/google";
-import { SessionProvider } from "@/features/auth/components/SessionProvider";
 import "./globals.css";
 
 const accentScript = Nanum_Pen_Script({
@@ -44,7 +43,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="ko" className={`${hand.variable} ${accentScript.variable}`} data-scroll-behavior="smooth">
       <body>
-        <SessionProvider>{children}</SessionProvider>
+        {children}
       </body>
     </html>
   );

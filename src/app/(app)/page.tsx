@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { PageLoading } from "@/components/layout/PageLoading";
 import { HomeDashboard } from "@/features/home/components/HomeDashboard";
 import { HomeRecentMemory } from "@/features/home/components/HomeRecentMemory";
+import { HomeWorkspaceSync } from "@/features/home/components/HomeWorkspaceSync";
 import { RecentActivityPreview } from "@/features/collaboration/components/RecentActivityPreview";
 import { listMemories } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
@@ -31,6 +32,7 @@ function HomeMemoryLoading() {
 export default function HomePage() {
   return (
     <>
+      <HomeWorkspaceSync />
       <div className="page-intro home-intro">
         <div>
           <span className="eyebrow">ONLY US</span>

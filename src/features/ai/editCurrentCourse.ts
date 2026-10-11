@@ -7,6 +7,14 @@ import { distanceMeters } from "@/features/places/geo";
 /** Apply a conversational edit to the existing entities, without another venue search. */
 export function editCurrentCourse(plan: AIPlannerReply, edit: NonNullable<ChatRoute["edit"]>, state: AIPlannerState,
   options?: { targetItemId?: string; targetStartTime?: string; verifiedTravelMinutes?: number[] }): AIPlannerResult {
+  const validIndices = Array.isArray(edit.indices) && edit.indices.every(index => Number.isInteger(index) && index >= 1 && index <= plan.items.length)
+    && new Set(edit.indices).size === edit.indices.length;
+  if (!validIndices || (edit.kind === "remove" && !edit.indices.length)
+    || (edit.kind === "reorder" && edit.indices.length !== plan.items.length)
+    || plan.recommendations.length !== plan.items.length) {
+    const message = "변경할 장소를 정확히 확인하지 못했어요. 기존 코스는 유지했어요. 표시된 장소 번호와 원하는 변경을 다시 알려 주세요.";
+    return { status: "chat", message, card: { headline: "", lines: [message] }, state: plan.state };
+  }
   const indexed = plan.items.map((item, index) => ({ item, recommendation: plan.recommendations[index], card: plan.card.stops?.[index], originalIndex: index + 1 }));
   const selected = edit.kind === "remove" ? indexed.filter(stop => !edit.indices.includes(stop.originalIndex))
     : edit.kind === "reorder" ? edit.indices.map(index => indexed[index - 1]).filter(Boolean) : indexed;
@@ -18,17 +26,17 @@ export function editCurrentCourse(plan: AIPlannerReply, edit: NonNullable<ChatRo
       ? clockMinutes(options.targetStartTime) : -1;
     if (targetIndex < 0 || desired < 0) scheduled = null;
     else {
-      const prior = scheduled[targetIndex - 1];
       const target = scheduled[targetIndex];
+      const prior = scheduled[targetIndex - 1]?.dayIndex === target.dayIndex ? scheduled[targetIndex - 1] : undefined;
       const gap = prior ? options.verifiedTravelMinutes?.[targetIndex - 1]
         ?? scheduleGapMinutes(prior.item.coordinates ?? prior.recommendation.coordinates,
           target.item.coordinates ?? target.recommendation.coordinates, state.discovery?.transport ?? "walk") : 0;
       const earliest = prior ? clockMinutes(prior.startTime) + prior.durationMinutes + gap : clockMinutes(window.startTime);
       const shift = desired - clockMinutes(target.startTime);
-      const last = scheduled.at(-1)!;
-      const finalEnd = clockMinutes(last.startTime) + (scheduled.length - 1 >= targetIndex ? shift : 0) + last.durationMinutes;
+      const last = scheduled.filter(stop => stop.dayIndex === target.dayIndex).at(-1)!;
+      const finalEnd = clockMinutes(last.startTime) + shift + last.durationMinutes;
       if (desired < earliest || finalEnd > clockMinutes(window.specified ? window.endTime : "23:59")) scheduled = null;
-      else scheduled = scheduled.map((stop, index) => index >= targetIndex
+      else scheduled = scheduled.map((stop, index) => index >= targetIndex && stop.dayIndex === target.dayIndex
         ? { ...stop, startTime: formatClock(clockMinutes(stop.startTime) + shift) } : stop);
     }
   }
@@ -52,7 +60,7 @@ export function editCurrentCourse(plan: AIPlannerReply, edit: NonNullable<ChatRo
       : options?.targetItemId && options.targetStartTime
         ? `${items.find(item => item.id === options.targetItemId)?.placeName ?? "요청한 장소"} 시작을 ${options.targetStartTime}로 옮겼어요. 나머지 장소는 순서대로 이어져요.`
         : `장소와 순서는 그대로 두고 ${window.startTime}부터 ${window.endTime} 안에 마치도록 시간을 맞췄어요.`;
-  return { ...plan, state: nextState, message, condition: { ...plan.condition, startTime: window.startTime, endTime: window.endTime, dateLabel: state.dateLabel || plan.condition.dateLabel, budget: state.budgetWon ?? null, timeSpecified: window.specified },
+  return { ...plan, state: nextState, message, condition: { ...plan.condition, startTime: window.startTime, endTime: window.endTime, dateLabel: state.dateLabel || plan.condition.dateLabel, budget: null, timeSpecified: window.specified },
     design: plan.design ? { ...plan.design, theme: edit.kind === "remove" ? "기존 코스에서 요청한 장소를 제외한 코스" : plan.design.theme, totalDistanceMeters: hops.reduce<number>((sum, hop) => sum + (hop ?? 0), 0) } : undefined,
     items, recommendations, card: { ...plan.card, headline: `${selectedAreas(state).join(" · ")} ${items.length}곳`, lines: [message], stops },
   };

@@ -1,14 +1,15 @@
 import { blocksCourse, legacyPlanningIssue, partitionPlanningIssues, planningIssue, type PlanningIssue, type PlanningIssueScope, type PlanningIssueSeverity, type PlanningQualitySignal, type PLANNING_POLICIES } from "./planningPolicy";
-import { planningEvidenceProfile, requiredOpeningTime, verifiedOpeningAtVisit } from "./planningEvidence";
+import { planningEvidenceProfile, requiredOpeningTime, verifiedOpeningAtVisit, verifiedOpeningWindows } from "./planningEvidence";
 import { resolveCuisineRequirement, resolveRequiredActivities } from "./planningRequirementProvenance";
 import { tripLocalWindows } from "./planningSupport";
+import { clockMinutes, earliestFeasibleVisit } from "./schedule";
 import { tracePlanningTransformation, type PlanningTransformation } from "./planningTransformations";
 import type { AIPlannerState } from "@/features/planning/types/plan";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import { distanceMeters } from "@/features/places/geo";
-import { courseSize, isExclusiveCrawl, isTravelPlan, matchesActivity, matchesCuisine, matchesTerm, selectedAreas, tripDayYmd } from "./dateBrief";
+import { assumedTimeWindow, courseSize, isExclusiveCrawl, isTravelPlan, matchesActivity, matchesCuisine, matchesTerm, selectedAreas, tripDayYmd } from "./dateBrief";
 import { festivalPeriodCoversYmd } from "@/lib/tourapi/festivalSchedule";
-import { candidateActivitySlot, dateCandidateKey, defaultDuration, assignStartTimes, type DateCourseRow } from "./dateCourse";
+import { candidateActivitySlot, dateCandidateKey, defaultDuration, assignStartTimes, performanceVisitDate, type DateCourseRow, type DateOpeningCache } from "./dateCourse";
 import { candidateFoodConflict } from "./dateIntent";
 import { evidenceConfidence } from "./dateEvidence";
 import { buildCandidateGraph, repeatedComplexDays, type CandidateGraph } from "./candidateGraph";
@@ -213,13 +214,13 @@ export function discoveryCatalog(pool: DiscoverCandidate[], state: AIPlannerStat
   return chosen.slice(0, limit);
 }
 
-export function parseCourseProposals(value: unknown, days: number): CourseProposal[] {
+export function parseCourseProposals(value: unknown, days: number, candidateCount = 500): CourseProposal[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 4).flatMap(raw => {
     if (!raw || typeof raw !== "object") return [];
     const object = raw as Record<string, unknown>;
     if (!Array.isArray(object.selected) || !object.selected.length
-      || object.selected.length > Math.min(28, Math.max(5, 4 * days))) return [];
+      || object.selected.length > Math.min(500, candidateCount)) return [];
     const rows = object.selected.map(item => {
       if (!item || typeof item !== "object") return null;
       const row = item as Record<string, unknown>;
@@ -233,6 +234,21 @@ export function parseCourseProposals(value: unknown, days: number): CoursePropos
       : [{ theme: typeof object.theme === "string" ? object.theme.replace(/[\n*_#]/g, " ").trim().slice(0, 90) : "",
         rows: rows as DateCourseRow[] }];
   });
+}
+
+/** Recover disjoint day sections only when they already describe one complete
+ * selected itinerary. Keep every model ID, day, order and duration unchanged. */
+export function joinComplementaryDayProposals(proposals: CourseProposal[], days: number, anchorIds: string[]) {
+  if (days < 2 || !anchorIds.length || proposals.length !== days) return proposals;
+  const dayGroups = proposals.map(proposal => new Set(proposal.rows.map(row => row.day_index ?? 0)));
+  if (dayGroups.some(group => group.size !== 1)) return proposals;
+  const covered = dayGroups.map(group => [...group][0]);
+  if (new Set(covered).size !== days || covered.some(day => day < 0 || day >= days)) return proposals;
+  const ordered = [...proposals].sort((a, b) => (a.rows[0].day_index ?? 0) - (b.rows[0].day_index ?? 0));
+  const rows = ordered.flatMap(proposal => proposal.rows);
+  const ids = new Set(rows.map(row => row.id));
+  if (ids.size !== rows.length || anchorIds.some(id => !ids.has(id))) return proposals;
+  return [{ theme: ordered.map(proposal => proposal.theme).filter(Boolean).join(" · ").slice(0, 90), rows }];
 }
 
 function sequenceAllowed(rows: DateCourseRow[], byId: Map<string, DiscoverCandidate>, state: AIPlannerState) {
@@ -292,11 +308,25 @@ function experienceFlowScore(places: DiscoverCandidate[], state: AIPlannerState)
 /** Search complete permutations per day (up to 7 stops), preserving explicit order constraints. */
 function optimizeDay(rows: DateCourseRow[], byId: Map<string, DiscoverCandidate>, state: AIPlannerState) {
   if (rows.length < 2 || rows.length > 7) return rows;
+  const catalog = [...byId.values()];
+  const timeSensitive = (state.discovery?.requiredActivities ?? state.activities).includes("nightview")
+    || rows.some(row => { const candidate = byId.get(row.id!)!; return candidate.performanceEvent
+      || verifiedOpeningWindows(candidate, tripDayYmd(state, row.day_index ?? 0)) !== null; });
+  const openingCache: DateOpeningCache = new Map();
   let best: DateCourseRow[] | null = null;
   let cost = Infinity;
   const visit = (path: DateCourseRow[], rest: DateCourseRow[], length: number) => {
     if (!rest.length) {
-      const score = length - experienceFlowScore(path.map(row => byId.get(row.id!)!), state) * 160;
+      const timed = timeSensitive ? assignStartTimes(path, catalog, state, undefined, undefined, openingCache) : null;
+      if (timed && timed.length !== path.length) return;
+      const compression = timed?.reduce((sum, row, index) => sum
+        + Math.max(0, (path[index].duration_minutes ?? defaultDuration(byId.get(row.id!)!, state.pace))
+          - (row.duration_minutes ?? 0)), 0) ?? 0;
+      const daytimeAfterNight = (state.discovery?.requiredActivities ?? state.activities).includes("nightview")
+        ? path.reduce((sum, row, index) => sum + (candidateActivitySlot(byId.get(row.id!)!) !== "nightview"
+          && path.slice(0, index).some(before => candidateActivitySlot(byId.get(before.id!)!) === "nightview") ? 1 : 0), 0) : 0;
+      const score = length - experienceFlowScore(path.map(row => byId.get(row.id!)!), state) * 160
+        + compression * 150 + daytimeAfterNight * 8000;
       if (score < cost && sequenceAllowed(path, byId, state)) { best = path; cost = score; }
       return;
     }
@@ -362,7 +392,8 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
   const days = courseSize(state).days;
   const rows = preparedRows;
   const selected = rows.map(row => byId.get(row.id!)!);
-  const max = Math.max(state.discovery?.maxStops ?? courseSize(state).max, courseSize(state).min);
+  const max = Math.max(state.discovery?.maxStops ?? courseSize(state).max, courseSize(state).min,
+    constraints.anchorIds?.length ?? 0);
   if (rows.length < Math.max(courseSize(state).min, state.discovery?.minStops ?? 2)
     || rows.length > Math.max(max, state.requiredPlaces.length)) report("stop_count", "요청에 맞지 않는 장소 수");
   const explicitCount = (state.userRequests?.at(-1) ?? "").match(/(?:정확히|딱|반드시|꼭)\s*(\d{1,2})\s*(?:곳|개|장소)/);
@@ -396,10 +427,6 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
       const candidate = byId.get(row.id!)!;
       return candidate.category === "festival" && !festivalPeriodCoversYmd(candidate.openingHours, tripDayYmd(state, day));
     })) report("festival_date_mismatch", `${day + 1}일차 축제 날짜 불일치`, { dayIndex: day });
-    if (dayRows.some(row => {
-      const event = byId.get(row.id!)!.performanceEvent;
-      return event && event.dateYmd !== tripDayYmd(state, day);
-    })) report("performance_date_mismatch", `${day + 1}일차 공연 날짜 불일치`, { dayIndex: day });
   }
   for (const name of state.requiredPlaces) if (!selected.some(candidate => matchesTerm(candidate, name))) report("required_place_missing", `유지할 장소 누락: ${name}`, { constraint: name });
   if (selected.some(candidate => state.excludedPlaces.some(name => matchesTerm(candidate, name)))) report("excluded_place", "제외 요청한 장소 포함");
@@ -416,7 +443,16 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
     report("required_activity_missing", `요청 활동 누락: ${activity}`, { constraint: activity },
       explicit ? "hard" : "soft", origin);
   const latestRequest = state.userRequests?.at(-1) ?? "";
-  const eventDate = state.dateLabel?.replace(/\D/g, "").slice(0, 8);
+  const eventDate = performanceVisitDate(state);
+  for (const row of rows) {
+    const event = byId.get(row.id!)?.performanceEvent;
+    if (!event) continue;
+    if (!eventDate) report("performance_time_unverified", "공연 방문 날짜를 먼저 정해야 회차를 확인할 수 있어요.",
+      { candidateId: row.id, dayIndex: row.day_index ?? 0 });
+    else if (event.dateYmd !== tripDayYmd(state, row.day_index ?? 0))
+      report("performance_date_mismatch", `${(row.day_index ?? 0) + 1}일차 공연 날짜 불일치`,
+        { candidateId: row.id, dayIndex: row.day_index ?? 0 });
+  }
   if (state.intent !== "modify" && eventDate && /공연(?!장)|연극|뮤지컬|콘서트/.test(latestRequest)
     && !selected.some(candidate => candidate.performanceEvent
       && Array.from({ length: days }, (_, day) => tripDayYmd(state, day)).includes(candidate.performanceEvent.dateYmd))) {
@@ -442,9 +478,6 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
     if (profile.openingAtRequiredTime !== "confirmed_open")
       report("required_opening_unverified", "요청한 영업시간 확인 불가",
         { candidateId: row.id, dayIndex: row.day_index ?? 0, constraint: requiredTime });
-  }
-  if (state.budgetWon && selected.reduce((sum, candidate) => sum + (candidate.expectedCostTwo ?? 0), 0) > state.budgetWon) {
-    report("budget_exceeded", "확인된 비용이 예산 초과");
   }
   if (selected.some(candidate => genericChainCafe(candidate) && !usefulVenueEvidence(candidate, state)
     && !state.requiredPlaces.some(name => matchesTerm(candidate, name))
@@ -481,7 +514,23 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
   if (route.longestHop > maxHop) report("long_hop", "한 구간의 이동 부담이 너무 큼");
   if (mode === "walk" && route.meters > (state.walkingPreference === "short" ? 2200 : 5500) * days) report("walking_burden", "전체 도보 부담이 너무 큼");
   const timedRows = rows.length ? assignStartTimes(rows, candidates, state) : [];
-  if (rows.length && !timedRows.length) report("schedule_infeasible", "지정한 시간 안에 이동과 체류를 배치할 수 없음");
+  if (rows.length && !timedRows.length) {
+    report("schedule_infeasible", "지정한 시간 안에 이동과 체류를 배치할 수 없음");
+    const agreed = assumedTimeWindow(state);
+    const localWindows = tripLocalWindows(state.userRequests ?? [], days);
+    for (const row of rows) {
+      const day = row.day_index ?? 0;
+      const candidate = byId.get(row.id!);
+      if (!candidate) continue;
+      const opening = verifiedOpeningWindows(candidate, tripDayYmd(state, day));
+      if (opening === null) continue;
+      const begin = clockMinutes(localWindows[day]?.start ?? agreed.startTime);
+      const end = clockMinutes(localWindows[day]?.end ?? (agreed.specified ? agreed.endTime : "23:59"));
+      const allowed = earliestFeasibleVisit(begin, 30, opening);
+      if (allowed === null || allowed + 30 > end) report("confirmed_closed", "확인된 영업시간과 충돌",
+        { candidateId: row.id, dayIndex: day, constraint: localWindows[day]?.start ?? agreed.startTime });
+    }
+  }
   for (const row of timedRows) {
     const candidate = byId.get(row.id!);
     if (!candidate || !row.start_time) continue;
@@ -597,15 +646,15 @@ export function buildFallbackCourse(candidates: DiscoverCandidate[], state: AIPl
       - route / (isTravelPlan(state) ? 5000 : 350) + counts.size * 8 + tripAnchors + tripMeals + anchorVariety;
   };
   let beams: DiscoverCandidate[][] = [required];
-  for (let step = required.length; step < target; step++) {
+  for (let step = required.length; step < Math.min(target, catalog.length); step++) {
     const next = beams.flatMap(path => catalog.filter(candidate => !path.includes(candidate))
       .map(candidate => {
         const expanded = [...path, candidate];
         return { path: expanded, score: scorePath(expanded) };
       }));
+    if (!next.length) break;
     next.sort((a, b) => b.score - a.score);
     beams = next.slice(0, 12).map(item => item.path);
-    if (!beams.length) break;
   }
   const graph = constraints.candidateGraph ?? buildCandidateGraph(candidates);
   const related = (a: DiscoverCandidate, b: DiscoverCandidate) => graph.relations.some(relation =>

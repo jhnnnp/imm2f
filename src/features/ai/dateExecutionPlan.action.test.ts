@@ -2,7 +2,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import type { AIPlannerReply } from "@/features/planning/types/plan";
 import { emptyDateBrief } from "./dateBrief";
-import { markExplorationCandidates, sealSessionCandidates } from "./sessionCandidates";
+import { markExplorationCandidates, mergeSessionCandidates, sealSessionCandidates } from "./sessionCandidates";
+import { buildDateCandidatePool } from "./dateCandidatePool";
+import { explorationResearchPlan, initialExplorationPreferences } from "./candidateExploration";
+import { designDateDiscovery } from "@/lib/openai/designDateDiscovery";
 import { recommendDatePlan, recommendDatePlanWithSession } from "./actions";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
 import { recommendDatePlanWithOpenAi } from "@/lib/openai/recommendDatePlan";
@@ -10,7 +13,7 @@ import { interpretDateTurnWithOpenAi } from "@/lib/openai/dateTurnInterpreter";
 import { answerDateQuestion } from "@/lib/openai/answerDateQuestion";
 import { routeDateChat } from "@/lib/openai/routeDateChat";
 
-vi.mock("@/features/auth/session", () => ({ getAppSession: vi.fn(async () => ({ mode: "guest" })) }));
+vi.mock("@/features/auth/session", () => ({ getAppSession: vi.fn(async () => ({ mode: "authenticated", userId: "user", coupleId: "couple", displayName: "나", partner: null })) }));
 vi.mock("@/features/places/actions", () => ({ listPlaces: vi.fn(async () => ({ places: [] })) }));
 vi.mock("@/features/planning/actions", () => ({ listArchivedDatePlans: vi.fn(async () => ({ dates: [] })) }));
 vi.mock("@/features/taste/actions", () => ({ loadTasteBoard: vi.fn(async () => ({})) }));
@@ -25,7 +28,7 @@ vi.mock("@/lib/openai/designDateDiscovery", () => ({ designDateDiscovery: vi.fn(
 })) }));
 vi.mock("@/lib/openai/discoverVenueLeads", () => ({ discoverVenueLeads: vi.fn(async () => []),
   leadMatchesCandidate: vi.fn(() => false) }));
-vi.mock("@/lib/openai/dateTaskPlanner", () => ({ runDateTaskPlanner: vi.fn(async () => ({
+vi.mock("@/lib/openai/dateTaskPlanner", () => ({ dateTaskObjectives: vi.fn(() => []), runDateTaskPlanner: vi.fn(async () => ({
   objectives: [], observation: { candidates: [], missingActivities: [] }, steps: [],
   stopReason: "planner_done", unresolvedActivities: [],
 })) }));
@@ -48,6 +51,54 @@ const candidates: DiscoverCandidate[] = [
     categoryLabel: "카페", district: "성동구", address: "성수", roadAddress: "성수", phone: "", mapUrl: "",
     coordinates: [127.0405, 37.56] },
 ];
+
+it("uses the signed exploration inventory without another search or research pass", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "");
+  vi.stubEnv("SESSION_CANDIDATE_SIGNING_KEY", "test-only-signing-key");
+  vi.stubEnv("DATE_TURN_INTERPRETER_MODE", "off");
+  const state = { ...emptyDateBrief(), region: "성수", regions: ["성수"], areas: ["성수"],
+    stayKind: "date" as const, timeWindow: "afternoon" as const, cuisine: "any" as const, pendingSlot: null,
+    userRequests: ["도보로만 이동하고 오후 3시부터 성수 식사와 카페"] };
+  const preferences = initialExplorationPreferences("성수 식사와 카페", state);
+  const planningSessionId = "123e4567-e89b-12d3-a456-426614174000";
+  const selectedIds = candidates.map(candidate => `kakao:${candidate.externalPlaceId}`);
+  const researchPlan = explorationResearchPlan(null, preferences, "성수", state);
+  const oldObservedAt = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  const oldCandidates = candidates.map(candidate => ({ ...candidate, openingHours: "09:00-22:00", expectedCostTwo: 50000 }));
+  const sessionCandidates = sealSessionCandidates(markExplorationCandidates(mergeSessionCandidates(null,
+    buildDateCandidatePool(oldCandidates, state).records, { sessionId: planningSessionId, turnId: "found", observedAt: oldObservedAt }),
+    { selectedIds, turnId: "chosen", observedAt: new Date().toISOString() }), { actorId: "user", coupleId: "couple" });
+  vi.mocked(recommendDatePlanWithOpenAi).mockImplementationOnce(async input => ({
+    status: "plan", state: input.state, condition: input.condition, source: "openai", candidateCount: input.candidates.length,
+    message: "성수 코스", card: { headline: "성수", lines: ["성수 코스"] },
+    recommendations: input.candidates.map(candidate => ({ id: `kakao:${candidate.externalPlaceId}`, placeId: `kakao:${candidate.externalPlaceId}`,
+      name: candidate.name, category: candidate.categoryLabel, district: candidate.district, address: candidate.address,
+      phone: candidate.phone, mapUrl: candidate.mapUrl, coordinates: candidate.coordinates,
+      durationMinutes: 60, expectedCost: 0, reasons: [], isSaved: false, distanceFromPreviousMeters: null })),
+    items: input.candidates.map((candidate, order) => ({ id: `i-${order}`, placeId: `kakao:${candidate.externalPlaceId}`,
+      placeName: candidate.name, category: candidate.categoryLabel, startTime: order ? "17:00" : "15:00",
+      durationMinutes: 60, expectedCost: 0, order, memo: "", dayIndex: 0 })),
+  }));
+  const result = await recommendDatePlanWithSession({ message: "선택한 장소로 일정 짜줘", planKind: "date", previousState: state,
+    planningSessionId, sessionCandidates, planningInput: { experiencePlan: null, researchPlan, preferences,
+      candidatePool: sessionCandidates, selectedCandidateIds: selectedIds, rejectedCandidateIds: [] } });
+  expect(result.result).toMatchObject({ status: "plan", items: [{ placeName: "성수 식당" }, { placeName: "성수 카페" }] });
+  expect(searchKakaoPlacesRemote).not.toHaveBeenCalled();
+  expect(vi.mocked(designDateDiscovery).mock.lastCall?.[0].useExistingBrief).toBe(true);
+  expect(vi.mocked(recommendDatePlanWithOpenAi).mock.lastCall?.[0]).toMatchObject({ anchorCandidateIds: selectedIds, researchPlanActive: true });
+  expect(vi.mocked(recommendDatePlanWithOpenAi).mock.lastCall?.[0].state.userRequests)
+    .toEqual([...state.userRequests, "선택한 장소로 일정 짜줘"]);
+  const reused = vi.mocked(recommendDatePlanWithOpenAi).mock.lastCall?.[0].candidates ?? [];
+  expect(reused).toHaveLength(2);
+  expect(reused.every(candidate => candidate.openingHours === undefined && candidate.expectedCostTwo === undefined)).toBe(true);
+});
+
+it("asks a trip's duration even for a local city instead of silently creating a date", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "");
+  const result = await recommendDatePlan({ message: "성수에서 놀고 싶어", planKind: "trip", previousState: emptyDateBrief() });
+  expect(result).toMatchObject({ status: "clarification", slot: "span", state: { stayKind: null } });
+  expect(searchKakaoPlacesRemote).not.toHaveBeenCalled();
+});
 
 afterEach(() => { vi.unstubAllEnvs(); vi.mocked(searchKakaoPlacesRemote).mockReset();
   vi.mocked(recommendDatePlanWithOpenAi).mockReset(); vi.mocked(interpretDateTurnWithOpenAi).mockReset();
@@ -316,6 +367,8 @@ it("keeps a failed limited replacement independent from a verified cafe inspecti
     courseStops: [{ name: "성수 식당", meta: "식당" }, { name: "성수 카페", meta: "카페" }],
   });
   expect(answerDateQuestion).toHaveBeenCalledTimes(1);
+  expect(result).toMatchObject({ status: "chat", state: currentPlan.state });
+  expect(result.card.lines[0]).toContain("교체할 새 장소를 확인하지 못해");
   expect(result.card.lines).toContain("성수 카페: 주차 안내를 확인했어요.");
   if (result.status === "plan") expect(result.items.map(item => item.placeId))
     .toEqual(currentPlan.items.map(item => item.placeId));
@@ -370,7 +423,62 @@ it("adds an independent cafe explanation when the primary dinner replacement can
   vi.stubEnv("DATE_EXECUTION_PLAN_MODE", "limited");
   const explained = await recommendDatePlan(request);
   expect(explained.status).toBe(baseline.status);
+  expect(explained).toMatchObject({ status: "chat", state: oldPlan.state });
+  expect(explained.card.lines[0]).toContain("교체할 새 장소를 확인하지 못해");
   expect(explained.card.lines.at(-1)).toContain("추천 이유: 성수 카페");
   expect(explained.card.lines.at(-1)).not.toContain("조용해서");
   expect(answerDateQuestion).not.toHaveBeenCalled();
+  expect(recommendDatePlanWithOpenAi).not.toHaveBeenCalled();
+});
+
+it("does not generate an addition from the retained venue alone", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "");
+  vi.stubEnv("DATE_TURN_INTERPRETER_MODE", "off");
+  vi.stubEnv("DATE_EXECUTION_PLAN_MODE", "off");
+  vi.mocked(searchKakaoPlacesRemote).mockResolvedValue({ ok: true, places: [] });
+  const cafe = candidates[1];
+  const oldPlan: AIPlannerReply = { status: "plan", message: "기존 코스",
+    card: { headline: "성수", lines: ["기존 코스"] },
+    condition: { dateLabel: "2026-09-26", startTime: "15:00", endTime: "21:00",
+      budget: null, region: "성수", timeSpecified: true },
+    recommendations: [{ id: "kakao:cafe", placeId: "discover:kakao:cafe", name: cafe.name,
+      category: "카페", activitySlot: "cafe", district: cafe.district, address: cafe.address,
+      phone: "", mapUrl: "", coordinates: cafe.coordinates, durationMinutes: 60,
+      expectedCost: 0, reasons: [], isSaved: false, distanceFromPreviousMeters: null }],
+    items: [{ id: "old-cafe", placeId: "discover:kakao:cafe", placeName: cafe.name,
+      category: "카페", startTime: "17:00", durationMinutes: 60, expectedCost: 0,
+      order: 0, memo: "", dayIndex: 0 }],
+    candidateCount: 1, source: "fallback", state: emptyDateBrief(),
+  };
+  const result = await recommendDatePlan({ message: "한 곳 더 추가해줘", currentPlan: oldPlan,
+    previousState: oldPlan.state, previousStops: [{ name: cafe.name, category: "카페", activitySlot: "cafe" }] });
+  expect(result).toMatchObject({ status: "chat", state: oldPlan.state });
+  expect(result.card.lines[0]).toContain("기존 장소와 다른 추가 후보를 확인하지 못해");
+  expect(recommendDatePlanWithOpenAi).not.toHaveBeenCalled();
+});
+
+it("still allows an initial itinerary from one available venue", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "");
+  vi.stubEnv("DATE_TURN_INTERPRETER_MODE", "off");
+  vi.stubEnv("DATE_EXECUTION_PLAN_MODE", "off");
+  vi.mocked(searchKakaoPlacesRemote).mockResolvedValue({ ok: true, places: [
+    { ...candidates[1], kakaoCategoryGroupCode: "CE7", detailedCategory: "음식점 > 카페" },
+  ] });
+  vi.mocked(recommendDatePlanWithOpenAi).mockImplementationOnce(async input => {
+    const cafe = input.candidates[0];
+    return { status: "plan", message: "성수 카페", card: { headline: "성수", lines: ["성수 카페"] },
+      condition: input.condition, state: input.state, source: "fallback", candidateCount: 1,
+      recommendations: [{ id: "kakao:cafe", placeId: "discover:kakao:cafe", name: cafe.name,
+        category: "카페", activitySlot: "cafe", district: cafe.district, address: cafe.address,
+        phone: "", mapUrl: "", coordinates: cafe.coordinates, durationMinutes: 60,
+        expectedCost: 0, reasons: [], isSaved: false, distanceFromPreviousMeters: null }],
+      items: [{ id: "cafe", placeId: "discover:kakao:cafe", placeName: cafe.name,
+        category: "카페", startTime: "17:00", durationMinutes: 60, expectedCost: 0,
+        order: 0, memo: "", dayIndex: 0 }],
+    } satisfies AIPlannerReply;
+  });
+  const result = await recommendDatePlan({ message: "성수 카페 한 곳에서 데이트", previousState: emptyDateBrief() });
+  expect(result).toMatchObject({ status: "plan", items: [{ placeName: "성수 카페" }] });
+  expect(recommendDatePlanWithOpenAi).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(recommendDatePlanWithOpenAi).mock.lastCall?.[0].candidates).toHaveLength(1);
 });

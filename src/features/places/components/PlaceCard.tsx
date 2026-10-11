@@ -21,6 +21,7 @@ export function PlaceCard({
 }) {
   const discover = isDiscoverPlace(place);
   const saved = ["want", "must_visit", "revisit"].includes(place.userStatus);
+  const hasFit = place.userFit > 0 || place.partnerFit > 0;
   return <article className={`place-card ${selected ? "is-selected" : ""}`}>
     <button className={`place-image tone-${place.visualTone} ${place.image ? "" : "is-empty"}`} onClick={onSelect} aria-label={`${place.name} ${discover ? "미리보기" : "상세 보기"}`}>
       {place.image ? <img src={place.image} alt="" loading="lazy" decoding="async" /> : <PlaceGraphicCover place={place} />}
@@ -32,8 +33,8 @@ export function PlaceCard({
     <button className="place-info" onClick={onSelect}>
       <span>{place.categoryLabel} · {place.district}{place.category === "festival" && place.openingHours ? ` · ${place.openingHours}` : ""}</span><h3>{place.name}</h3><p>{place.recommendReason || place.description || place.roadAddress || place.address || place.district}</p>
       {discover
-        ? <div className="couple-fit" aria-label="두 사람의 취향 예상 점수"><span>나 <b>{place.userFit}</b></span><span>파트너 <b>{place.partnerFit}</b></span><em>{saved ? "저장됨" : "후보"}</em></div>
-        : <div className="couple-fit"><span>나 <b>{place.userFit}</b></span><span>파트너 <b>{place.partnerFit}</b></span><em><PlaceStatusBadge status={place.partnerStatus} /></em></div>}
+        ? <div className="couple-fit" aria-label={hasFit ? "두 사람의 취향 예상 점수" : "장소 저장 상태"}>{hasFit && <><span>나 <b>{place.userFit > 0 ? place.userFit : "—"}</b></span><span>파트너 <b>{place.partnerFit > 0 ? place.partnerFit : "—"}</b></span></>}<em>{saved ? "저장됨" : "후보"}</em></div>
+        : <div className="couple-fit" aria-label="두 사람의 장소 상태"><span>나 <PlaceStatusBadge status={place.userStatus} /></span><em>파트너 <PlaceStatusBadge status={place.partnerStatus} /></em></div>}
       <footer><b>{place.roadAddress || place.address || place.district}</b><span>{discover ? "미리보기 →" : "상세 보기 →"}</span></footer>
     </button>
   </article>;

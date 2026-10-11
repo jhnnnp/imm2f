@@ -12,7 +12,8 @@ export type DateIntent = {
     date: string | null;
     startTime: string | null;
     endTime: string | null;
-    budgetWon: number | null;
+    /** @deprecated Old diagnostic contexts may contain this; it is never an active constraint. */
+    budgetWon?: number | null;
     requiredPlaces: string[];
     excludedPlaces: string[];
     excludedFoods: string[];
@@ -29,7 +30,7 @@ export function toDateIntent(state: AIPlannerState): DateIntent {
     objective: state.objective ?? "요청한 조건에 맞는 데이트 코스",
     hardConstraints: {
       areas: [...state.areas], date: state.dateLabel, startTime: state.startTime,
-      endTime: state.endTime, budgetWon: state.budgetWon ?? null,
+      endTime: state.endTime,
       requiredPlaces: [...state.requiredPlaces], excludedPlaces: [...state.excludedPlaces],
       excludedFoods: [...(state.excludedFoods ?? [])],
       requiredActivities: resolveRequiredActivities(state).filter(item => item.explicit).map(item => item.activity),
@@ -46,16 +47,36 @@ const dislike = /못\s*먹|안\s*먹|먹지\s*못|싫|알레르기|피하|제외
 
 /** Only the user's words can establish a food prohibition. */
 export function explicitFoodExclusions(message: string) {
-  return FOOD_TERMS.filter(food => {
-    const index = message.indexOf(food);
-    if (index < 0) return false;
-    return dislike.test(message.slice(Math.max(0, index - 16), index + food.length + 18));
-  });
+  const clauses = message.replace(/(있|없|먹|좋아하|좋아|싫어하|싫어)고\s*/g, "$1;")
+    .split(/[,，.;!?。\n]|그리고|하지만|그런데|대신|지만/);
+  const exclusions = FOOD_TERMS.filter(food => clauses.some(clause => {
+    for (const match of clause.matchAll(new RegExp(food, "g"))) {
+      const tail = clause.slice(match.index + food.length);
+      if (/^\s*(?:은|는|을|를|이|가|도)?\s*(?:좋아|괜찮|먹어도\s*(?:돼|되)|먹고\s*싶)/.test(tail)) continue;
+      const cue = clause.slice(Math.max(0, match.index - 16), match.index + food.length + 18);
+      if (/알레르기(?:는|가|도)?\s*(?:없|아니)|(?:안\s*먹|못\s*먹|싫어?하).{0,8}(?:아니|않)|싫지\s*않/.test(cue)) continue;
+      if (dislike.test(cue)) return true;
+    }
+    return false;
+  }));
+  if (clauses.some(clause => /(?:^|[^가-힣]|생선|활어)회\s*(?:는|를|가|도)?\s*(?:싫|안\s*먹|못\s*먹|알레르기|제외|빼)/.test(clause)
+    && !/회.{0,12}(?:못\s*먹는\s*(?:건|것은)?\s*아니|알레르기(?:는|가)?\s*없)/.test(clause))) exclusions.push("회");
+  return exclusions;
+}
+
+/** An old restriction is released only by a clear correction about that food. */
+export function releasedFoodExclusions(message: string) {
+  return [...FOOD_TERMS, "회"].filter(food => [...message.matchAll(new RegExp(food, "g"))].some(match => {
+    const tail = message.slice(match.index + food.length, match.index + food.length + 40);
+    return /^\s*(?:은|는|을|를|이|가|도)?\s*(?:못\s*먹는\s*(?:건|것은)?\s*아니|알레르기(?:는|가)?\s*없|먹어도\s*(?:돼|되)|(?:제한|제외\s*조건|금지)(?:은|는|을|를)?\s*(?:풀어|해제|없애|빼))/.test(tail)
+      && !/^.{0,28}(?:\?|일까|될까|있을까)/.test(tail);
+  }));
 }
 
 export function candidateFoodConflict(text: string, exclusions: string[]) {
   const normalized = text.replace(/\s/g, "");
   return exclusions.some(food => {
+    if (food === "회") return /횟집|회요리|생선회|활어회|모둠회|사시미|스시|초밥/.test(normalized);
     if (normalized.includes(food)) return true;
     if (food === "해산물") return /갑각류|새우|게장|조개|굴|생선|횟집|초밥|스시|오마카세|해물|씨푸드|봉골레/.test(normalized);
     if (food === "갑각류") return /새우|게장|킹크랩|랍스터/.test(normalized);

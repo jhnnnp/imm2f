@@ -1,13 +1,18 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { Fragment, useMemo, useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { HeaderActionIcon } from "@/components/shared/HeaderActionIcon";
+import { SyncNotice } from "@/components/shared/SyncNotice";
+import { useDialogFocus } from "@/components/shared/useDialogFocus";
 import { createClient } from "@/lib/supabase/client";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
-import { createMemory, deleteMemory, updateMemory } from "../actions";
+import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
+import { memoryEditSnapshot } from "../editSnapshot";
+import { createMemory, deleteMemory, updateMemory, readMemoryWorkspace } from "../actions";
+import { parseMemoryCoordinates } from "../memoryCoordinates";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
-import type { Memory, MemoryType, PhotoMetadataInput } from "../types";
+import type { CreateMemoryInput, Memory, MemoryType, PhotoMetadataInput, UpdateMemoryInput } from "../types";
 import type { Place } from "@/features/places/types/place";
 import { formatKoDate, toIsoDate } from "@/lib/dates";
 import { CorkPiece } from "./CorkPiece";
@@ -18,6 +23,7 @@ import {
   type CorkPose,
 } from "../corkLayout";
 import { inspectMemoryPhoto } from "../photoInspect";
+import { createPhotoDraftLifecycle } from "../photoDraftLifecycle";
 import { useResolvedMemories } from "../resolvePhotoUrls";
 import {
   albumTiles,
@@ -66,7 +72,7 @@ function MemoryTypeMark({ type, className }: { type: MemoryType; className: stri
 
 function MemoryFace({ memory, size = "card", imageClassName }: { memory: Memory; size?: "hero" | "card" | "mini"; imageClassName?: string }) {
   const image = memoryImages(memory)[0];
-  if (image) return <img className={imageClassName} src={image.url} alt="" />;
+  if (image) return <img loading="lazy" decoding="async" className={imageClassName} src={image.url} alt="" />;
   return (
     <div className={`memory-letter-face is-${memory.memoryType} is-${size}`}>
       <i className="memory-letter-margin" aria-hidden="true" />
@@ -85,7 +91,7 @@ function revokeDrafts(items: PhotoDraft[]) {
 
 export function MemoryTimeline({
   initialMemories,
-  places,
+  places: initialPlaces,
   persist,
 }: {
   initialMemories: Memory[];
@@ -94,12 +100,18 @@ export function MemoryTimeline({
 }) {
   const session = useAppSession();
   const [memories, setMemories] = useState(initialMemories);
-  const displayMemories = useResolvedMemories(memories);
+  const [places, setPlaces] = useState(initialPlaces);
+  const [photoError, setPhotoError] = useState(false);
+  const [photoRetry, setPhotoRetry] = useState(0);
+  const displayMemories = useResolvedMemories(memories, photoRetry, setPhotoError);
   const [tab, setTab] = useState<MemoryTab>("timeline");
   const [open, setOpen] = useState(false);
   const [createStep, setCreateStep] = useState<CreateStep>("photo");
   const [pending, setPending] = useState(false);
+  const [awaitingCreation, setAwaitingCreation] = useState(false);
+  const creationAttemptRef = useRef<{ input: CreateMemoryInput; paths: string[] } | null>(null);
   const [error, setError] = useState("");
+  const [syncError, setSyncError] = useState("");
   const [title, setTitle] = useState("");
   const [happenedOn, setHappenedOn] = useState("");
   const [description, setDescription] = useState("");
@@ -112,6 +124,8 @@ export function MemoryTimeline({
   const [viewer, setViewer] = useState<Memory | null>(null);
   const [viewerPhotoIndex, setViewerPhotoIndex] = useState(0);
   const [editing, setEditing] = useState(false);
+  const [awaitingEdit, setAwaitingEdit] = useState(false);
+  const editAttemptRef = useRef<{ input: UpdateMemoryInput; paths: string[] } | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDate, setEditDate] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -128,18 +142,40 @@ export function MemoryTimeline({
   const [wallToolbar, setWallToolbar] = useState<HTMLDivElement | null>(null);
   const draftsRef = useRef(drafts);
   const editDraftsRef = useRef(editDrafts);
+  const createInspections = useRef(createPhotoDraftLifecycle());
+  const editInspections = useRef(createPhotoDraftLifecycle());
   draftsRef.current = drafts;
   editDraftsRef.current = editDrafts;
+
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const composerRef = useDialogFocus<HTMLFormElement>({ open, onClose: closeComposer });
+  const viewerRef = useDialogFocus<HTMLElement>({
+    open: Boolean(viewer), onClose: closeViewer, initialFocus: "#memory-viewer-title",
+  });
+  const retrySync = useSharedRefresh(async ({ isCurrent }) => {
+    try {
+      const remote = await readMemoryWorkspace();
+      if (!isCurrent() || pendingRef.current) return;
+      setMemories(remote.memories);
+      setPlaces(remote.places);
+      setSyncError("");
+    } catch {
+      if (isCurrent()) setSyncError("최신 추억을 불러오지 못했어요. 연결을 확인하고 다시 시도해 주세요.");
+    }
+  }, { tables: ["memories", "memory_photos", "places"], activityPrefixes: ["MEMORY_", "PLACE_"] });
 
   useEffect(() => {
     setHappenedOn(current => current || toIsoDate(new Date()));
   }, []);
 
   useEffect(() => {
-    setCoverFailed(false);
-  }, [viewer?.id, viewerPhotoIndex]);
+    if (!editing) setViewer(current => current ? displayMemories.find(memory => memory.id === current.id) ?? null : null);
+  }, [displayMemories, editing]);
 
   useEffect(() => () => {
+    createInspections.current.clear();
+    editInspections.current.clear();
     revokeDrafts(draftsRef.current);
     revokeDrafts(editDraftsRef.current);
   }, []);
@@ -158,16 +194,15 @@ export function MemoryTimeline({
   const mappedMemories = useMemo(() => visible.filter(item => item.coordinates), [visible]);
   const viewerImages = viewer ? memoryImages(viewer) : [];
   const activeViewerImage = viewerImages[viewerPhotoIndex] ?? viewerImages[0] ?? null;
+  useEffect(() => {
+    setCoverFailed(false);
+  }, [viewer?.id, viewerPhotoIndex, activeViewerImage?.url]);
 
   useEffect(() => {
     if (!viewer || editing) return;
     const count = viewerImages.length;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeViewer();
-        return;
-      }
+      if (event.defaultPrevented || open) return;
       if (count < 2) return;
       if (event.key === "ArrowRight") {
         event.preventDefault();
@@ -182,7 +217,7 @@ export function MemoryTimeline({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [viewer, editing, viewerImages.length]);
+  }, [viewer, editing, viewerImages.length, open]);
 
   const corkPieceProps = {
     poses: corkPoses,
@@ -207,9 +242,9 @@ export function MemoryTimeline({
   }
 
   async function addDrafts(files: FileList | File[] | null, target: "create" | "edit") {
-    if (!files?.length) return;
-    const current = target === "create" ? drafts : editDrafts;
-    const room = MAX_MEMORY_PHOTOS - current.length - (target === "edit" && viewer ? memoryImages(viewer).length : 0);
+    if (!files?.length || pendingRef.current) return;
+    const current = target === "create" ? draftsRef.current : editDraftsRef.current;
+    const room = MAX_MEMORY_PHOTOS - current.length - (target === "edit" && viewer ? viewer.photos.length : 0);
     const incoming = [...files].slice(0, Math.max(0, room));
     if (!incoming.length) {
       setError(`사진은 최대 ${MAX_MEMORY_PHOTOS}장까지 붙일 수 있어요.`);
@@ -223,41 +258,62 @@ export function MemoryTimeline({
       pending: true,
     }));
     const emptyBefore = current.length === 0;
-    if (target === "create") setDrafts(items => [...items, ...next]);
-    else setEditDrafts(items => [...items, ...next]);
-    await Promise.all(next.map(async (draft, index) => {
-      const meta = await inspectMemoryPhoto(draft.file);
+    const inspections = target === "create" ? createInspections.current : editInspections.current;
+    inspections.add(next.map(draft => draft.key));
+    if (target === "create") {
+      draftsRef.current = [...current, ...next];
+      setDrafts(draftsRef.current);
+    } else {
+      editDraftsRef.current = [...current, ...next];
+      setEditDrafts(editDraftsRef.current);
+    }
+    await inspections.inspect(next, inspectMemoryPhoto, (draft, meta, index) => {
       if (target === "create") {
         setDrafts(items => items.map(item => item.key === draft.key ? { ...item, meta, pending: false } : item));
         if (emptyBefore && index === 0) applyPhotoFacts(meta, true);
       } else {
         setEditDrafts(items => items.map(item => item.key === draft.key ? { ...item, meta, pending: false } : item));
       }
-    }));
+    });
   }
 
   function removeDraft(key: string, target: "create" | "edit") {
-    const list = target === "create" ? drafts : editDrafts;
+    if (pendingRef.current) return;
+    const list = target === "create" ? draftsRef.current : editDraftsRef.current;
     const found = list.find(item => item.key === key);
     if (found?.preview.startsWith("blob:")) URL.revokeObjectURL(found.preview);
-    if (target === "create") setDrafts(items => items.filter(item => item.key !== key));
-    else setEditDrafts(items => items.filter(item => item.key !== key));
+    if (target === "create") {
+      createInspections.current.remove(key);
+      draftsRef.current = list.filter(item => item.key !== key);
+      setDrafts(draftsRef.current);
+    } else {
+      editInspections.current.remove(key);
+      editDraftsRef.current = list.filter(item => item.key !== key);
+      setEditDrafts(editDraftsRef.current);
+    }
   }
 
   function openComposer() {
-    setCreateStep("photo");
+    setCreateStep(creationAttemptRef.current ? "story" : "photo");
     setError("");
     setOpen(true);
   }
 
   function closeComposer() {
-    if (pending) return;
+    if (pendingRef.current) return;
+    if (creationAttemptRef.current) { setOpen(false); return; }
+    createInspections.current.clear();
     revokeDrafts(drafts);
+    draftsRef.current = [];
     setDrafts([]);
     setOpen(false);
   }
 
-  function continueToStory() {
+  function continueToStory(event: React.MouseEvent<HTMLButtonElement>) {
+    // A step change can replace this DOM button with a submit button before the
+    // browser runs the click's default action. Cancel it before changing state.
+    event.preventDefault();
+    if (draftsRef.current.some(draft => draft.pending)) return;
     setTitle(current => current || (locationLabel && locationLabel !== "사진의 촬영 위치" ? `${locationLabel}에서의 우리` : "우리의 하루"));
     setCreateStep("story");
   }
@@ -270,6 +326,8 @@ export function MemoryTimeline({
   }
 
   function beginEdit(memory: Memory) {
+    if (pendingRef.current || awaitingEdit) return;
+    editAttemptRef.current = null;
     setEditTitle(memory.title);
     setEditDate(memory.happenedOn);
     setEditDescription(memory.description);
@@ -278,23 +336,34 @@ export function MemoryTimeline({
     setEditLatitude(memory.coordinates?.[1]?.toString() ?? "");
     setEditType(memory.memoryType);
     revokeDrafts(editDrafts);
+    editInspections.current.clear();
+    editDraftsRef.current = [];
     setEditDrafts([]);
     setError("");
     setEditing(true);
   }
 
   function closeViewer() {
+    if (pendingRef.current || awaitingEdit) return;
+    editInspections.current.clear();
     revokeDrafts(editDrafts);
+    editDraftsRef.current = [];
     setEditDrafts([]);
     setEditing(false);
     setViewer(null);
   }
 
   function cancelEdit() {
+    if (pendingRef.current || awaitingEdit) return;
+    editAttemptRef.current = null;
+    editInspections.current.clear();
     revokeDrafts(editDrafts);
+    editDraftsRef.current = [];
     setEditDrafts([]);
     setEditing(false);
+    setViewer(current => current ? displayMemories.find(memory => memory.id === current.id) ?? null : null);
     setError("");
+    retrySync();
   }
 
   async function uploadDrafts(items: PhotoDraft[]): Promise<{ photos: PhotoMetadataInput[]; paths: string[] } | { error: string }> {
@@ -306,74 +375,97 @@ export function MemoryTimeline({
     if (!supabase) return { error: "저장소를 아직 연결하지 않았어요." };
     const photos: PhotoMetadataInput[] = [];
     const paths: string[] = [];
-    for (const draft of items) {
-      const ext = (draft.file.name.split(".").pop() || "jpg").toLowerCase();
-      const path = `${session.coupleId}/${crypto.randomUUID()}.${ext}`;
-      const uploaded = await supabase.storage.from("memory-photos").upload(path, draft.file, { contentType: draft.file.type, upsert: false });
-      if (uploaded.error) {
-        if (paths.length) await supabase.storage.from("memory-photos").remove(paths);
-        return { error: uploaded.error.message || "사진을 올리지 못했어요." };
+    try {
+      for (const draft of items) {
+        const ext = (draft.file.name.split(".").pop() || "jpg").toLowerCase();
+        const path = `${session.coupleId}/${crypto.randomUUID()}.${ext}`;
+        paths.push(path);
+        const uploaded = await supabase.storage.from("memory-photos").upload(path, draft.file, { contentType: draft.file.type, upsert: false });
+        if (uploaded.error) throw new Error("사진을 올리지 못했어요.");
+        photos.push({ ...draft.meta, storagePath: path });
       }
-      paths.push(path);
-      photos.push({ ...draft.meta, storagePath: path });
+    } catch {
+      if (paths.length) await supabase.storage.from("memory-photos").remove(paths).catch(() => undefined);
+      return { error: "사진을 올리지 못했어요. 연결을 확인하고 다시 시도해 주세요." };
     }
     return { photos, paths };
   }
 
   async function saveEdit(event: React.FormEvent) {
     event.preventDefault();
-    if (!viewer) return;
+    if (!viewer || editDraftsRef.current.some(draft => draft.pending)) return;
     if (session.mode !== "authenticated") {
       setError("로그인 후 추억을 수정할 수 있어요.");
       return;
     }
+    if (pendingRef.current) return;
+    const coordinates = editAttemptRef.current ? null : parseMemoryCoordinates(editLatitude, editLongitude);
+    if (coordinates && "error" in coordinates) { setError(coordinates.error); return; }
+    pendingRef.current = true;
     setPending(true);
     setError("");
-    const lat = editLatitude.trim() ? Number(editLatitude) : null;
-    const lng = editLongitude.trim() ? Number(editLongitude) : null;
-    const uploaded = await uploadDrafts(editDrafts);
+    const uploaded = editAttemptRef.current
+      ? { photos: editAttemptRef.current.input.photos ?? [], paths: editAttemptRef.current.paths }
+      : await uploadDrafts(editDrafts).catch(() => ({ error: "사진을 올리지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
     if ("error" in uploaded) {
+      pendingRef.current = false;
       setPending(false);
       setError(uploaded.error);
       return;
     }
-    const result = await updateMemory({
+    const input: UpdateMemoryInput = editAttemptRef.current?.input ?? {
       id: viewer.id,
+      attemptId: crypto.randomUUID(),
+      expectedSnapshot: memoryEditSnapshot(viewer),
       title: editTitle,
       happenedOn: editDate,
       description: editDescription,
       locationLabel: editLocation,
       memoryType: editType,
-      lat: Number.isFinite(lat) ? lat : null,
-      lng: Number.isFinite(lng) ? lng : null,
+      lat: coordinates && "coordinates" in coordinates ? coordinates.coordinates?.[1] ?? null : null,
+      lng: coordinates && "coordinates" in coordinates ? coordinates.coordinates?.[0] ?? null : null,
       photos: uploaded.photos,
-    });
+    };
+    editAttemptRef.current = { input, paths: uploaded.paths };
+    const result = await updateMemory(input).catch(() => ({ error: "저장 응답을 받지 못했어요. 같은 내용으로 다시 시도해 주세요.", keepUploadedPhotos: true }));
     if ("error" in result) {
-      if (uploaded.paths.length) {
+      if (uploaded.paths.length && !result.keepUploadedPhotos) {
         const supabase = createClient();
-        await supabase?.storage.from("memory-photos").remove(uploaded.paths);
+        await supabase?.storage.from("memory-photos").remove(uploaded.paths).catch(() => undefined);
       }
+      pendingRef.current = false;
       setPending(false);
+      setAwaitingEdit(Boolean(result.keepUploadedPhotos));
+      if (!result.keepUploadedPhotos) editAttemptRef.current = null;
       setError(result.error);
+      retrySync();
       return;
     }
+    editAttemptRef.current = null;
+    setAwaitingEdit(false);
     setMemories(current => current.map(memory => memory.id === result.memory.id ? result.memory : memory));
     setViewer(result.memory);
     setViewerPhotoIndex(0);
     emitCoupleActivitiesChanged();
     revokeDrafts(editDrafts);
+    editInspections.current.clear();
+    editDraftsRef.current = [];
     setEditDrafts([]);
     setEditing(false);
+    pendingRef.current = false;
     setPending(false);
   }
 
   async function removeCurrentMemory() {
     if (!viewer || !window.confirm(`‘${viewer.title}’ 추억과 연결된 사진을 삭제할까요?`)) return;
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setPending(true);
     setError("");
-    const result = await deleteMemory(viewer.id);
+    const result = await deleteMemory(viewer.id).catch(() => ({ error: "삭제 결과를 확인하지 못했어요. 잠시 후 다시 시도해 주세요." }));
+    pendingRef.current = false;
     setPending(false);
-    if ("error" in result) { setError(result.error); return; }
+    if ("error" in result) { setError(result.error); retrySync(); return; }
     setMemories(current => current.filter(memory => memory.id !== viewer.id));
     setViewer(null);
     setEditing(false);
@@ -382,46 +474,63 @@ export function MemoryTimeline({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (createStep !== "story") return;
+    if (draftsRef.current.some(draft => draft.pending)) return;
     if (!persist) {
       setError("로그인 후 추억을 저장할 수 있어요.");
       return;
     }
+    const selected = sortedPlaces.find(place => place.id === placeId);
+    const location = parseMemoryCoordinates(latitude, longitude, selected?.coordinates);
+    if ("error" in location) { setError(location.error); return; }
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setPending(true);
     setError("");
-    const selected = sortedPlaces.find(place => place.id === placeId);
-    const uploaded = await uploadDrafts(drafts);
+    const uploaded = creationAttemptRef.current
+      ? { photos: creationAttemptRef.current.input.photos ?? [], paths: creationAttemptRef.current.paths }
+      : await uploadDrafts(drafts).catch(() => ({ error: "사진을 올리지 못했어요. 연결을 확인하고 다시 시도해 주세요." }));
     if ("error" in uploaded) {
+      pendingRef.current = false;
       setPending(false);
       setError(uploaded.error);
       return;
     }
-    const parsedLat = latitude.trim() ? Number(latitude) : null;
-    const parsedLng = longitude.trim() ? Number(longitude) : null;
-    const hasManualCoordinates = Number.isFinite(parsedLat) && Number.isFinite(parsedLng);
-    const result = await createMemory({
+    const input: CreateMemoryInput = creationAttemptRef.current?.input ?? {
+      attemptId: crypto.randomUUID(),
       title,
       happenedOn,
       description,
       locationLabel: locationLabel || selected?.district || selected?.name || "",
       placeId: placeId || null,
       coverUrl: uploaded.photos[0]?.storagePath || coverUrl || selected?.image || "",
-      lng: selected?.coordinates?.[0] ?? (hasManualCoordinates ? parsedLng : null),
-      lat: selected?.coordinates?.[1] ?? (hasManualCoordinates ? parsedLat : null),
+      lng: location.coordinates?.[0] ?? null,
+      lat: location.coordinates?.[1] ?? null,
       memoryType,
       photos: uploaded.photos,
-    });
+    };
+    creationAttemptRef.current = { input, paths: uploaded.paths };
+    const result = await createMemory(input).catch(() => ({ error: "저장 응답을 받지 못했어요. 같은 내용으로 다시 시도해 주세요.", keepUploadedPhotos: true }));
+    pendingRef.current = false;
     setPending(false);
     if ("error" in result) {
-      if (uploaded.paths.length && session.mode === "authenticated") {
+      if (uploaded.paths.length && !result.keepUploadedPhotos && session.mode === "authenticated") {
         const supabase = createClient();
-        await supabase?.storage.from("memory-photos").remove(uploaded.paths);
+        await supabase?.storage.from("memory-photos").remove(uploaded.paths).catch(() => undefined);
       }
+      setAwaitingCreation(Boolean(result.keepUploadedPhotos));
+      if (!result.keepUploadedPhotos) creationAttemptRef.current = null;
       setError(result.error);
+      retrySync();
       return;
     }
-    setMemories(prev => [result.memory, ...prev]);
+    creationAttemptRef.current = null;
+    setAwaitingCreation(false);
+    setMemories(prev => [result.memory, ...prev.filter(memory => memory.id !== result.memory.id)]);
     emitCoupleActivitiesChanged();
     revokeDrafts(drafts);
+    createInspections.current.clear();
+    draftsRef.current = [];
     setDrafts([]);
     setOpen(false);
     setTitle("");
@@ -458,7 +567,7 @@ export function MemoryTimeline({
               <WallFastener kind={fastenerFor(Boolean(tile.image), index)} />
               <button type="button" className="memory-album-open" onClick={() => openViewer(tile.memory, tile.photoIndex)}>
                 <span className="memory-polaroid-media">
-                  {tile.image ? <img src={tile.image.url} alt="" /> : <MemoryFace memory={tile.memory} size="card" />}
+                  {tile.image ? <img loading="lazy" decoding="async" src={tile.image.url} alt="" /> : <MemoryFace memory={tile.memory} size="card" />}
                   {tile.image && <MemoryTypeMark type={tile.memory.memoryType} className="memory-badge-ribbon" />}
                 </span>
                 <b>{tile.memory.title}</b>
@@ -504,7 +613,7 @@ export function MemoryTimeline({
                 <WallFastener kind={fastenerFor(true, piece.photoIndex + index)} />
                 <div className="memory-album-open">
                   <span className="memory-polaroid-media">
-                    <img src={piece.url} alt="" draggable={false} />
+                    <img loading="lazy" decoding="async" src={piece.url} alt="" draggable={false} />
                     <MemoryTypeMark type={piece.memoryType} className={`memory-badge-ribbon ${piece.size === "sm" ? "is-mini" : ""}`} />
                     {piece.photoCount > 1 && <span className="memory-photo-count">{piece.photoIndex + 1}/{piece.photoCount}</span>}
                   </span>
@@ -541,6 +650,8 @@ export function MemoryTimeline({
 
   return (
     <>
+      <SyncNotice message={syncError} onRetry={retrySync} />
+      <SyncNotice message={photoError ? "추억 사진 일부를 불러오지 못했어요. 기록은 유지되니 다시 시도해 주세요." : ""} onRetry={() => setPhotoRetry(current => current + 1)} />
       <div className="page-title-row memory-page-header">
         <div>
           <span className="eyebrow">OUR ARCHIVE · {new Date().getFullYear()}</span>
@@ -579,7 +690,7 @@ export function MemoryTimeline({
                   return (
                     <li key={item.id}>
                       <button type="button" className="memory-map-open" onClick={() => openViewer(item)}>
-                        {image ? <img src={image.url} alt="" /> : <span className="memory-map-letter" />}
+                        {image ? <img loading="lazy" decoding="async" src={image.url} alt="" /> : <span className="memory-map-letter" />}
                         <span>
                           <b>{item.title}</b>
                           <small>{formatKoDate(item.happenedOn)}{item.locationLabel ? ` · ${item.locationLabel}` : ""}{memoryImages(item).length > 1 ? ` · 사진 ${memoryImages(item).length}장` : ""}</small>
@@ -608,21 +719,21 @@ export function MemoryTimeline({
 
       {open && (
         <div className="dialog-backdrop" role="presentation" onClick={closeComposer}>
-          <form className="place-create-dialog memory-dialog" onClick={event => event.stopPropagation()} onSubmit={event => void submit(event)}>
+          <form ref={composerRef} tabIndex={-1} className="place-create-dialog memory-dialog" role="dialog" aria-modal="true" aria-labelledby="memory-composer-title" onClick={event => event.stopPropagation()} onSubmit={event => void submit(event)}>
             <div className="dialog-head">
               <div>
                 <span className="eyebrow">NEW MEMORY · {createStep === "photo" ? "1 / 2" : "2 / 2"}</span>
-                <h2>{createStep === "photo" ? "오늘의 장면을 골라요" : "이 장면에 이름을 붙여요"}</h2>
+                <h2 id="memory-composer-title">{createStep === "photo" ? "오늘의 장면을 골라요" : "이 장면에 이름을 붙여요"}</h2>
               </div>
               <button className="icon-button" type="button" aria-label="닫기" onClick={closeComposer}>×</button>
             </div>
             <div className="memory-step-track" aria-label="기억 만들기 진행 단계"><i className={createStep === "story" ? "is-complete" : ""} /><i /></div>
-            {createStep === "photo" ? <>
+            {createStep === "photo" ? <Fragment key="photo-step">
               {drafts.length ? (
                 <div className="memory-photo-grid" aria-label="선택한 사진">
                   {drafts.map(draft => (
                     <figure className="memory-photo-draft" key={draft.key}>
-                      <img src={draft.preview} alt="" />
+                      <img loading="lazy" decoding="async" src={draft.preview} alt="" />
                       <button className="memory-photo-draft-remove" type="button" aria-label="사진 빼기" onClick={() => removeDraft(draft.key, "create")}>×</button>
                       {draft.pending && <span className="memory-photo-draft-status">읽는 중</span>}
                     </figure>
@@ -661,13 +772,14 @@ export function MemoryTimeline({
               <p className="memory-privacy-note">원본 사진은 우리만 접근할 수 있는 비공개 보관함에 저장됩니다.</p>
               <div className="dialog-actions">
                 <button className="outline-button" type="button" onClick={closeComposer}>취소</button>
-                <button className="text-button" type="button" onClick={continueToStory}>사진 없이 기록</button>
+                {!drafts.length && <button className="text-button" type="button" onClick={continueToStory}>사진 없이 기록</button>}
                 <button className="primary-button" type="button" onClick={continueToStory} disabled={metadataPending}>{drafts.length ? "이 장면으로 계속" : "다음"}</button>
               </div>
-            </> : <>
+            </Fragment> : <Fragment key="story-step">
+              <fieldset className="memory-story-fields" disabled={pending || awaitingCreation}>
               <div className="memory-story-preview is-stack">
                 {drafts.length ? drafts.slice(0, 3).map((draft, index) => (
-                  <img src={draft.preview} alt="" key={draft.key} style={{ transform: `rotate(${(index - 1) * 4}deg)` }} />
+                  <img loading="lazy" decoding="async" src={draft.preview} alt="" key={draft.key} style={{ transform: `rotate(${(index - 1) * 4}deg)` }} />
                 )) : <div>NO PHOTO</div>}
                 <button type="button" onClick={() => setCreateStep("photo")}>{drafts.length ? `사진 ${drafts.length}장 변경` : "사진 변경"}</button>
               </div>
@@ -678,15 +790,19 @@ export function MemoryTimeline({
               <label className="field"><span>장소 이름</span><input value={locationLabel} onChange={event => setLocationLabel(event.target.value)} placeholder="성수 · 카페 골목" /></label>
               <details className="memory-location-details"><summary>지도 위치 세밀하게 조정</summary><div className="coordinate-fields"><label className="field"><span>위도</span><input inputMode="decimal" value={latitude} onChange={event => setLatitude(event.target.value)} /></label><label className="field"><span>경도</span><input inputMode="decimal" value={longitude} onChange={event => setLongitude(event.target.value)} /></label></div></details>
               {!drafts.length && <label className="field"><span>사진 URL <small>선택</small></span><input value={coverUrl} onChange={event => setCoverUrl(event.target.value)} placeholder="https://..." /></label>}
+              </fieldset>
               {error && <p className="form-error" role="alert">{error}</p>}
-              <div className="dialog-actions"><button className="outline-button" type="button" onClick={() => setCreateStep("photo")} disabled={pending}>이전</button><button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "추억 저장 중..." : "기억으로 남기기"}</button></div>
-            </>}
+              {awaitingCreation && <p className="memory-privacy-note" role="status">작성한 내용과 사진을 유지했어요. 다시 저장하면 같은 기록의 저장 결과를 확인해요.</p>}
+              <div className="dialog-actions"><button className="outline-button" type="button" onClick={() => setCreateStep("photo")} disabled={pending || awaitingCreation}>이전</button><button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending || metadataPending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "추억 저장 중..." : awaitingCreation ? "저장 결과 다시 확인" : "기억으로 남기기"}</button></div>
+            </Fragment>}
           </form>
         </div>
       )}
       {viewer && (
         <div className="dialog-backdrop memory-viewer-backdrop" role="presentation" onClick={() => !pending && closeViewer()}>
           <article
+            ref={viewerRef}
+            tabIndex={-1}
             className={`memory-viewer memory-viewer-sheet ${editing ? "is-editing" : ""} ${activeViewerImage && !coverFailed ? "has-photo" : "is-text-only"}`}
             role="dialog"
             aria-modal="true"
@@ -706,7 +822,7 @@ export function MemoryTimeline({
                     <button className="memory-viewer-btn memory-viewer-btn--danger" type="button" disabled={pending} onClick={() => void removeCurrentMemory()}>
                       삭제
                     </button>
-                    <button className="memory-viewer-btn memory-viewer-btn--ghost" type="button" onClick={() => beginEdit(viewer)}>수정</button>
+                    <button className="memory-viewer-btn memory-viewer-btn--ghost" type="button" disabled={pending} onClick={() => beginEdit(viewer)}>수정</button>
                     <button className="memory-viewer-btn memory-viewer-btn--primary" type="button" onClick={closeViewer}>확인</button>
                   </div>
                 </header>
@@ -767,7 +883,7 @@ export function MemoryTimeline({
                               setViewerPhotoIndex(index);
                             }}
                           >
-                            <img src={image.url} alt="" />
+                            <img loading="lazy" decoding="async" src={image.url} alt="" />
                           </button>
                         ))}
                       </div>
@@ -776,7 +892,7 @@ export function MemoryTimeline({
                       {formatKoDate(viewer.happenedOn)}
                       {viewer.locationLabel ? ` · ${viewer.locationLabel}` : ""}
                     </p>
-                    <h2 id="memory-viewer-title">{viewer.title}</h2>
+                    <h2 id="memory-viewer-title" tabIndex={-1}>{viewer.title}</h2>
                     <p className="memory-viewer-lead">{viewer.description || "그날의 장면."}</p>
                     {viewer.photos[viewerPhotoIndex] ? (
                       <ul className="memory-viewer-facts" aria-label="사진 정보">
@@ -802,23 +918,24 @@ export function MemoryTimeline({
               </>
             ) : (
               <form className="memory-edit-form" onSubmit={event => void saveEdit(event)}>
+                <fieldset className="memory-story-fields" disabled={pending || awaitingEdit}>
                 <div className="memory-edit-head">
                   <span className="eyebrow">EDIT MEMORY</span>
-                  <h2>이 장면을 다듬어요</h2>
+                  <h2 id="memory-viewer-title" tabIndex={-1}>이 장면을 다듬어요</h2>
                 </div>
                 <div className="memory-photo-grid is-edit" aria-label="추억 사진">
                   {memoryImages(viewer).map(image => (
                     <figure className="memory-photo-draft is-saved" key={image.id}>
-                      <img src={image.url} alt="" />
+                      <img loading="lazy" decoding="async" src={image.url} alt="" />
                     </figure>
                   ))}
                   {editDrafts.map(draft => (
                     <figure className="memory-photo-draft" key={draft.key}>
-                      <img src={draft.preview} alt="" />
+                      <img loading="lazy" decoding="async" src={draft.preview} alt="" />
                       <button className="memory-photo-draft-remove" type="button" aria-label="사진 빼기" onClick={() => removeDraft(draft.key, "edit")}>×</button>
                     </figure>
                   ))}
-                  {memoryImages(viewer).length + editDrafts.length < MAX_MEMORY_PHOTOS && (
+                  {viewer.photos.length + editDrafts.length < MAX_MEMORY_PHOTOS && (
                     <label className="memory-photo-add">
                       <b>+</b>
                       <span>사진 추가</span>
@@ -861,8 +978,10 @@ export function MemoryTimeline({
                     <label className="field"><span>경도</span><input inputMode="decimal" value={editLongitude} onChange={event => setEditLongitude(event.target.value)} /></label>
                   </div>
                 </details>
+                </fieldset>
                 {error && <p className="form-error" role="alert">{error}</p>}
-                <div className="dialog-actions"><button className="outline-button" type="button" onClick={cancelEdit} disabled={pending}>취소</button><button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending || metadataPending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "변경 저장 중..." : "변경 저장"}</button></div>
+                {awaitingEdit && <p className="memory-privacy-note" role="status">내용과 사진을 유지했어요. 저장 결과를 확인할 때까지 이 화면에서 다시 시도해 주세요. 같은 사진이 중복으로 저장되지 않아요.</p>}
+                <div className="dialog-actions"><button className="outline-button" type="button" onClick={cancelEdit} disabled={pending || awaitingEdit}>취소</button><button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending || metadataPending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "변경 저장 중..." : awaitingEdit ? "저장 결과 다시 확인" : "변경 저장"}</button></div>
               </form>
             )}
           </article>

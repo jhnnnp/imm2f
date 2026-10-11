@@ -10,6 +10,10 @@ export function PlanItemCard({
   onRemove,
   onEdit,
   onUpdate,
+  onMovePrevious,
+  onMoveNext,
+  onMoveDay,
+  dayCount = 1,
   editing,
   dragging,
   dropTarget,
@@ -26,6 +30,10 @@ export function PlanItemCard({
   onRemove?: (id: string) => void;
   onEdit: (id: string | null) => void;
   onUpdate?: (id: string, patch: Pick<PlanItem, "startTime" | "durationMinutes">) => void;
+  onMovePrevious?: () => void;
+  onMoveNext?: () => void;
+  onMoveDay?: (id: string, day: number) => void;
+  dayCount?: number;
   editing: boolean;
   dragging: boolean;
   dropTarget: boolean;
@@ -38,6 +46,7 @@ export function PlanItemCard({
   const [startTime, setStartTime] = useState(item.startTime);
   const [durationMinutes, setDurationMinutes] = useState(item.durationMinutes);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAbove, setMenuAbove] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setStartTime(item.startTime);
@@ -45,6 +54,9 @@ export function PlanItemCard({
   }, [item.startTime, item.durationMinutes]);
   useEffect(() => {
     if (!menuOpen) return;
+    const trigger = menuRef.current?.getBoundingClientRect();
+    const menuHeight = menuRef.current?.querySelector<HTMLElement>(".item-action-menu")?.offsetHeight ?? 0;
+    if (trigger) setMenuAbove(trigger.bottom + menuHeight > window.innerHeight - 90 && trigger.top > window.innerHeight - trigger.bottom);
 
     const closeOnOutsideClick = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
@@ -79,7 +91,7 @@ export function PlanItemCard({
     >
       {letter && <span className="letter-pin" aria-hidden="true" />}
       <div className="timeline-item-head">
-        <button className="drag" type="button" aria-label="드래그하여 순서 변경 또는 다른 날짜로 이동" title="끌어서 순서 변경 · 왼쪽 DAY로 옮기기">⠿</button>
+        <button className="drag" type="button" aria-label={`${item.placeName} 순서 변경`} aria-haspopup="menu" aria-expanded={menuOpen} title="끌어서 이동하거나 눌러서 순서 변경" onPointerDown={event => event.stopPropagation()} onClick={() => setMenuOpen(open => !open)}>⠿</button>
         {letter ? <span className="letter-stamp">{stamp}</span> : showTime ? <time>{item.startTime}</time> : null}
         <span className="timeline-category">{item.category}</span>
         <div className="item-actions" ref={menuRef}>
@@ -96,13 +108,16 @@ export function PlanItemCard({
             <span aria-hidden="true">•••</span>
           </button>
           {menuOpen && (
-            <div className="item-action-menu" role="menu">
-              {!letter && showTime && (
+            <div className={`item-action-menu${menuAbove ? " is-above" : ""}`} role="menu">
+              <button type="button" role="menuitem" disabled={!onMovePrevious} onClick={() => { setMenuOpen(false); onMovePrevious?.(); }}>앞으로 이동</button>
+              <button type="button" role="menuitem" disabled={!onMoveNext} onClick={() => { setMenuOpen(false); onMoveNext?.(); }}>뒤로 이동</button>
+              {onUpdate && (
                 <button type="button" role="menuitem" onClick={() => {
                   onEdit(editing ? null : item.id);
                   setMenuOpen(false);
-                }}>{editing ? "시간 변경 취소" : "시간 변경"}</button>
+                }}>{editing ? "시간 변경 취소" : "시간·소요 시간 변경"}</button>
               )}
+              {onMoveDay && Array.from({ length: dayCount }, (_, day) => day === item.dayIndex ? null : <button key={day} type="button" role="menuitem" onClick={() => { setMenuOpen(false); onMoveDay(item.id, day); }}>DAY {day + 1}로 이동</button>)}
               {onRemove && (
                 <button className="is-danger" type="button" role="menuitem" onClick={() => {
                   setMenuOpen(false);
@@ -122,7 +137,7 @@ export function PlanItemCard({
           </p>
         )}
       </div>
-      {editing && !letter && showTime && (
+      {editing && onUpdate && (
         <div className="timeline-edit-panel">
           <label><span>일정 시간</span><input type="time" step={300} required value={startTime} onChange={event => setStartTime(event.target.value)} /></label>
           <label><span>소요 시간</span><select value={durationMinutes} onChange={event => setDurationMinutes(Number(event.target.value))}>{[...new Set([30, 45, 60, 90, 120, 150, 180, item.durationMinutes])].sort((a, b) => a - b).map(minutes => <option key={minutes} value={minutes}>{minutes >= 60 ? `${Math.floor(minutes / 60)}시간${minutes % 60 ? ` ${minutes % 60}분` : ""}` : `${minutes}분`}</option>)}</select></label>

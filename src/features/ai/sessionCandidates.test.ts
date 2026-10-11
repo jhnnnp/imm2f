@@ -151,6 +151,16 @@ describe("session candidate context", () => {
     expect(reset.records).toEqual([]);
   });
 
+  it("preserves every selected venue beyond the history count budget", () => {
+    vi.stubEnv("SESSION_CANDIDATE_SIGNING_KEY", "test-only-signing-key");
+    const venues = Array.from({ length: MAX_SESSION_CANDIDATES + 10 }, (_, index) => candidate(String(index)));
+    const currentPlan = { ...plan(venues[0]), recommendations: venues.flatMap(venue => plan(venue).recommendations) };
+    const context = mergeSessionCandidates(null, records(...venues), info(1, { currentPlan }));
+    expect(context.selectedCandidateIds).toHaveLength(venues.length);
+    expect(context.records).toHaveLength(venues.length);
+    expect(verifiedSessionCandidates(sealSessionCandidates(context), "session-a")?.selectedCandidateIds).toEqual(context.selectedCandidateIds);
+  });
+
   it("rejects a tampered client-carried context", () => {
     vi.stubEnv("SESSION_CANDIDATE_SIGNING_KEY", "test-only-signing-key");
     const sealed = sealSessionCandidates(mergeSessionCandidates(null, records(candidate("a")), info(1)));
@@ -159,6 +169,20 @@ describe("session candidate context", () => {
       rejectedReasons: ["excluded_place"] }] };
     expect(verifiedSessionCandidates(tampered, "session-a")).toBeNull();
     expect(verifiedSessionCandidates(sealed, "other-session")).toBeNull();
+  });
+
+  it("binds candidate snapshots to the authenticated actor and couple", () => {
+    vi.stubEnv("SESSION_CANDIDATE_SIGNING_KEY", "test-only-signing-key");
+    const scope = { actorId: "user-a", coupleId: "couple-a" };
+    const context = mergeSessionCandidates(null, records(candidate("private-saved-place")), info(1));
+    const sealed = sealSessionCandidates(context, scope);
+    expect(verifiedSessionCandidates(sealed, "session-a", scope)?.scope).toEqual(scope);
+    expect(verifiedSessionCandidates(sealed, "session-a", { ...scope, actorId: "user-b" })).toBeNull();
+    expect(verifiedSessionCandidates(sealed, "session-a", { ...scope, coupleId: "couple-b" })).toBeNull();
+    expect(verifiedSessionCandidates({ ...sealed, scope: { ...scope, actorId: "user-b" } }, "session-a", { ...scope, actorId: "user-b" })).toBeNull();
+    expect(verifiedSessionCandidates(sealSessionCandidates(context), "session-a", scope)).toBeNull();
+    const next = sealSessionCandidates(mergeSessionCandidates(sealed, [], info(2)), scope);
+    expect(verifiedSessionCandidates(next, "session-a", scope)?.records).toHaveLength(1);
   });
 
   it("emits only aggregate candidate-session diagnostics", () => {

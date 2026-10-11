@@ -7,11 +7,14 @@ import {
   discoveryActivities,
   emptyDateBrief,
   extractAreasFromText,
+  extractRequestedAreasFromText,
   extractActivitiesFromText,
   extractCuisine,
+  extractPlacesFromText,
   extractStay,
   extractTimeWindow,
   groundedActivities,
+  groundedAreas,
   inferSituationActivities,
   isExclusiveCrawl,
   dateSpine,
@@ -48,6 +51,33 @@ function candidate(overrides: Partial<DiscoverCandidate> = {}): DiscoverCandidat
 }
 
 describe("dateBrief", () => {
+  it("removes rejected destinations from searches while retaining an explicitly added destination", () => {
+    expect(extractRequestedAreasFromText("부산 말고 제주로 변경해줘")).toEqual(["제주"]);
+    expect(extractRequestedAreasFromText("부산이 아니라 제주로 바꿔줘")).toEqual(["제주"]);
+    expect(extractRequestedAreasFromText("부산 아니고 제주로 변경해줘")).toEqual(["제주"]);
+    expect(extractRequestedAreasFromText("성수동은 제외하고 홍대로 바꿔줘")).toEqual(["홍대"]);
+    expect(extractRequestedAreasFromText("부산도 좋고 제주도 좋아")).toEqual(expect.arrayContaining(["부산", "제주"]));
+    expect(groundedAreas("부산은 빼고 제주도 추가해줘", { ...emptyDateBrief(), areas: ["부산"] }, ["부산", "제주"]))
+      .toEqual(["제주"]);
+    expect(groundedAreas("제주도 추가해줘", { ...emptyDateBrief(), areas: ["부산"] }, ["부산", "제주"]))
+      .toEqual(["부산", "제주"]);
+  });
+  it("uses the newly requested cuisine rather than the earlier rejected one", () => {
+    expect(extractCuisine("한식 말고 양식으로 바꿔줘")).toBe("양식");
+    expect(extractCuisine("양식은 빼고 일식으로 골라줘")).toBe("일식");
+    expect(extractCuisine("음식 종류는 상관없어. 한식이나 양식도 좋아")).toBe("any");
+    expect(extractCuisine("라멘은 못 먹어")).toBeNull();
+  });
+
+  it("retains every explicitly named landmark instead of cutting the fifth place", () => {
+    expect(extractPlacesFromText("청계천 한강 남산 광화문 덕수궁 경복궁 북촌 모두 넣어줘"))
+      .toEqual(expect.arrayContaining(["청계천", "한강", "남산", "광화문", "덕수궁", "경복궁", "북촌"]));
+  });
+
+  it("uses the latest requested trip length after an explicit replacement", () => {
+    expect(extractStay("부산 2박3일 말고 1박2일로 바꿔줘")).toEqual({ stayKind: "overnight", nights: 1 });
+    expect(extractStay("부산 2박3일은 취소하고 당일치기로")).toEqual({ stayKind: "daytrip", nights: 0 });
+  });
   it("normalizes Korean dates with single digit months or days for event matching", () => {
     expect(planDayYmd({ dateLabel: "2026년 10월 3일" })).toBe("20261003");
     expect(planDayYmd({ dateLabel: "2026-10-03" })).toBe("20261003");

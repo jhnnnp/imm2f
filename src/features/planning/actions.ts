@@ -4,13 +4,13 @@ import { cache } from "react";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
-import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/actions";
+import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/activityServer";
 import { summarizePlanChange } from "@/features/collaboration/summarize";
-import { applyDateSwitch, emptyDateDay, hasDateContent, type DateDaySnapshot } from "@/features/date/dateDays";
+import { applyDateSwitch, emptyDateDay, hasDateContent, landingDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
 import { parseDiscoverPlaceId } from "@/features/places/discover";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
 import { searchTourPlacesRemote } from "@/lib/tourapi/client";
-import { isLegacyDemoTripTitle, stripLegacyDemoArchive, stripLegacyDemoPlan } from "./legacyDemo";
+import { stripLegacyDemoArchive, stripLegacyDemoPlan } from "./legacyDemo";
 import {
   asPlanCoordinates,
   isUuidPlaceId,
@@ -21,6 +21,8 @@ import {
   withLookedUpCoordinates,
 } from "./planCoordinates";
 import type { CouplePlan, PlanItem, PlanKind } from "./types/plan";
+import { isIsoDate, seoulTodayIso } from "@/lib/dates";
+import { appendPlanItem } from "./appendPlanItem";
 
 type PlanRow = {
   id: string;
@@ -51,6 +53,21 @@ function normalizeDay(value: unknown) {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.min(6, Math.round(n));
+}
+
+function validPlanItems(value: unknown): value is PlanItem[] {
+  if (!Array.isArray(value) || value.length > 200) return false;
+  const ids = new Set<string>();
+  return value.every(item => {
+    if (!item || typeof item !== "object") return false;
+    if (typeof item.id !== "string" || !item.id.trim() || ids.has(item.id)) return false;
+    ids.add(item.id);
+    return typeof item.placeId === "string" && typeof item.placeName === "string" && item.placeName.trim() !== ""
+      && typeof item.category === "string" && typeof item.memo === "string"
+      && typeof item.startTime === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(item.startTime)
+      && Number.isFinite(item.durationMinutes) && item.durationMinutes > 0
+      && Number.isFinite(item.expectedCost) && item.expectedCost >= 0;
+  });
 }
 
 function normalizePlanItem(item: PlanItem): PlanItem {
@@ -157,25 +174,9 @@ async function hydratePlanItemCoordinates(
     if (!missingIds.has(item.id)) return [];
     const coords = asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]);
     if (!coords) return [];
-    return [supabase.from("plan_items").update({ lng: coords[0], lat: coords[1] }).eq("plan_id", planId).eq("client_id", item.id)];
+    return [supabase.from("plan_items").update({ lng: coords[0], lat: coords[1] }).eq("plan_id", planId).eq("client_id", item.id).eq("place_id", item.placeId).eq("place_name", item.placeName).is("lng", null).is("lat", null)];
   }));
   return hydrated;
-}
-
-type PlanWritePayload = {
-  title: string;
-  subtitle: string;
-  start_date: string | null;
-  day_count: number;
-  revision_id: number;
-};
-
-function planWriteVariants(payload: PlanWritePayload) {
-  return [
-    payload,
-    { title: payload.title, subtitle: payload.subtitle, start_date: payload.start_date, day_count: payload.day_count },
-    { title: payload.title, subtitle: payload.subtitle },
-  ] as const;
 }
 
 export const loadCouplePlan = cache(async (kind: PlanKind): Promise<CouplePlan> => {
@@ -252,21 +253,6 @@ export const loadCouplePlan = cache(async (kind: PlanKind): Promise<CouplePlan> 
     startDate: plan.start_date ?? null,
     dayCount: Math.max(1, plan.day_count ?? 1, items.reduce((max, item) => Math.max(max, item.dayIndex + 1), 1)),
   });
-  const removedIds = items.filter(item => !stripped.items.some(keep => keep.id === item.id)).map(item => item.id);
-  if (removedIds.length) {
-    await supabase.from("plan_items").delete().eq("plan_id", plan.id).in("client_id", removedIds);
-  }
-  if (!stripped.items.length && (isLegacyDemoTripTitle(plan.title ?? "") || plan.subtitle === "근대 골목에서 시작해 섬의 노을로 끝나는 1박 2일")) {
-    await supabase.from("plans").update({
-      title: "우리가 고른 여행",
-      subtitle: "",
-      start_date: null,
-      day_count: 1,
-    }).eq("id", plan.id);
-    revalidatePath("/trip");
-    revalidatePath("/our-map");
-    revalidatePath("/");
-  }
   const liveItems = await attachStoredPlanCoordinates(supabase, session.coupleId, stripped.items);
   return { ...stripped, items: liveItems };
 });
@@ -293,40 +279,42 @@ export async function hydrateCouplePlanCoordinates(kind: PlanKind): Promise<Coup
   return { ...base, items };
 }
 
-export async function addItemToCouplePlan(kind: PlanKind, item: PlanItem): Promise<{ ok: true; duplicate: boolean; items: PlanItem[] } | { error: string }> {
+export async function addItemToCouplePlan(kind: PlanKind, item: PlanItem, options?: { targetDate?: string }): Promise<{ ok: true; duplicate: boolean; items: PlanItem[] } | { error: string }> {
+  if (!["date", "trip"].includes(kind) || !validPlanItems([item]) || (kind === "trip" && (!Number.isInteger(item.dayIndex) || item.dayIndex < 0 || item.dayIndex > 6)) || (options?.targetDate !== undefined && !isIsoDate(options.targetDate))) {
+    return { error: "장소를 담을 날짜와 일정을 확인해 주세요." };
+  }
   const current = await loadCouplePlan(kind);
   if (!current.persist) return { error: "로그인 후 우리의일정에 저장할 수 있어요." };
-  const duplicate = current.items.some(existing => existing.placeId === item.placeId || existing.placeName === item.placeName);
-  if (duplicate) return { ok: true, duplicate: true, items: current.items };
-  const last = current.items.at(-1);
-  let startTime = item.startTime;
-  if (last) {
-    const [hours, minutes] = last.startTime.split(":").map(Number);
-    const total = (hours || 0) * 60 + (minutes || 0) + (last.durationMinutes || 60) + 20;
-    startTime = `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-  }
-  const next = [...current.items, { ...item, startTime, order: current.items.length }];
-  const saved = await saveCouplePlan(kind, next, {
-    title: current.title || undefined,
-    subtitle: current.notes,
-    startDate: current.startDate,
-    dayCount: current.dayCount,
+  const target = kind === "date" && options?.targetDate
+    ? landingDateDay({ plan: current, drafts: await listDateDrafts(), today: options.targetDate }).focus
+    : { items: current.items, title: current.title, notes: current.notes, date: current.startDate };
+  const appended = appendPlanItem(target.items, item, kind);
+  if (appended.error) return { error: appended.error };
+  if (appended.duplicate) return { ok: true, duplicate: true, items: appended.items };
+  const saved = await saveCouplePlan(kind, appended.items, {
+    title: target.title || undefined,
+    subtitle: target.notes,
+    startDate: target.date,
+    dayCount: kind === "date" ? 1 : Math.max(current.dayCount, item.dayIndex + 1),
     expectedRevision: current.revision,
   });
   if ("error" in saved) return saved;
-  return { ok: true, duplicate: false, items: next };
+  return { ok: true, duplicate: false, items: appended.items };
 }
 
 export async function saveCouplePlan(
   kind: PlanKind,
   items: PlanItem[],
-  meta?: { title?: string; subtitle?: string; startDate?: string | null; dayCount?: number; expectedRevision?: number; silent?: boolean; summary?: string },
+  meta?: { title?: string; subtitle?: string; startDate?: string | null; dayCount?: number; expectedRevision?: number; preservePreviousDate?: boolean; silent?: boolean; summary?: string },
 ): Promise<{ ok: true; version: number; revision: number } | { error: string; conflict?: boolean }> {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { error: "로그인 후 우리의일정에 저장할 수 있어요." };
   const supabase = await createClient();
   if (!supabase) return { error: "Supabase 환경 변수가 아직 없어요." };
 
+  if (!["date", "trip"].includes(kind) || !validPlanItems(items)) return { error: "저장할 일정의 장소와 시간을 확인해 주세요." };
+  if ((meta?.title !== undefined && typeof meta.title !== "string") || (meta?.subtitle !== undefined && typeof meta.subtitle !== "string") || (meta?.startDate != null && !isIsoDate(meta.startDate)) || (meta?.dayCount !== undefined && (!Number.isInteger(meta.dayCount) || meta.dayCount < 1 || meta.dayCount > 7))) return { error: "저장할 일정의 제목과 날짜를 확인해 주세요." };
+  if (meta?.expectedRevision !== undefined && (!Number.isSafeInteger(meta.expectedRevision) || meta.expectedRevision < 0)) return { error: "일정을 다시 불러온 뒤 저장해 주세요." };
   const normalized = items.map(normalizePlanItem);
 
   let existingQuery = await supabase
@@ -351,8 +339,10 @@ export async function saveCouplePlan(
       .eq("kind", kind)
       .maybeSingle();
   }
+  if (existingQuery.error) return { error: "기존 일정을 확인하지 못했어요. 잠시 후 다시 시도해 주세요." };
   const existing = existingQuery.data as { id: string; start_date?: string | null; title?: string; subtitle?: string; day_count?: number; revision_id?: number } | null;
 
+  if (meta?.expectedRevision !== undefined && meta.expectedRevision !== (existing?.revision_id ?? 0)) return { error: "파트너가 일정을 바꿨어요. 최신 일정을 확인하고 다시 저장해 주세요.", conflict: true };
   const title = meta?.title ?? existing?.title ?? (kind === "date" ? "우리가 고른 데이트" : "우리가 고른 여행");
   const subtitle = meta && "subtitle" in meta ? meta.subtitle ?? "" : existing?.subtitle ?? "";
   const maxDay = normalized.reduce((max, item) => Math.max(max, item.dayIndex + 1), 1);
@@ -360,14 +350,15 @@ export async function saveCouplePlan(
   const startDate = meta && "startDate" in meta ? meta.startDate ?? null : undefined;
 
   const nextStart = startDate === undefined ? existing?.start_date ?? null : startDate;
-  const { data: previousRows } = existing?.id
+  const previousQuery = existing?.id
     ? await supabase
       .from("plan_items")
-      .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index")
+      .select("*")
       .eq("plan_id", existing.id)
-      .order("day_index", { ascending: true })
       .order("sort_order", { ascending: true })
-    : { data: [] as PlanItemRow[] };
+    : { data: [] as PlanItemRow[], error: null };
+  if (previousQuery.error) return { error: "기존 일정의 장소를 확인하지 못했어요. 잠시 후 다시 시도해 주세요." };
+  const previousRows = previousQuery.data;
   const before = (previousRows ?? []).map(row => toItem(row as PlanItemRow));
   const created = !existing?.id;
   const summary = meta?.summary ?? (created ? `${normalized.length}곳 일정 시작` : summarizePlanChange(before, normalized));
@@ -375,7 +366,7 @@ export async function saveCouplePlan(
     ? created ? "여행 계획을 만들었어요" : "여행 계획을 수정했어요"
     : created ? "데이트 계획을 만들었어요" : "데이트 계획을 수정했어요";
 
-  if (kind === "date" && existing?.start_date && existing.start_date !== nextStart && before.length) {
+  if (meta?.preservePreviousDate !== false && kind === "date" && existing?.start_date && existing.start_date !== nextStart && before.length) {
     // Check the revision before preserving a snapshot from the previous date.
     if (meta?.expectedRevision !== undefined && existing.revision_id !== undefined && meta.expectedRevision !== existing.revision_id) return { error: "파트너가 일정을 바꿨어요. 최신 일정을 확인하고 다시 저장해 주세요.", conflict: true };
     const preserved = await saveDateDraft({ date: existing.start_date, title: existing.title ?? "우리가 고른 데이트", notes: existing.subtitle ?? "", items: before });
@@ -388,8 +379,8 @@ export async function saveCouplePlan(
     place_name: item.placeName,
     category: item.category,
     start_time: item.startTime,
-    duration_minutes: item.durationMinutes,
-    expected_cost: item.expectedCost,
+    duration_minutes: Math.min(1440, Math.max(1, Math.round(item.durationMinutes))),
+    expected_cost: Math.round(item.expectedCost),
     sort_order: order,
     memo: item.memo,
     day_index: item.dayIndex,
@@ -403,127 +394,29 @@ export async function saveCouplePlan(
     target_day_count: dayCount,
     target_items: payload,
     target_summary: summary,
-    expected_revision: meta?.expectedRevision ?? null,
+    expected_revision: meta?.expectedRevision ?? existing?.revision_id ?? 0,
   });
   if (saveError) {
     if (saveError.message.includes("PLAN_CONFLICT")) {
       return { error: "상대가 이 계획을 먼저 수정했어요. 최신 내용을 다시 불러와 주세요.", conflict: true };
     }
-    // Older deployments can have plan tables without the atomic RPC or newer
-    // columns (revision_id / start_date / day_count) in PostgREST's schema cache.
-    if (!isMissingSchemaObject(saveError)) return { error: saveError.message };
-
-    const nextRevision = (existing?.revision_id ?? 0) + 1;
-    const writePayload: PlanWritePayload = {
-      title,
-      subtitle,
-      start_date: nextStart,
-      day_count: dayCount,
-      revision_id: nextRevision,
-    };
-    let planId = existing?.id;
-    let writeError: { message?: string } | null = null;
-
-    if (planId) {
-      for (const fields of planWriteVariants(writePayload)) {
-        const update = await supabase
-          .from("plans")
-          .update(fields)
-          .eq("id", planId)
-          .eq("couple_id", session.coupleId);
-        if (!update.error) {
-          writeError = null;
-          break;
-        }
-        writeError = update.error;
-        if (!isMissingSchemaObject(update.error)) break;
-      }
-      if (writeError) return { error: writeError.message ?? "일정을 저장하지 못했어요." };
-    } else {
-      for (const fields of planWriteVariants({ ...writePayload, revision_id: 1 })) {
-        const insert = await supabase
-          .from("plans")
-          .insert({ couple_id: session.coupleId, kind, ...fields })
-          .select("id")
-          .single();
-        if (!insert.error && insert.data) {
-          planId = insert.data.id;
-          writeError = null;
-          break;
-        }
-        writeError = insert.error;
-        if (!isMissingSchemaObject(insert.error)) break;
-      }
-      if (!planId) return { error: writeError?.message ?? "일정을 저장하지 못했어요." };
-    }
-
-    const removed = await supabase.from("plan_items").delete().eq("plan_id", planId);
-    if (removed.error) return { error: removed.error.message };
-    if (payload.length) {
-      const withDay = payload.map(item => ({ ...item, plan_id: planId! }));
-      let inserted = await supabase.from("plan_items").insert(withDay);
-      if (inserted.error && isMissingSchemaObject(inserted.error)) {
-        const withoutCoords = withDay.map(({ lng: _lng, lat: _lat, ...item }) => item);
-        inserted = await supabase.from("plan_items").insert(withoutCoords);
-        if (inserted.error && isMissingSchemaObject(inserted.error)) {
-          const withoutDay = withoutCoords.map(({ day_index: _dayIndex, ...item }) => item);
-          inserted = await supabase.from("plan_items").insert(withoutDay);
-        }
-      }
-      if (inserted.error) return { error: inserted.error.message };
-    }
-    const { data: latestVersion } = await supabase
-      .from("plan_versions")
-      .select("version_number")
-      .eq("plan_id", planId)
-      .order("version_number", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const fallbackVersion = (latestVersion?.version_number ?? 0) + 1;
-    const versionInsert = await supabase.from("plan_versions").insert({
-      couple_id: session.coupleId,
-      plan_id: planId,
-      plan_kind: kind,
-      version_number: fallbackVersion,
-      snapshot: payload,
-      change_summary: summary,
-      created_by: session.userId,
-    });
-    if (versionInsert.error) return { error: versionInsert.error.message };
-    if (!meta?.silent) {
-      await recordCoupleActivity({
-        coupleId: session.coupleId,
-        actorUserId: session.userId,
-        entityType: "plan",
-        entityId: planId,
-        action: kind === "trip" ? (created ? "TRIP_CREATED" : "TRIP_UPDATED") : (created ? "DATE_CREATED" : "DATE_UPDATED"),
-        title: titleText,
-        detail: summary,
-        afterValue: payload,
-      });
-    }
-    revalidatePath("/");
-  revalidatePath(`/${kind}`);
-  revalidatePath("/calendar");
-  revalidatePath("/our-map");
-    return { ok: true, version: fallbackVersion, revision: nextRevision };
+    // Replacing all items requires the transaction and revision lock in the RPC.
+    // A delete-then-insert fallback can erase a saved plan on a failed insert.
+    return { error: "안전한 일정 저장 기능을 준비하지 못했어요. 잠시 후 다시 시도해 주세요." };
   }
   const result = saved as { plan_id?: string; version?: number; revision?: number } | null;
   if (!result?.plan_id || !result.version || !result.revision) return { error: "일정을 저장하지 못했어요." };
-  await Promise.all(normalized.flatMap(item => {
-    const coords = planItemLngLat(item);
-    if (coords.lng == null || coords.lat == null) return [];
-    return [supabase.from("plan_items").update({ lng: coords.lng, lat: coords.lat }).eq("plan_id", result.plan_id!).eq("client_id", item.id)];
-  }));
 
   if (!meta?.silent) {
-    await queuePartnerEmail({
-    coupleId: session.coupleId,
-    actorUserId: session.userId,
-    partnerUserId: session.partner?.userId ?? null,
-    subject: `[ONLY US] ${titleText}`,
-    body: `${session.displayName}님이 ${summary}`,
-  });
+    try {
+      await queuePartnerEmail({
+        coupleId: session.coupleId,
+        actorUserId: session.userId,
+        partnerUserId: session.partner?.userId ?? null,
+        subject: `[ONLY US] ${titleText}`,
+        body: `${session.displayName}님이 ${summary}`,
+      });
+    } catch { /* Notification delivery must not turn a committed plan into a failed save. */ }
   }
 
   revalidatePath("/");
@@ -536,7 +429,7 @@ export async function saveCouplePlan(
 
 function parseDraftItems(value: unknown): PlanItem[] {
   if (!Array.isArray(value)) return [];
-  return value.map(item => normalizePlanItem(item as PlanItem));
+  return value.filter(item => validPlanItems([item])).map(item => normalizePlanItem(item as PlanItem));
 }
 
 export const listDateDrafts = cache(async (): Promise<DateDaySnapshot[]> => {
@@ -588,6 +481,7 @@ export const listDateDrafts = cache(async (): Promise<DateDaySnapshot[]> => {
 });
 
 export async function saveDateDraft(day: DateDaySnapshot): Promise<{ ok: true } | { error: string }> {
+  if (!day || typeof day.date !== "string" || (day.date !== "" && !isIsoDate(day.date)) || typeof day.title !== "string" || typeof day.notes !== "string" || !validPlanItems(day.items)) return { error: "날짜별 일정의 날짜와 장소를 확인해 주세요." };
   if (!day.date) return { ok: true };
   revalidatePath("/date");
   revalidatePath("/calendar");
@@ -599,7 +493,7 @@ export async function saveDateDraft(day: DateDaySnapshot): Promise<{ ok: true } 
   if (!keep) {
     const removed = await supabase.from("date_drafts").delete().eq("couple_id", session.coupleId).eq("scheduled_on", day.date);
     if (removed.error && isMissingSchemaObject(removed.error)) {
-      await supabase.from("activities").insert({
+      const fallback = await supabase.from("activities").insert({
         couple_id: session.coupleId,
         actor_user_id: session.userId,
         entity_type: "date_draft",
@@ -609,6 +503,7 @@ export async function saveDateDraft(day: DateDaySnapshot): Promise<{ ok: true } 
         detail: "",
         after_value: { deleted: true },
       });
+      if (fallback.error) return { error: "날짜별 일정 삭제를 저장하지 못했어요. 다시 시도해 주세요." };
       return { ok: true };
     }
     if (removed.error) return { error: removed.error.message };
@@ -644,6 +539,10 @@ export async function openDateDay(input: {
   snapshot: { title: string; notes: string; items: PlanItem[] };
   expectedRevision: number;
 }): Promise<{ ok: true; revision: number; focus: DateDaySnapshot; drafts: DateDaySnapshot[] } | { error: string; conflict?: boolean }> {
+  if (!input || (input.fromDate != null && input.fromDate !== "" && !isIsoDate(input.fromDate)) || (input.toDate != null && input.toDate !== "" && !isIsoDate(input.toDate)) || !input.snapshot || typeof input.snapshot.title !== "string" || typeof input.snapshot.notes !== "string" || !validPlanItems(input.snapshot.items) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) return { error: "열려는 일정의 날짜와 장소를 확인해 주세요." };
+  const active = await loadCouplePlan("date");
+  if (!active.persist) return { error: "로그인 후 날짜별 일정을 열 수 있어요." };
+  if (active.revision !== input.expectedRevision) return { error: "파트너가 일정을 바꿨어요. 최신 일정을 확인해 주세요.", conflict: true };
   const current: DateDaySnapshot = {
     date: input.fromDate ?? "",
     title: input.snapshot.title,
@@ -663,14 +562,14 @@ export async function openDateDay(input: {
     startDate: switched.focus.date || null,
     dayCount: 1,
     expectedRevision: input.expectedRevision,
+    preservePreviousDate: false,
     silent: true,
     summary: switched.focus.date ? `${switched.focus.date} 일정을 열었어요` : "날짜 없는 일정을 열었어요",
   });
   if ("error" in saved) return saved;
-  if (switched.focus.date) {
-    const focusedDraft = await saveDateDraft(switched.focus);
-    if ("error" in focusedDraft) return focusedDraft;
-  }
+  // The active plan is the authoritative snapshot of the opened day. A second
+  // write here could fail after the revision advanced and make every retry stale.
+  // It is included in list/landing reads and is stashed before a later switch.
   revalidatePath("/date");
   return { ok: true, revision: saved.revision, focus: switched.focus, drafts: switched.drafts };
 }
@@ -694,14 +593,16 @@ export const listArchivedDatePlans = cache(async (): Promise<{ persist: boolean;
     .eq("couple_id", session.coupleId)
     .eq("memory_type", "date")
     .order("happened_on", { ascending: false });
-  if (error || !memories?.length) return { persist: true, dates: [] };
+  if (error) throw new Error("데이트 기록을 불러오지 못했어요. 다시 시도해 주세요.");
+  if (!memories?.length) return { persist: true, dates: [] };
   const ids = memories.map(memory => memory.id);
-  const { data: snapshots } = await supabase
+  const { data: snapshots, error: snapshotError } = await supabase
     .from("activities")
     .select("entity_id, after_value")
     .eq("couple_id", session.coupleId)
     .eq("entity_type", "date_archive")
     .in("entity_id", ids);
+  if (snapshotError) throw new Error("저장된 기록의 장소를 불러오지 못했어요. 다시 시도해 주세요.");
   const byId = new Map((snapshots ?? []).map(row => [row.entity_id, Array.isArray(row.after_value) ? row.after_value as PlanItem[] : []]));
   return {
     persist: true,
@@ -716,6 +617,7 @@ export const listArchivedDatePlans = cache(async (): Promise<{ persist: boolean;
 });
 
 export async function archiveDatePlan(input: { title: string; date: string; notes: string; items: PlanItem[] }): Promise<{ ok: true; id: string } | { error: string }> {
+  if (typeof input.title !== "string" || typeof input.notes !== "string" || typeof input.date !== "string" || (input.date !== "" && !isIsoDate(input.date)) || !validPlanItems(input.items)) return { error: "기록할 일정의 날짜와 장소를 확인해 주세요." };
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { error: "로그인 후 우리의기록으로 저장할 수 있어요." };
   const supabase = await createClient();
@@ -725,13 +627,13 @@ export async function archiveDatePlan(input: { title: string; date: string; note
     couple_id: session.coupleId,
     memory_type: "date",
     title: input.title.trim() || "우리의 데이트",
-    happened_on: input.date || new Date().toISOString().slice(0, 10),
+    happened_on: input.date || seoulTodayIso(),
     description: input.notes.trim(),
     location_label: normalized.map(item => item.placeName).slice(0, 3).join(" · "),
     created_by: session.userId,
   }).select("id").single();
   if (error || !memory) return { error: error?.message ?? "데이트 기록을 저장하지 못했어요." };
-  await recordCoupleActivity({
+  const recorded = await recordCoupleActivity({
     coupleId: session.coupleId,
     actorUserId: session.userId,
     entityType: "date_archive",
@@ -741,7 +643,13 @@ export async function archiveDatePlan(input: { title: string; date: string; note
     detail: `${normalized.length}곳 · ${input.title}`,
     afterValue: normalized,
   });
+  if ("error" in recorded) {
+    await supabase.from("memories").delete().eq("id", memory.id).eq("couple_id", session.coupleId);
+    return recorded;
+  }
   revalidatePath("/date");
+  revalidatePath("/memories");
+  revalidatePath("/calendar");
   return { ok: true, id: memory.id };
 }
 
@@ -750,6 +658,7 @@ export type ArchivedTripPlan = {
   title: string;
   startDate: string;
   dayCount: number;
+  notes?: string;
   status: "completed";
   items: PlanItem[];
 };
@@ -765,17 +674,19 @@ export const listArchivedTripPlans = cache(async (): Promise<ArchivedTripPlan[]>
     .eq("couple_id", session.coupleId)
     .eq("memory_type", "trip")
     .order("happened_on", { ascending: false });
-  if (error || !memories?.length) return [];
+  if (error) throw new Error("여행 기록을 불러오지 못했어요. 다시 시도해 주세요.");
+  if (!memories?.length) return [];
   const ids = memories.map(memory => memory.id);
-  const { data: snapshots } = await supabase
+  const { data: snapshots, error: snapshotError } = await supabase
     .from("activities")
     .select("entity_id, after_value")
     .eq("couple_id", session.coupleId)
     .eq("entity_type", "trip_archive")
     .in("entity_id", ids);
+  if (snapshotError) throw new Error("저장된 기록의 장소를 불러오지 못했어요. 다시 시도해 주세요.");
   const byId = new Map((snapshots ?? []).map(row => {
     const value = row.after_value && typeof row.after_value === "object" && !Array.isArray(row.after_value)
-      ? row.after_value as { items?: PlanItem[]; dayCount?: number }
+      ? row.after_value as { items?: PlanItem[]; dayCount?: number; notes?: string }
       : {};
     return [row.entity_id, value] as const;
   }));
@@ -788,6 +699,7 @@ export const listArchivedTripPlans = cache(async (): Promise<ArchivedTripPlan[]>
       title: memory.title,
       startDate: memory.happened_on,
       dayCount: Math.max(1, snapshot?.dayCount ?? maxDay),
+      notes: typeof snapshot?.notes === "string" ? snapshot.notes : "",
       status: "completed" as const,
       items,
     });
@@ -795,7 +707,8 @@ export const listArchivedTripPlans = cache(async (): Promise<ArchivedTripPlan[]>
   });
 });
 
-export async function archiveTripPlan(input: { title: string; startDate: string; dayCount: number; items: PlanItem[] }): Promise<{ ok: true; id: string } | { error: string }> {
+export async function archiveTripPlan(input: { title: string; startDate: string; dayCount: number; notes?: string; items: PlanItem[] }): Promise<{ ok: true; id: string } | { error: string }> {
+  if (typeof input.title !== "string" || typeof input.startDate !== "string" || (input.startDate !== "" && !isIsoDate(input.startDate)) || !Number.isInteger(input.dayCount) || input.dayCount < 1 || input.dayCount > 7 || (input.notes !== undefined && typeof input.notes !== "string") || !validPlanItems(input.items)) return { error: "기록할 일정의 날짜와 장소를 확인해 주세요." };
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { error: "로그인 후 우리의기록으로 저장할 수 있어요." };
   const supabase = await createClient();
@@ -805,13 +718,13 @@ export async function archiveTripPlan(input: { title: string; startDate: string;
     couple_id: session.coupleId,
     memory_type: "trip",
     title: input.title.trim() || "우리의 여행",
-    happened_on: input.startDate || new Date().toISOString().slice(0, 10),
-    description: `${Math.max(1, input.dayCount)}일 · ${normalized.length}곳`,
+    happened_on: input.startDate || seoulTodayIso(),
+    description: input.notes?.trim() || `${Math.max(1, input.dayCount)}일 · ${normalized.length}곳`,
     location_label: normalized.map(item => item.placeName).slice(0, 3).join(" · "),
     created_by: session.userId,
   }).select("id").single();
   if (error || !memory) return { error: error?.message ?? "여행 기록을 저장하지 못했어요." };
-  await recordCoupleActivity({
+  const recorded = await recordCoupleActivity({
     coupleId: session.coupleId,
     actorUserId: session.userId,
     entityType: "trip_archive",
@@ -819,9 +732,15 @@ export async function archiveTripPlan(input: { title: string; startDate: string;
     action: "MEMORY_ADDED",
     title: "지난 여행을 기록했어요",
     detail: `${Math.max(1, input.dayCount)}일 · ${normalized.length}곳 · ${input.title}`,
-    afterValue: { items: normalized, dayCount: Math.max(1, input.dayCount) },
+    afterValue: { items: normalized, dayCount: Math.max(1, input.dayCount), notes: input.notes ?? "" },
   });
+  if ("error" in recorded) {
+    await supabase.from("memories").delete().eq("id", memory.id).eq("couple_id", session.coupleId);
+    return recorded;
+  }
   revalidatePath("/trip");
   revalidatePath("/our-map");
+  revalidatePath("/memories");
+  revalidatePath("/calendar");
   return { ok: true, id: memory.id };
 }

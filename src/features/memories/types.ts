@@ -52,6 +52,8 @@ export type Memory = {
 };
 
 export type CreateMemoryInput = {
+  /** A stable UUID for one composer submission, retained after uncertain replies. */
+  attemptId?: string;
   title: string;
   happenedOn: string;
   description: string;
@@ -67,6 +69,9 @@ export type CreateMemoryInput = {
 
 export type UpdateMemoryInput = {
   id: string;
+  /** Retain one attempt ID and its uploaded photos after an uncertain reply. */
+  attemptId?: string;
+  expectedSnapshot?: string;
   title: string;
   happenedOn: string;
   description: string;

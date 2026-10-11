@@ -45,12 +45,6 @@ export type ItineraryPlanningInput = { experiencePlan: ExperiencePlan | null;
   /** Existing signed session candidate snapshot, not a new candidate source of truth. */
   candidatePool: SessionCandidateContext | null };
 
-/** Leave room for supporting stops while keeping the signed anchor limit aligned with the UI. */
-export function maxSelectedExplorationPlaces(nights: number) {
-  const days = Math.max(1, Math.min(7, (Number.isFinite(nights) ? Math.trunc(nights) : 0) + 1));
-  return Math.min(12, days * 2 + 2);
-}
-
 export const EXPLORATION_ACTIVITIES: Array<{ id: ExplorationActivity; label: string }> = [
   { id: "beach", label: "바다/산책" }, { id: "culture", label: "전시/문화" },
   { id: "shopping", label: "쇼핑" }, { id: "meal", label: "맛집" },
@@ -128,11 +122,11 @@ const qualityEvidence: Record<string, string[]> = {
   aesthetic: ["space", "interior", "architecture"], view: ["view", "terrace", "window"],
   spacious: ["space", "seating"], traditional: ["architecture", "interior"],
   dessert: ["menu"], quiet: ["noise", "crowd"], atmosphere: ["space", "interior", "ambience"],
-  value_for_money: ["menu", "price"], local_feel: [],
+  local_feel: [],
 };
 const qualityLabel: Record<string, string> = { aesthetic: "예쁜 공간", view: "전망 근거",
   spacious: "넓은 공간", traditional: "전통 공간", dessert: "디저트", quiet: "조용함",
-  atmosphere: "분위기", value_for_money: "가격 근거" };
+  atmosphere: "분위기" };
 
 export function initialExplorationPreferences(message: string, state: AIPlannerState): CandidateExplorationPreferences {
   const activities: ExplorationActivity[] = [];
@@ -222,7 +216,7 @@ export function explorationResearchPlan(plan: ResearchPlan | null, preferences: 
     const category = activityCategory[id];
     const base = plan?.needs.find(need => need.kind === "venue" && need.category === category);
     const qualities = id === "cafe" ? preferences.cafeQualities : [];
-    const qualityList = [...new Set([...(base?.qualities ?? []), ...qualities])];
+    const qualityList = [...new Set([...(base?.qualities ?? []).filter(quality => quality !== "value_for_money"), ...qualities])];
     const query = id === "meal" && preferences.cuisines.length === 1 && preferences.cuisines[0] !== "지역 음식"
       ? `${preferences.cuisines[0]} 식당` : id === "shopping" && preferences.shoppingKinds.length === 1
         ? `${SHOPPING_CHOICES.find(item => item.value === preferences.shoppingKinds[0])?.label ?? "쇼핑"}`
@@ -254,13 +248,16 @@ export function explorationResearchPlan(plan: ResearchPlan | null, preferences: 
 }
 
 export function refineExplorationNeed(plan: ResearchPlan, groupId: ExplorationActivity, text: string): ResearchPlan {
-  const next = plan.needs.map(need => ({ ...need, qualities: [...need.qualities], evidenceNeeded: [...need.evidenceNeeded] }));
+  const next = plan.needs.map(need => ({ ...need,
+    qualities: need.qualities.filter(quality => quality !== "value_for_money"),
+    evidenceNeeded: need.qualities.includes("value_for_money")
+      ? [...new Set(need.qualities.filter(quality => quality !== "value_for_money").flatMap(quality => qualityEvidence[quality] ?? []))]
+      : [...need.evidenceNeeded] }));
   const words = text.toLowerCase();
   const additions: string[] = [];
   if (/바다|오션뷰|전망|뷰/.test(words)) additions.push("view");
   if (/예쁜|이쁜|감성/.test(words)) additions.push("aesthetic");
   if (/조용|한적/.test(words)) additions.push("quiet");
-  if (/덜 비싼|저렴|가성비/.test(words)) additions.push("value_for_money");
   if (/현지 느낌|로컬/.test(words)) additions.push("local_feel");
   if (/분위기/.test(words)) additions.push("atmosphere");
   for (const need of next.filter(item => item.id === `explore-${groupId}` || item.id === `explore-${groupId}-evidence`)) {
@@ -314,10 +311,60 @@ export function candidateCardFact(candidate: DiscoverCandidate, need?: ResearchN
   if (named) return { label: "장소 유형", text: named[0] };
   return { label: "제공된 분류", text: candidate.categoryLabel || "장소 상세 정보 확인 전" };
 }
+
+/** The map provider's taxonomy is identity metadata, not a review or a guarantee. */
+export function candidateProviderType(candidate: DiscoverCandidate) {
+  const types = (candidate.detailedCategory ?? "").split(/\s*>\s*/)
+    .map(value => value.trim()).filter(Boolean);
+  const specific = types.filter(value => !["음식점", "카페", "여행", "관광,명소", "관광명소", "문화,예술", "가정,생활"].includes(value));
+  return [...new Set(specific)].slice(-2).join(" · ").slice(0, 80)
+    || candidateCardFact({ ...candidate, evidence: [] }).text;
+}
+
+/** Explain why a candidate is in this group and what is still unknown.
+ * An unsupported atmosphere or night view never becomes a venue fact. */
+export function candidateCardExplanation(candidate: DiscoverCandidate, need: ResearchNeed): { label: string; text: string } {
+  const fact = candidateCardFact(candidate, need);
+  const area = candidate.district.trim() || (candidate.roadAddress || candidate.address).trim()
+    .split(/\s+/).slice(0, 3).join(" ");
+  const type = candidateProviderType(candidate);
+  const id = need.id.replace(/^explore-/, "").replace(/-evidence$/, "") as ExplorationActivity;
+  const activity = EXPLORATION_ACTIVITIES.find(item => item.id === id)?.label;
+  const isObservation = ["확인된 정보", "검색 자료 · 확인 필요"].includes(fact.label);
+  const observationKind = fact.label === "확인된 정보" ? "source_checked" : "search_report";
+  const related = isObservation ? liveEvidence(candidate).filter(item => item.verification === observationKind
+    && item.text.trim() && !item.text.replace(/\s+/g, " ").trim().startsWith(fact.text)
+    && (observationKind !== "search_report" || item.sourceExcerpt?.trim()
+      && item.sourceVenueName?.trim() && item.sourceAddress?.trim())) : [];
+  const notes = isObservation
+    ? [fact.text, ...related.slice(0, 1).map(item => item.text.replace(/\s+/g, " ").trim().slice(0, 180))]
+    : [area ? `${area}의 ${type} 분류로 등록된 장소예요.`
+      : `세부 지역은 확인 전이며, ${type} 분류로 등록된 장소예요.`];
+  if (isObservation) notes.push(`${area ? `${area} 권역의 ` : ""}${activity ?? "방문"} 후보로 비교해 보세요.`);
+  else if (activity) notes.push(`요청한 ${activity} 활동에 맞춰 찾은 후보예요.`);
+  const guidance: Record<ExplorationActivity, string> = {
+    beach: "해변이나 산책 구간의 접근 방법과 날씨·일몰 시각을 확인해 주세요.",
+    culture: "방문 날짜에 열리는 전시·관람 시간과 입장료를 확인해 주세요.",
+    shopping: "원하는 매장·상품이 있는지와 영업일을 확인해 주세요.",
+    meal: "대표 메뉴와 가격, 방문 시간의 대기·예약 여부를 확인해 주세요.",
+    cafe: "메뉴와 좌석 구성, 방문 시간의 영업 여부를 확인해 주세요.",
+    nightview: "장소 분류만으로 실제 야경을 보장할 수 없어요. 야간 개방과 조망 방향을 확인해 주세요.",
+    experience: "체험 프로그램의 실제 운영일·예약 조건과 소요 시간을 확인해 주세요.",
+    nature: "산책 구간·경사와 접근 방법을 확인하고 날씨에 맞춰 선택해 주세요.",
+    festival: "행사 기간과 방문 날짜의 프로그램·운영 장소를 확인해 주세요.",
+  };
+  const supported = candidateQualityBadges(candidate, need);
+  const missingQualities = need.qualities.filter(quality => qualityLabel[quality]
+    && !supported.includes(qualityLabel[quality])).map(quality => qualityLabel[quality]);
+  if (missingQualities.length) notes.push(`요청한 ${[...new Set(missingQualities)].join("·")} 조건은 아직 확인되지 않았어요.`);
+  if (guidance[id]) notes.push(guidance[id]);
+  else notes.push("방문 날짜의 운영 시간과 이용 조건을 확인해 주세요.");
+  return { label: isObservation ? fact.label : "분류 기반 후보 · 확인할 점", text: notes.join(" ").slice(0, 650) };
+}
 export function candidateQualityBadges(candidate: DiscoverCandidate, need: ResearchNeed): string[] {
   const facts = liveEvidence(candidate).filter(fact => fact.verification === "source_checked");
   return need.qualities.flatMap(quality => {
-    if (quality === "value_for_money" || quality === "local_feel") return [];
+    if (quality === "local_feel") return [];
     const supported = (qualityEvidence[quality] ?? []).some(attribute => facts.some(fact => {
       const text = `${fact.attribute} ${fact.text}`.toLowerCase();
       const contrary = quality === "quiet" ? /시끄럽|붐비(?!지\s*않)|소음이\s*심/
@@ -436,10 +483,13 @@ export function groupExplorationCandidates(input: { plan: ResearchPlan; preferen
       });
     const cards = ranked.slice(0, MAX_EXPLORATION_CANDIDATES).map(({ item, badges }) => {
       assigned.add(dateCandidateKey(item));
-      const fact = candidateCardFact(item, need);
+      const fact = candidateCardExplanation(item, need);
+      const providerType = candidateProviderType(item);
       return ({
       candidateId: dateCandidateKey(item), name: item.name, area: item.district, groupId: id,
-      category: item.categoryLabel, image: item.image, mapUrl: item.mapUrl,
+      category: providerType && providerType !== item.categoryLabel
+        ? `${item.categoryLabel} · ${providerType}` : item.categoryLabel,
+      image: item.image, mapUrl: item.mapUrl,
       address: item.address || item.roadAddress, badges,
       reason: fact.text, factLabel: fact.label,
       evidenceUrls: liveEvidence(item).filter(fact => fact.verification === "source_checked"

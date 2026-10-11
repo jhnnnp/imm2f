@@ -3,8 +3,9 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { curveRoute } from "@/features/trip/planRoute";
-import type { LngLat, RoadRouteProfile } from "@/features/map/routing/fetchRoadRoute";
+import { isLngLat, type LngLat, type RoadRouteProfile } from "@/features/map/routing/fetchRoadRoute";
 import { useRoadRoute } from "@/features/map/routing/useRoadRoute";
+import { screenOffsetsForNearbyPins } from "@/features/map/htmlMarker";
 
 export type RouteAnchor = {
   coordinates: LngLat;
@@ -13,6 +14,8 @@ export type RouteAnchor = {
   /** Nudge line endpoint to visual pin tip (px), from MapLibre anchor point */
   tipOffset?: [number, number];
 };
+
+type PinConnector = { x1: number; y1: number; x2: number; y2: number };
 
 function projectAnchor(map: MapLibreMap, anchor: RouteAnchor) {
   const point = map.project(anchor.coordinates);
@@ -29,7 +32,7 @@ function screenPathFromCoords(map: MapLibreMap, anchors: RouteAnchor[], routeCoo
   });
   projected[0] = projectAnchor(map, anchors[0]);
   projected[projected.length - 1] = projectAnchor(map, anchors[anchors.length - 1]);
-  return projected.map(point => `${point.x},${point.y}`).join(" ");
+  return projected.map(point => `${Number(point.x.toFixed(2))},${Number(point.y.toFixed(2))}`).join(" ");
 }
 
 /** Fallback while road route loads or when routing fails */
@@ -52,7 +55,7 @@ export function buildScreenPath(map: MapLibreMap, anchors: RouteAnchor[]) {
     projected[0] = projectAnchor(map, start);
     projected[projected.length - 1] = projectAnchor(map, end);
 
-    parts.push(projected.map(point => `${point.x},${point.y}`).join(" "));
+    parts.push(projected.map(point => `${Number(point.x.toFixed(2))},${Number(point.y.toFixed(2))}`).join(" "));
   }
 
   return parts.join(" ");
@@ -66,6 +69,7 @@ export function MapRouteOverlay({
   pinVariant = "memory",
   roadProfile = "driving",
   providedRoadPath,
+  spreadNearbyPins = false,
 }: {
   map: MapLibreMap | null;
   anchors: RouteAnchor[];
@@ -75,16 +79,20 @@ export function MapRouteOverlay({
   roadProfile?: RoadRouteProfile;
   /** Reuse a parent's route fetch when the map and overlay share a path. */
   providedRoadPath?: LngLat[] | null;
+  /** Match markers spread from their current projected positions. */
+  spreadNearbyPins?: boolean;
 }) {
   const gradientId = useId().replace(/:/g, "");
   const routeKey = useMemo(
-    () => anchors.map(anchor => `${anchor.coordinates.join(",")}:${anchor.screenOffset?.join(",") ?? ""}:${anchor.tipOffset?.join(",") ?? ""}`).join("|"),
-    [anchors],
+    () => `${roadProfile}:` + anchors.map(anchor => `${anchor.coordinates.join(",")}:${anchor.screenOffset?.join(",") ?? ""}:${anchor.tipOffset?.join(",") ?? ""}`).join("|"),
+    [anchors, roadProfile],
   );
-  const [path, setPath] = useState("");
+  const [projected, setProjected] = useState<{ key: string; path: string; connectors: PinConnector[] } | null>(null);
+  const path = projected?.key === routeKey ? projected.path : "";
+  const connectors = projected?.key === routeKey ? projected.connectors : [];
 
   const normalizedAnchors = useMemo(
-    () => anchors.map(anchor => ({
+    () => anchors.filter(anchor => isLngLat(anchor.coordinates)).map(anchor => ({
       ...anchor,
       tipOffset: anchor.tipOffset ?? (pinVariant === "planner" ? ([0, -5] as [number, number]) : ([0, -2] as [number, number])),
     })),
@@ -107,32 +115,47 @@ export function MapRouteOverlay({
 
   useEffect(() => {
     if (!map || !active || normalizedAnchors.length < 2) {
-      setPath("");
+      setProjected(null);
       return;
     }
-
+    let frame = 0;
     const sync = () => {
-      if (roadPath) {
-        setPath(screenPathFromCoords(map, normalizedAnchors, roadPath));
-        return;
+      let drawAnchors = normalizedAnchors;
+      if (spreadNearbyPins) {
+        const container = map.getContainer();
+        const offsets = screenOffsetsForNearbyPins(normalizedAnchors.map(anchor => map.project(anchor.coordinates)), { width: container.clientWidth, height: container.clientHeight });
+        drawAnchors = normalizedAnchors.map((anchor, index) => ({ ...anchor, screenOffset: offsets[index] }));
       }
-      setPath(buildScreenPath(map, normalizedAnchors));
+      const next = roadPath
+        ? screenPathFromCoords(map, drawAnchors, roadPath)
+        : buildScreenPath(map, drawAnchors);
+      const nextConnectors: PinConnector[] = spreadNearbyPins ? drawAnchors.flatMap(anchor => {
+        if (!anchor.screenOffset?.some(value => value !== 0)) return [];
+        const origin = projectAnchor(map, { ...anchor, screenOffset: [0, 0] });
+        const tip = projectAnchor(map, anchor);
+        return [{ x1: Number(origin.x.toFixed(2)), y1: Number(origin.y.toFixed(2)), x2: Number(tip.x.toFixed(2)), y2: Number(tip.y.toFixed(2)) }];
+      }) : [];
+      setProjected(current => current?.key === routeKey && current.path === next
+        && current.connectors.length === nextConnectors.length
+        && current.connectors.every((connector, index) => {
+          const nextConnector = nextConnectors[index];
+          return connector.x1 === nextConnector.x1 && connector.y1 === nextConnector.y1 && connector.x2 === nextConnector.x2 && connector.y2 === nextConnector.y2;
+        }) ? current : { key: routeKey, path: next, connectors: nextConnectors });
     };
-
+    const schedule = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => { frame = 0; sync(); });
+    };
     sync();
-    map.on("move", sync);
-    map.on("zoom", sync);
-    map.on("resize", sync);
-    map.on("rotate", sync);
-    map.on("pitch", sync);
+    // move covers pan, zoom, pitch and bearing; project the route once per frame.
+    map.on("move", schedule);
+    map.on("resize", schedule);
     return () => {
-      map.off("move", sync);
-      map.off("zoom", sync);
-      map.off("resize", sync);
-      map.off("rotate", sync);
-      map.off("pitch", sync);
+      window.cancelAnimationFrame(frame);
+      map.off("move", schedule);
+      map.off("resize", schedule);
     };
-  }, [map, active, normalizedAnchors, routeKey, roadPath]);
+  }, [map, active, normalizedAnchors, routeKey, roadPath, spreadNearbyPins]);
 
   if (!active || !path) return null;
 
@@ -158,6 +181,9 @@ export function MapRouteOverlay({
       <polyline className="map-route-overlay-body" points={path} stroke={`url(#${gradientId})`} filter={`url(#${gradientId}-depth)`} />
       <polyline className="map-route-overlay-sheen" points={path} />
       <polyline className="map-route-overlay-flow" points={path} />
+      <g className="map-route-pin-connectors" stroke="#627368" strokeWidth="1.5" strokeDasharray="3 3" strokeLinecap="round" opacity="0.72">
+        {connectors.map((connector, index) => <line key={index} {...connector} vectorEffect="non-scaling-stroke" />)}
+      </g>
     </svg>
   );
 }

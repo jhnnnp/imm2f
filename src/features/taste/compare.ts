@@ -2,7 +2,6 @@ import { emptyDateBrief } from "@/features/ai/dateBrief";
 import type { AIPlannerState, DateActivityId, DateAreaScope, DateCuisineChoice } from "@/features/planning/types/plan";
 import {
   labelForActivity,
-  labelForBudget,
   labelForCrowd,
   labelForCuisine,
   labelForDateFlow,
@@ -11,7 +10,7 @@ import {
   labelForSetting,
   labelForTime,
 } from "./options";
-import type { TasteBudget, TasteCompare, TasteDateSeed, TasteDifference, TasteProfile } from "./types";
+import type { TasteCompare, TasteDateSeed, TasteDifference, TasteProfile } from "./types";
 
 function overlap<T>(left: T[], right: T[]) {
   return left.filter(item => right.includes(item));
@@ -25,11 +24,6 @@ function plannerPace(pace: TasteProfile["pace"]): AIPlannerState["pace"] {
   if (pace === "linger") return "relaxed";
   if (pace === "walk") return "active";
   return "balanced";
-}
-
-function quieterBudget(left: TasteBudget, right: TasteBudget): TasteBudget {
-  const rank: Record<TasteBudget, number> = { modest: 0, comfortable: 1, generous: 2 };
-  return rank[left] <= rank[right] ? left : right;
 }
 
 function mixScope(left: DateAreaScope, right: DateAreaScope): DateAreaScope {
@@ -216,7 +210,6 @@ export function compareTasteProfiles(you: TasteProfile, partner: TasteProfile): 
     .filter((item): item is TasteDifference => Boolean(item));
   const overlaps = overlapLabels(you, partner);
   const constraints = avoidFoods;
-  const budget = quieterBudget(you.budget, partner.budget);
   const core = { areas, activities, cuisine, pace, timeWindow, areaScope, indoorPlay, avoidFoods };
   const prompt = datePrompt(you, partner, core, dateFlow, drink);
   const headline = overlaps.length
@@ -232,7 +225,6 @@ export function compareTasteProfiles(you: TasteProfile, partner: TasteProfile): 
     headline,
     lines: [
       prompt,
-      budget === "modest" ? "예산은 부담 없는 쪽으로 맞춰요." : "",
       constraints.length ? `${constraints.join(", ")}는 빼요.` : "",
     ].filter(Boolean),
   };

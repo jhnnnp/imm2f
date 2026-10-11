@@ -6,7 +6,8 @@ import { readCalendarWorkspace } from "@/features/collaboration/workspaceReads";
 import { hasDateContent, upsertDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
 import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
 import type { CouplePlan } from "@/features/planning/types/plan";
-import { addDays, formatKoDate, toIsoDate } from "@/lib/dates";
+import { addDays, formatKoDate, toIsoDate, seoulTodayIso } from "@/lib/dates";
+import { SyncNotice } from "@/components/shared/SyncNotice";
 
 type MemoryMark = { id: string; title: string; happenedOn: string };
 
@@ -39,12 +40,19 @@ export function CalendarBoard({
   const [tripPlan, setTripPlan] = useState(trip);
   const [datePlan, setDatePlan] = useState(date);
   const [modalOpen, setModalOpen] = useState(false);
-  useSharedRefresh(async () => {
-    const { trip: nextTrip, date: nextDate, drafts: nextDrafts, memories: nextMemories } = await readCalendarWorkspace();
-    setTripPlan(nextTrip); setTripStart(nextTrip.startDate ?? "");
-    setDatePlan(nextDate); setDateStart(nextDate.startDate ?? "");
-    setDrafts(nextDrafts); setMemories(nextMemories);
-  });
+  const [syncError, setSyncError] = useState("");
+  const retrySync = useSharedRefresh(async ({ isCurrent }) => {
+    try {
+      const { trip: nextTrip, date: nextDate, drafts: nextDrafts, memories: nextMemories } = await readCalendarWorkspace();
+      if (!isCurrent()) return;
+      setTripPlan(nextTrip); setTripStart(nextTrip.startDate ?? "");
+      setDatePlan(nextDate); setDateStart(nextDate.startDate ?? "");
+      setDrafts(nextDrafts); setMemories(nextMemories);
+      setSyncError("");
+    } catch {
+      if (isCurrent()) setSyncError("최신 약속을 불러오지 못했어요. 표시 중인 캘린더는 그대로 있어요.");
+    }
+  }, { tables: ["activities"], activityPrefixes: ["DATE_", "TRIP_", "MEMORY_", "PARTNER_"] });
   const dateDays = useMemo(() => {
     const current = { date: dateStart, title: datePlan.title, notes: datePlan.notes, items: datePlan.items };
     return (dateStart && hasDateContent(current) ? upsertDateDay(drafts, current) : drafts).filter(hasDateContent);
@@ -53,9 +61,9 @@ export function CalendarBoard({
   const modalCloseRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    const now = new Date();
+    const iso = seoulTodayIso();
+    const now = new Date(`${iso}T12:00:00`);
     setCursor(now);
-    const iso = toIsoDate(now);
     setTodayIso(iso);
     setSelected(iso);
   }, []);
@@ -131,12 +139,15 @@ export function CalendarBoard({
   const monthLabel = view.toLocaleDateString("ko-KR", { year: "numeric", month: "long" });
 
   function goToday() {
-    const now = new Date();
+    const iso = seoulTodayIso();
+    const now = new Date(`${iso}T12:00:00`);
     setCursor(now);
-    setSelected(toIsoDate(now));
+    setSelected(iso);
   }
 
   return (
+    <>
+    <SyncNotice message={syncError} onRetry={retrySync} />
     <div className="calendar-layout">
       <div className="calendar-grid">
         <div className="calendar-month-nav">
@@ -214,5 +225,6 @@ export function CalendarBoard({
         </div>
       )}
     </div>
+    </>
   );
 }

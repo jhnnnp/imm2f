@@ -72,7 +72,17 @@ const categories: Array<{ type: Exclude<VenueQuestionType, "general">; aliases: 
 export function venueQuestionType(attribute: string | undefined, userMessage: string): VenueQuestionType {
   const entry = categories.find(item => item.aliases.includes(attribute?.trim().toLowerCase() ?? ""));
   // The model's category alone is insufficient: this turn must actually ask for the fact.
-  return entry && entry.cue.test(userMessage) ? entry.type : "general";
+  if (!entry || !entry.cue.test(userMessage)) return "general";
+  const noun: Record<Exclude<VenueQuestionType, "general">, string> = {
+    parking: "주차", opening_hours: "영업시간|운영시간|휴무", reservation: "예약",
+    pet_policy: "반려동물|애견|동물", accessibility: "휠체어|접근성|장애인",
+    price: "가격|비용", menu: "메뉴", location: "위치|주소",
+  };
+  // "주차는 필요 없고 메뉴만 알려줘" is a menu request, not permission
+  // to launch a second parking search. Policy questions such as "예약 안
+  // 해도 돼?" remain valid; only an explicit dismissal is excluded.
+  const dismissed = new RegExp(`(?:${noun[entry.type]})(?:는|은|이|가)?\\s*(?:상관\\s*없|필요\\s*없|안\\s*궁금|궁금하지\\s*않|(?:알려|확인)(?:주지|하지)\\s*마)`);
+  return dismissed.test(userMessage) ? "general" : entry.type;
 }
 
 function verifiedVenue(task: DateExecutionTask, currentPlan: AIPlannerReply | null,

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { InviteManager } from "@/features/auth/components/InviteManager";
 import { PartnerManage } from "@/features/auth/components/PartnerManage";
 import { getCoupleConnection } from "@/features/auth/session";
@@ -5,6 +6,8 @@ import { pairLabel } from "@/features/auth/koreanName";
 import { formatKoDate } from "@/lib/dates";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+
+export const metadata: Metadata = { title: "파트너" };
 
 export default async function InvitePage() {
   const { session, connectedAt } = await getCoupleConnection();

@@ -1,7 +1,8 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { proposePlanEdits, recommendDatePlanWithSession } from "../actions";
+import { recommendDatePlanWithSession } from "../actions";
+import { requestPlanEdit } from "../requestPlanEdit";
 import type { SessionCandidateContext } from "../sessionCandidates";
 import {
   DATE_KEEP_LABEL,
@@ -39,7 +40,8 @@ import { exploreCandidateGroups, prepareCandidateExploration, replaceRejectedCan
   updateCandidateExplorationChoices } from "../candidateExplorationActions";
 import type { CandidateExplorationPreferences, CandidateGroup, ExplorationActivity,
   ExplorationCard, ItineraryPlanningInput } from "../candidateExploration";
-import { maxSelectedExplorationPlaces, refinementGroupForMessage, retainExplorationChoices } from "../candidateExploration";
+import { refinementGroupForMessage, retainExplorationChoices } from "../candidateExploration";
+import { explicitPlanningChoices, explorationFollowUpIntent, visibleExplorationCards } from "../candidateConversation";
 import type { ExperiencePlan } from "../experiencePlan";
 import type { ResearchPlan } from "../researchPlan";
 import { selectedAreas } from "../dateBrief";
@@ -49,7 +51,8 @@ import { formatKoPicker, toIsoDate } from "@/lib/dates";
 
 function sourceHost(url: string) {
   try {
-    return new URL(url).host.replace(/^www\./, "");
+    const source = new URL(url);
+    return ["http:", "https:"].includes(source.protocol) ? source.host.replace(/^www\./, "") : "";
   } catch {
     return "";
   }
@@ -73,7 +76,14 @@ type KeepStep = "idle" | "destination" | "trip-dates";
 
 function stopKakaoUrl(stop: AIChatStop) {
   const raw = stop.mapUrl?.trim();
-  if (raw) return raw.replace(/^http:\/\//, "https://");
+  if (raw) {
+    try {
+      const url = new URL(raw);
+      if (["http:", "https:"].includes(url.protocol) && ["map.kakao.com", "place.map.kakao.com"].includes(url.hostname)) {
+        return `https://${url.host}${url.pathname}${url.search}`;
+      }
+    } catch { /* Use the verified name and coordinates below. */ }
+  }
   return kakaoPlaceUrl(stop.name, stop.coordinates);
 }
 
@@ -161,7 +171,7 @@ function CoursePlacePeek({ stop, onClose }: { stop: AIChatStop; onClose: () => v
         <dl className="ai-place-peek-facts">
           {stop.rating != null ? <div><dt>평점</dt><dd>{stop.rating}점{stop.ratingCount ? ` · 후기 ${stop.ratingCount}` : ""}</dd></div> : null}
           {stop.dishes ? <div><dt>음식</dt><dd>{stop.dishes}</dd></div> : null}
-          {stop.factSourceUrl ? <div><dt>출처</dt><dd><a href={stop.factSourceUrl} target="_blank" rel="noreferrer">{sourceHost(stop.factSourceUrl) || "검색 결과"}</a></dd></div> : null}
+          {stop.factSourceUrl && sourceHost(stop.factSourceUrl) ? <div><dt>출처</dt><dd><a href={stop.factSourceUrl} target="_blank" rel="noopener noreferrer">{sourceHost(stop.factSourceUrl)}</a></dd></div> : null}
           {stop.address ? <div><dt>주소</dt><dd>{stop.address}</dd></div> : null}
           {stop.openingHours ? <div><dt>{stop.source === "tourapi" ? "기간" : "이용시간"}</dt><dd>{stop.openingHours}</dd></div> : null}
           {phone ? <div><dt>전화</dt><dd><a href={`tel:${phone}`}>{stop.phone}</a></dd></div> : null}
@@ -194,6 +204,8 @@ function AssistantCard({
   onToggle,
   onSubmit,
   progressive = false,
+  quickRepliesDisabled = false,
+  turnId = "welcome",
 }: {
   card?: AIChatCard;
   text: string;
@@ -206,6 +218,8 @@ function AssistantCard({
   onToggle?: (label: string) => void;
   onSubmit?: () => void;
   progressive?: boolean;
+  quickRepliesDisabled?: boolean;
+  turnId?: string;
 }) {
   const lines = (card?.lines?.length ? card.lines : text ? [text] : [])
     .flatMap(line => line.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean));
@@ -248,7 +262,7 @@ function AssistantCard({
       {displayedLines.map((line, index) => <p key={index} className="ai-bubble-paragraph">{line}</p>)}
       {!writing && card?.sources?.length ? (
         <div className="ai-answer-sources" aria-label="답변 출처">
-          {card.sources.map(source => (
+          {card.sources.filter(source => sourceHost(source.url)).map(source => (
             <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">
               출처 · {source.label} ↗
             </a>
@@ -258,7 +272,7 @@ function AssistantCard({
       {card?.stops?.length && visibleStops > 0 ? (
         <ol className="ai-bubble-stops">
           {card.stops.slice(0, visibleStops).map((stop, index) => {
-            const key = `${stop.name}-${index}`;
+            const key = `${turnId}-${stop.name}-${index}`;
             const open = openStopKey === key;
             const multiDay = card.stops?.some(item => (item.dayIndex ?? 0) > 0) ?? false;
             const showDay = multiDay && (index === 0 || (card.stops?.[index - 1]?.dayIndex ?? 0) !== (stop.dayIndex ?? 0));
@@ -322,7 +336,7 @@ function AssistantCard({
                 key={option}
                 type="button"
                 className={active ? "is-selected" : ""}
-                disabled={disabled}
+                disabled={disabled || quickRepliesDisabled}
                 onClick={() => options?.multiple ? onToggle?.(option) : onPick(option)}
               >{option}</button>
             );
@@ -330,7 +344,7 @@ function AssistantCard({
         </div>
       )}
       {options?.multiple && (
-        <button type="button" className="ai-choice-submit" disabled={!selectedChoices.length || disabled} onClick={onSubmit}>
+        <button type="button" className="ai-choice-submit" disabled={!selectedChoices.length || disabled || quickRepliesDisabled} onClick={onSubmit}>
           다음
         </button>
       )}
@@ -366,6 +380,8 @@ export function AIPlanEditor({
   const [summary, setSummary] = useState("");
   const [selected, setSelected] = useState<boolean[]>([]);
   const [recommendation, setRecommendation] = useState<AIPlannerReply | null>(null);
+  const recommendationRef = useRef(recommendation);
+  recommendationRef.current = recommendation;
   const [plannerState, setPlannerState] = useState<AIPlannerState>(() => tasteSeed ? plannerStateFromSeed(tasteSeed) : emptyDateBrief());
   const [planningSessionId, setPlanningSessionId] = useState(() => crypto.randomUUID());
   const sessionCandidatesRef = useRef<SessionCandidateContext | null>(null);
@@ -387,6 +403,8 @@ export function AIPlanEditor({
     experiencePlan: ExperiencePlan | null; researchPlan: ResearchPlan | null } | null>(null);
   const [explorationSelectedIds, setExplorationSelectedIds] = useState<string[]>([]);
   const [explorationSelectedCards, setExplorationSelectedCards] = useState<ExplorationCard[]>([]);
+  const explorationSelectionRef = useRef<ExplorationCard[]>([]);
+  explorationSelectionRef.current = explorationSelectedCards;
   const [explorationRejectedIds, setExplorationRejectedIds] = useState<string[]>([]);
   const explorationGroupById = useRef<Record<string, ExplorationActivity>>({});
   const [activeExplorationGroup, setActiveExplorationGroup] = useState<ExplorationActivity | null>(null);
@@ -402,6 +420,54 @@ export function AIPlanEditor({
   const chatLogRef = useRef<HTMLDivElement>(null);
   const explorationAnchorRef = useRef<HTMLDivElement>(null);
   const requestIdRef = useRef(0);
+  const requestBusyRef = useRef(false);
+  const keepingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const contextKey = `${kind}:${startDate ?? ""}`;
+  const contextRef = useRef(contextKey);
+  contextRef.current = contextKey;
+  const previousContextRef = useRef(contextKey);
+  const itemsKey = JSON.stringify(items);
+  const itemsRef = useRef(itemsKey);
+  itemsRef.current = itemsKey;
+  const editSnapshotRef = useRef<string | null>(null);
+  const requestContextRef = useRef(contextKey);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; requestIdRef.current += 1; };
+  }, []);
+
+  useEffect(() => {
+    if (previousContextRef.current === contextKey) return;
+    previousContextRef.current = contextKey;
+    resetEditor(kind === "date" ? "generate" : items.length ? "edit" : "generate");
+  }, [contextKey]);
+
+  useEffect(() => {
+    if (mode !== "edit" || !editSnapshotRef.current || editSnapshotRef.current === itemsKey) return;
+    requestIdRef.current += 1;
+    requestBusyRef.current = false;
+    editSnapshotRef.current = null;
+    setPhase("idle");
+    setChanges([]);
+    setSelected([]);
+    setError("일정이 바뀌었어요. 최신 일정으로 변경안을 다시 만들어 주세요.");
+  }, [itemsKey, mode]);
+
+  function beginRequest() {
+    requestBusyRef.current = true;
+    requestContextRef.current = contextRef.current;
+    return ++requestIdRef.current;
+  }
+
+  function isCurrentRequest(ticket: number) {
+    return ticket === requestIdRef.current && requestContextRef.current === contextRef.current;
+  }
+
+  function finishRequest(ticket: number) {
+    if (isCurrentRequest(ticket)) requestBusyRef.current = false;
+  }
 
   const keepDays = courseDayCount(recommendation?.items ?? [], plannerState.nights);
 
@@ -450,7 +516,11 @@ export function AIPlanEditor({
   );
   const routeSummary = useMemo(() => {
     if (!recommendation) return null;
-    const distance = recommendation.recommendations.reduce((sum, place) => sum + (place.distanceFromPreviousMeters ?? 0), 0);
+    const knownHops = recommendation.recommendations.flatMap(place => typeof place.distanceFromPreviousMeters === "number"
+      && Number.isFinite(place.distanceFromPreviousMeters) && place.distanceFromPreviousMeters >= 0 ? [place.distanceFromPreviousMeters] : []);
+    const distance = recommendation.design && Number.isFinite(recommendation.design.totalDistanceMeters)
+      ? recommendation.design.totalDistanceMeters : knownHops.reduce((sum, hop) => sum + hop, 0);
+    if (!(distance > 0)) return null;
     return {
       distance,
     };
@@ -459,11 +529,23 @@ export function AIPlanEditor({
   function resetKeep() {
     setKeepStep("idle");
     setTripStartDate("");
-    setKeeping(false);
+    setKeeping(keepingRef.current);
+  }
+
+  function invalidateExplorationRecommendation() {
+    if (!recommendationRef.current) return;
+    recommendationRef.current = null;
+    setRecommendation(null);
+    setShownStops([]);
+    setChoicePrompt(null);
+    setSelectedChoices([]);
+    resetKeep();
+    setConversation(current => [...current, { role: "assistant", text:
+      "선택이나 탐색 조건이 달라졌어요. 선택한 장소로 일정을 다시 만들면 변경 사항을 반영할 수 있어요." }]);
   }
 
   function beginKeep(userText?: string) {
-    if (!recommendation?.items.length || keeping) return;
+    if (!recommendation?.items.length || keepingRef.current || requestBusyRef.current || keeping || explorationBusy || phase === "loading") return;
     setPeek(null);
     setChoicePrompt(null);
     setSelectedChoices([]);
@@ -478,15 +560,15 @@ export function AIPlanEditor({
         text: "이 코스를 어디에 담을까요?",
         card: {
           headline: "어디에 담을까요?",
-          lines: ["하루 데이트로 둘지, 여행 일정으로 둘지 고르면 됩니다."],
-          suggestions: [DATE_KEEP_LABEL, TRIP_KEEP_LABEL],
+          lines: [keepDays > 1 ? "여러 날의 코스는 여행 일정에 담아 주세요. 시작일을 고르면 모든 일차가 함께 저장됩니다." : "하루 데이트로 둘지, 여행 일정으로 둘지 고르면 됩니다."],
+          suggestions: keepDays > 1 ? [TRIP_KEEP_LABEL] : [DATE_KEEP_LABEL, TRIP_KEEP_LABEL],
         },
       },
     ]);
   }
 
   function askTripDates(userText?: string) {
-    if (!recommendation?.items.length) return;
+    if (!recommendation?.items.length || keepingRef.current || requestBusyRef.current || keeping || explorationBusy || phase === "loading") return;
     const days = courseDayCount(recommendation.items, plannerState.nights);
     const initial = tripStartDate || startDate || toIsoDate(new Date());
     setTripStartDate(initial);
@@ -509,14 +591,24 @@ export function AIPlanEditor({
   }
 
   async function commitKeep(destination: "date" | "trip", userText?: string) {
-    if (!recommendation?.items.length || keeping) return;
+    if (!recommendation?.items.length || keepingRef.current || requestBusyRef.current || keeping || explorationBusy || phase === "loading") return;
     if (destination === "trip" && !(tripStartDate || startDate)) {
       askTripDates(userText);
       return;
     }
     const days = courseDayCount(recommendation.items, plannerState.nights);
+    if (destination === "date" && days > 1) {
+      const text = "여러 날의 코스는 하루 데이트로 담을 수 없어요. 여행 일정에 담아 주세요.";
+      setError(text);
+      setKeepStep("destination");
+      setConversation(current => [...current, { role: "assistant", text,
+        card: { headline: "여행 일정으로 담아 주세요", lines: [text], suggestions: [TRIP_KEEP_LABEL] } }]);
+      return;
+    }
     const nextDate = destination === "trip" ? (tripStartDate || startDate || toIsoDate(new Date())) : (startDate || null);
     const title = courseKeepTitle(destination, recommendation.condition.region || plannerState.region || "");
+    keepingRef.current = true;
+    const ticket = beginRequest();
     setKeeping(true);
     setError("");
     setPeek(null);
@@ -530,7 +622,13 @@ export function AIPlanEditor({
       dayCount: days,
       title,
     };
-    const result = onKeep ? await onKeep(payload) : { ok: true as const };
+    const result = onKeep ? await Promise.resolve().then(() => onKeep(payload)).catch(() => ({ error: "코스를 담지 못했어요. 연결을 확인하고 다시 시도해 주세요." })) : { ok: true as const };
+    keepingRef.current = false;
+    finishRequest(ticket);
+    if (!isCurrentRequest(ticket)) {
+      if (mountedRef.current) setKeeping(false);
+      return;
+    }
     if (result && "error" in result) {
       setError(result.error);
       setKeeping(false);
@@ -569,11 +667,21 @@ export function AIPlanEditor({
   }
 
   function switchMode(next: Mode) {
+    if (keepingRef.current || keeping || next === mode) return;
+    resetEditor(next);
+  }
+
+  function resetEditor(next: Mode) {
+    requestIdRef.current += 1;
+    requestBusyRef.current = false;
+    editSnapshotRef.current = null;
     setMode(next);
+    setGeneratePrompt("");
     setPhase("idle");
     setError("");
     setChanges([]);
     setRecommendation(null);
+    recommendationRef.current = null;
     setPlannerState(emptyDateBrief());
     setPlanningSessionId(crypto.randomUUID());
     sessionCandidatesRef.current = null;
@@ -585,22 +693,34 @@ export function AIPlanEditor({
     setExploration(null);
     setExplorationSelectedIds([]);
     setExplorationSelectedCards([]);
+    explorationSelectionRef.current = [];
     setExplorationRejectedIds([]);
     explorationGroupById.current = {};
     setActiveExplorationGroup(null);
     setPendingExplorationRequest("");
+    setExplorationBusy(false);
+    setPendingLabel("");
+    setLoadingSeconds(0);
     resetKeep();
-    requestIdRef.current += 1;
   }
 
   async function runEdit() {
+    if (requestBusyRef.current || keepingRef.current || phase === "loading" || keeping) return;
+    if (!editPrompt.trim()) {
+      setError("바꾸고 싶은 내용을 적어 주세요.");
+      return;
+    }
     if (!items.length) {
       setError("수정할 일정이 없어요. 먼저 일정을 만들거나 장소를 담아 주세요.");
       return;
     }
     setError("");
     setPhase("loading");
-    const result = await proposePlanEdits({ kind, prompt: editPrompt, items });
+    const ticket = beginRequest();
+    editSnapshotRef.current = itemsKey;
+    const result = await requestPlanEdit({ kind, prompt: editPrompt, items }, () => isCurrentRequest(ticket) && itemsRef.current === itemsKey);
+    finishRequest(ticket);
+    if (!result) return;
     if ("error" in result) {
       setError(result.error);
       setPhase("idle");
@@ -618,7 +738,8 @@ export function AIPlanEditor({
   }
 
   async function searchExploration(groupId?: ExplorationActivity, refinement?: string) {
-    if (!exploration || explorationBusy) return;
+    if (!exploration || requestBusyRef.current || keepingRef.current || explorationBusy || keeping || phase === "loading") return false;
+    const ticket = beginRequest();
     setExplorationBusy(true);
     setLoadingSeconds(0);
     try {
@@ -633,6 +754,7 @@ export function AIPlanEditor({
           experiencePlan, researchPlan, groupId, groupIds: groupId ? undefined : batch,
           refinement: groupId ? refinement : undefined,
           selectedIds: explorationSelectedIds, rejectedIds: explorationRejectedIds });
+        if (!isCurrentRequest(ticket)) return false;
         if ("error" in response) throw new Error(response.error);
         sessionCandidatesRef.current = response.sessionCandidates;
         experiencePlan = response.experiencePlan;
@@ -647,22 +769,29 @@ export function AIPlanEditor({
             researchPlan: response.researchPlan, groups };
         });
       }
+      return true;
     } catch {
+      if (!isCurrentRequest(ticket)) return false;
       setConversation(current => [...current, { role: "assistant", text: "후보를 불러오지 못했어요. 다시 시도해 주세요." }]);
-    } finally { setExplorationBusy(false); }
+      return false;
+    } finally { if (isCurrentRequest(ticket)) setExplorationBusy(false); finishRequest(ticket); }
   }
 
   async function rejectExplorationCandidate(card: ExplorationCard) {
-    if (!exploration?.groups || !exploration.researchPlan || explorationBusy) return;
+    if (!exploration?.groups || !exploration.researchPlan || requestBusyRef.current || keepingRef.current || explorationBusy || keeping || phase === "loading") return;
     const groupId = card.groupId ?? exploration.groups.find(group =>
       group.cards.some(item => item.candidateId === card.candidateId))?.id;
     if (!groupId) return;
+    invalidateExplorationRecommendation();
+    const ticket = beginRequest();
     setActiveExplorationGroup(groupId);
     explorationGroupById.current[card.candidateId] = groupId;
-    const selectedIds = explorationSelectedIds.filter(id => id !== card.candidateId);
+    const selectedCards = explorationSelectionRef.current.filter(item => item.candidateId !== card.candidateId);
+    const selectedIds = selectedCards.map(item => item.candidateId);
     const rejectedIds = [...new Set([...explorationRejectedIds, card.candidateId])];
     setExplorationSelectedIds(selectedIds);
-    setExplorationSelectedCards(current => current.filter(item => item.candidateId !== card.candidateId));
+    explorationSelectionRef.current = selectedCards;
+    setExplorationSelectedCards(selectedCards);
     setExplorationRejectedIds(rejectedIds);
     setExplorationBusy(true);
     try {
@@ -671,7 +800,8 @@ export function AIPlanEditor({
         planningSessionId, sessionCandidates: sessionCandidatesRef.current,
         groupId, selectedIds, rejectedIds,
       });
-      if ("error" in response) return;
+      if (!isCurrentRequest(ticket)) return;
+      if ("error" in response) throw new Error(response.error);
       sessionCandidatesRef.current = response.sessionCandidates;
       if (response.card) {
         const replacement = response.card;
@@ -681,18 +811,22 @@ export function AIPlanEditor({
             ? { ...group, cards: [...group.cards, replacement] } : group) } : current);
       }
     } catch {
-      // The rejected card stays hidden; a later search can refill this group.
-    } finally { setExplorationBusy(false); }
+      if (!isCurrentRequest(ticket)) return;
+      setConversation(current => [...current, { role: "assistant", text: "이 장소는 제외했어요. 새 후보를 불러오지 못했으니 ‘다른 곳 보기’로 다시 찾아 주세요." }]);
+    } finally { if (isCurrentRequest(ticket)) setExplorationBusy(false); finishRequest(ticket); }
   }
 
   async function beginExploration(message: string, nextState: AIPlannerState) {
-    if (explorationBusy) return;
+    if (requestBusyRef.current || keepingRef.current || explorationBusy) return;
+    const ticket = beginRequest();
     setExplorationBusy(true);
     setLoadingSeconds(0);
+    setGeneratePrompt("");
     setConversation(current => [...current, { role: "user", text: message }]);
     try {
       const combined = pendingExplorationRequest ? `${pendingExplorationRequest} ${message}` : message;
-      const prepared = await prepareCandidateExploration({ message: combined, previousState: nextState });
+      const prepared = await prepareCandidateExploration({ message: combined, previousState: nextState, planKind: kind });
+      if (!isCurrentRequest(ticket)) return;
       if ("error" in prepared) throw new Error(prepared.error);
       setPlannerState(prepared.state);
       if (prepared.needsArea) {
@@ -721,18 +855,74 @@ export function AIPlanEditor({
           : `${area} ${span} 여행이군요. 원하는 장소 종류를 선택하면 일정에 맞는 후보를 찾아드릴게요.`,
         explorationAnchorId: anchorId }]);
     } catch (error) {
+      if (!isCurrentRequest(ticket)) return;
+      setGeneratePrompt(message);
       setConversation(current => [...current, { role: "assistant", text:
         error instanceof Error && error.message === "candidate_session_unavailable"
           ? "지금은 장소 선택 기능을 시작할 수 없어요. 잠시 후 다시 시도해 주세요."
           : "요청을 이해하지 못했어요. 지역과 기간을 다시 알려 주세요." }]);
-    } finally { setExplorationBusy(false); setGeneratePrompt(""); }
+    } finally { if (isCurrentRequest(ticket)) setExplorationBusy(false); finishRequest(ticket); }
+  }
+
+  async function changeExplorationConditions(message: string, nextState: AIPlannerState) {
+    if (!exploration || requestBusyRef.current || keepingRef.current || explorationBusy || keeping || phase === "loading") return;
+    const ticket = beginRequest();
+    setExplorationBusy(true);
+    setLoadingSeconds(0);
+    setGeneratePrompt("");
+    setConversation(current => [...current, { role: "user", text: message }]);
+    try {
+      const prepared = await prepareCandidateExploration({ message, previousState: nextState, planKind: kind });
+      if (!isCurrentRequest(ticket)) return;
+      if ("error" in prepared) throw new Error(prepared.error);
+      if (prepared.needsArea || prepared.needsSpan) {
+        setGeneratePrompt(message);
+        setConversation(current => [...current, { role: "assistant", text: prepared.needsArea
+          ? "새 조건의 지역을 확인하지 못했어요. 지역과 기간을 함께 알려 주세요. 기존 선택은 유지했어요."
+          : "새 여행의 기간을 알려 주세요. 지역과 기간을 함께 적어 주시면 변경할 수 있어요. 기존 선택은 유지했어요." }]);
+        return;
+      }
+      const previousAreas = selectedAreas(nextState).slice().sort().join("|");
+      const nextAreas = selectedAreas(prepared.state).slice().sort().join("|");
+      const regionChanged = previousAreas !== nextAreas;
+      const freshJourney = /새(?:로운)?\s*(?:여행|데이트|계획)|처음부터/.test(message);
+      const paceChanged = /여유롭|느긋|빡빡|많이\s*둘러|빡세|쉬엄쉬엄/.test(message);
+      const clearChoices = regionChanged || freshJourney;
+      if (clearChoices) {
+        sessionCandidatesRef.current = null;
+        explorationSelectionRef.current = [];
+        setExplorationSelectedCards([]);
+        setExplorationSelectedIds([]);
+        setExplorationRejectedIds([]);
+        explorationGroupById.current = {};
+        setActiveExplorationGroup(null);
+      }
+      invalidateExplorationRecommendation();
+      setPlannerState(prepared.state);
+      const anchorId = crypto.randomUUID();
+      setExploration(current => current ? { ...current, request: message, anchorId,
+        preferences: freshJourney ? prepared.preferences : paceChanged
+          ? { ...current.preferences, pace: prepared.state.pace,
+            provenance: { ...current.preferences.provenance, pace: "explicit_text" } } : current.preferences,
+        groups: null, experiencePlan: null, researchPlan: null } : current);
+      setConversation(current => [...current, { role: "assistant", text: clearChoices
+        ? "지역과 조건을 변경하고 이전 장소 선택을 비웠어요. 원하는 종류를 고르면 새 후보를 찾을 수 있어요."
+        : "새 조건을 반영했어요. 선택한 장소는 유지했어요. 후보를 다시 확인한 뒤 일정을 만들어 주세요.",
+        explorationAnchorId: anchorId }]);
+    } catch {
+      if (!isCurrentRequest(ticket)) return;
+      setGeneratePrompt(message);
+      setConversation(current => [...current, { role: "assistant", text:
+        "조건을 변경하지 못했어요. 기존 조건과 장소 선택은 유지했어요. 잠시 후 다시 보내 주세요." }]);
+    } finally { if (isCurrentRequest(ticket)) setExplorationBusy(false); finishRequest(ticket); }
   }
 
   async function planSelectedCandidates() {
-    if (!exploration?.groups || !explorationSelectedIds.length || explorationBusy) return;
-    if (explorationSelectedIds.length > maxSelectedExplorationPlaces(plannerState.nights)) {
-      setConversation(current => [...current, { role: "assistant",
-        text: `이번 일정에서는 최대 ${maxSelectedExplorationPlaces(plannerState.nights)}곳까지 고를 수 있어요. 선택한 장소를 줄여 주세요.` }]);
+    const selectedIds = explorationSelectionRef.current.map(card => card.candidateId);
+    if (!exploration?.groups || !selectedIds.length || requestBusyRef.current || keepingRef.current || explorationBusy || keeping || phase === "loading") return;
+    if (plannerState.nights > 6) {
+      setConversation(current => [...current, { role: "assistant", text:
+        "선택한 장소는 유지했어요. 전체 일정 생성은 최대 6박 7일까지 지원하므로 기간을 줄이거나 구간을 나눠 계획해 주세요." }]);
       return;
     }
     if (!exploration.researchPlan) {
@@ -741,37 +931,75 @@ export function AIPlanEditor({
       return;
     }
     setExplorationBusy(true);
+    const ticket = beginRequest();
     setLoadingSeconds(0);
     try {
       const verified = await updateCandidateExplorationChoices({ planningSessionId,
         sessionCandidates: sessionCandidatesRef.current,
-        selectedIds: explorationSelectedIds, rejectedIds: explorationRejectedIds });
+        selectedIds, rejectedIds: explorationRejectedIds });
+      if (!isCurrentRequest(ticket)) return;
       if (!verified) throw new Error("unverified_session");
       sessionCandidatesRef.current = verified;
       const planningInput: ItineraryPlanningInput = { experiencePlan: exploration.experiencePlan,
-        researchPlan: exploration.researchPlan, selectedCandidateIds: [...explorationSelectedIds],
+        researchPlan: exploration.researchPlan, selectedCandidateIds: selectedIds,
         rejectedCandidateIds: [...explorationRejectedIds], preferences: exploration.preferences,
         candidatePool: verified };
       await runGenerate(plannerState, `${exploration.request}\n선택한 장소를 포함해서 일정 짜줘`, "선택한 장소로 일정 짜기",
         planningInput);
     } catch {
+      if (!isCurrentRequest(ticket)) return;
       setConversation(current => [...current, { role: "assistant",
         text: "선택한 장소를 확인하지 못했어요. 다시 선택하거나 잠시 후 시도해 주세요." }]);
-    } finally { setExplorationBusy(false); }
+    } finally { if (isCurrentRequest(ticket)) setExplorationBusy(false); finishRequest(ticket); }
   }
 
   async function runGenerate(nextState: AIPlannerState, message: string, displayText?: string,
     planningInput?: ItineraryPlanningInput) {
+    if (keepingRef.current || phase === "loading" || keeping || ((requestBusyRef.current || explorationBusy) && !planningInput)) return;
     const request = message.trim();
-    if (candidateExplorationActive && !planningInput && !recommendation) {
+    if (!request && !displayText && !planningInput) return;
+    const explorationIntent = candidateExplorationActive && exploration && !planningInput && request
+      ? explorationFollowUpIntent(request, nextState) : null;
+    if (explorationIntent === "conditions") {
+      await changeExplorationConditions(request, nextState);
+      return;
+    }
+    if (explorationIntent === "plan" && exploration?.groups && (!recommendation || /선택한\s*장소|고른\s*장소|이걸로|이거로|이곳들로|이\s*장소들로|\d+\s*번/.test(request))) {
+      const choices = explicitPlanningChoices(request,
+        visibleExplorationCards(exploration.groups, explorationRejectedIds), explorationSelectionRef.current);
+      if (choices.invalid) {
+        setConversation(current => [...current, { role: "user", text: request },
+          { role: "assistant", text: "계획할 장소를 정확히 확인하지 못했어요. 화면의 후보 번호나 장소 선택 버튼으로 골라 주세요. 기존 선택은 유지했어요." }]);
+        setGeneratePrompt(request);
+        return;
+      }
+      if (choices.cards) {
+        if (choices.cards.map(card => card.candidateId).join("|") !== explorationSelectionRef.current.map(card => card.candidateId).join("|")) {
+          invalidateExplorationRecommendation();
+        }
+        explorationSelectionRef.current = choices.cards;
+        setExplorationSelectedCards(choices.cards);
+        setExplorationSelectedIds(choices.cards.map(card => card.candidateId));
+      }
+      if (explorationSelectionRef.current.length) await planSelectedCandidates();
+      else {
+        setGeneratePrompt("");
+        setConversation(current => [...current, { role: "user", text: request },
+          { role: "assistant", text: "먼저 마음에 드는 장소를 골라 주세요. 한 곳만 골라도 일정을 만들 수 있어요." }]);
+      }
+      return;
+    }
+    if (candidateExplorationActive && !planningInput && !recommendation && explorationIntent !== "question") {
       if (exploration?.groups && request) {
         const groupId = refinementGroupForMessage(exploration.groups, request, activeExplorationGroup);
         if (groupId) {
           const anchorId = crypto.randomUUID();
           setExploration(current => current ? { ...current, anchorId } : current);
           setConversation(current => [...current, { role: "user", text: request, explorationAnchorId: anchorId }]);
-          await searchExploration(groupId, request);
-          setGeneratePrompt("");
+          const beforeTicket = requestIdRef.current;
+          const requestContext = contextRef.current;
+          const succeeded = await searchExploration(groupId, request);
+          if (requestIdRef.current === beforeTicket + 1 && contextRef.current === requestContext) setGeneratePrompt(succeeded ? "" : request);
           return;
         }
         setConversation(current => [...current, { role: "user", text: request },
@@ -795,7 +1023,7 @@ export function AIPlanEditor({
       }
       if (!exploration && request) { await beginExploration(request, nextState); return; }
     }
-    const intent = recommendation ? keepIntent(request) : null;
+    const intent = recommendation && !planningInput ? keepIntent(request) : null;
     if (intent) {
       handleKeepIntent(intent, displayText || request);
       setGeneratePrompt("");
@@ -814,7 +1042,7 @@ export function AIPlanEditor({
       setChoicePrompt(slotPrompt(pending, nextState));
       return;
     }
-    const ticket = ++requestIdRef.current;
+    const ticket = beginRequest();
     setError("");
     setPhase("loading");
     setLoadingSeconds(0);
@@ -831,21 +1059,28 @@ export function AIPlanEditor({
       ...conversation,
       ...(displayText || request ? [{ role: "user" as const, text: displayText || request }] : []),
     ].slice(-8);
+    const questionCandidates = explorationIntent === "question" && exploration?.groups && !recommendation
+      ? visibleExplorationCards(exploration.groups, explorationRejectedIds) : null;
     try {
       const response = await recommendDatePlanWithSession({
+        planKind: kind,
         currentPlan: recommendation,
         message: request,
         previousPlaceNames: recommendation?.recommendations.map(place => place.name),
         previousStops: recommendation?.recommendations.map(place => ({ name: place.name, category: place.category, activitySlot: place.activitySlot })),
         courseStops: recommendation?.card.stops,
-        shownStops,
-        previousState: nextState,
+        shownStops: questionCandidates
+          ? questionCandidates.map(card => ({
+            name: card.name, meta: `${card.area} · ${card.category}`, address: card.address,
+            mapUrl: card.mapUrl, reason: card.reason, image: card.image, factSourceUrl: card.evidenceUrls[0],
+          })) : shownStops,
+        previousState: questionCandidates ? { ...nextState, shownPlaces: questionCandidates.map(card => card.name) } : nextState,
         dateLabel: startDate || undefined,
         conversation: nextTurns.map(turn => ({ role: turn.role, text: turn.text })),
         planningSessionId, sessionCandidates: sessionCandidatesRef.current,
         planningInput,
       });
-      if (ticket !== requestIdRef.current) return;
+      if (!isCurrentRequest(ticket)) return;
       const result = response.result;
       sessionCandidatesRef.current = response.sessionCandidates;
       if ("error" in result) {
@@ -854,16 +1089,18 @@ export function AIPlanEditor({
           : result.error;
         setConversation(current => [...current, { role: "assistant", text: safeError, card: { headline: "장소를 찾지 못했습니다", lines: [safeError] } }]);
         setPlannerState(plannerState);
+        setGeneratePrompt(request || displayText || "");
         return;
       }
       setPlannerState(result.state);
       if (result.status === "clarification") {
-        setConversation(current => [...current, { role: "assistant", text: result.message, card: result.card }]);
+        setConversation(current => [...current, { role: "assistant", text: result.message, card: { ...result.card, suggestions: result.options } }]);
         setChoicePrompt({ options: result.options, multiple: result.multiple, kind: result.slot });
         return;
       }
       if (result.status === "chat") {
-        setConversation(current => [...current, { role: "assistant", text: result.message, card: result.card }]);
+        setConversation(current => [...current, { role: "assistant", text: result.message,
+          card: result.options?.length ? { ...result.card, suggestions: result.options } : result.card }]);
         if (result.card.stops?.length) setShownStops(result.card.stops);
         if (result.slot && result.options?.length) {
           setChoicePrompt({ options: result.options, multiple: Boolean(result.multiple), kind: result.slot });
@@ -878,18 +1115,19 @@ export function AIPlanEditor({
         { role: "assistant", text: result.message, card: { ...result.card, followUp: undefined }, progressive: true },
       ]);
     } catch {
-      if (ticket !== requestIdRef.current) return;
+      if (!isCurrentRequest(ticket)) return;
       const text = "답변을 가져오지 못했어요. 잠시 후 다시 보내 주세요.";
       setConversation(current => [...current, { role: "assistant", text, card: { headline: "", lines: [text] } }]);
       setPlannerState(plannerState);
       setGeneratePrompt(request || displayText || "");
     } finally {
-      if (ticket === requestIdRef.current) setPhase("idle");
+      if (isCurrentRequest(ticket)) { setPhase("idle"); if (planningInput) setExplorationBusy(false); }
+      finishRequest(ticket);
     }
   }
 
   function pickQuick(label: string) {
-    if (phase === "loading" || keeping) return;
+    if (requestBusyRef.current || keepingRef.current || phase === "loading" || keeping || explorationBusy) return;
     if (label === "직접 입력") {
       composerRef.current?.focus();
       return;
@@ -909,7 +1147,7 @@ export function AIPlanEditor({
   }
 
   function submitChoices() {
-    if (!choicePrompt || !selectedChoices.length) return;
+    if (!choicePrompt || !selectedChoices.length || requestBusyRef.current || keepingRef.current || explorationBusy || phase === "loading" || keeping) return;
     const next = applySlot(choicePrompt.kind, selectedChoices, plannerState);
     const slot = missingSlot(next);
     setPlannerState(next);
@@ -927,12 +1165,30 @@ export function AIPlanEditor({
     void runGenerate(next, "", userText);
   }
 
-  const explorationPanel = exploration && <div className="ai-exploration-turn" ref={explorationAnchorRef}><CandidateExplorationPanel area={selectedAreas(plannerState)[0] ?? "지역 미정"}
+  function applyChanges() {
+    if (!chosen.length || !editSnapshotRef.current) return;
+    if (editSnapshotRef.current !== itemsRef.current) {
+      setError("일정이 바뀌었어요. 최신 일정으로 변경안을 다시 만들어 주세요.");
+      setPhase("idle");
+      editSnapshotRef.current = null;
+      return;
+    }
+    editSnapshotRef.current = null;
+    setChanges([]);
+    setSelected([]);
+    setPhase("idle");
+    onApply(chosen);
+  }
+
+  const explorationPanel = exploration && <div className="ai-exploration-turn" ref={explorationAnchorRef}><CandidateExplorationPanel area={selectedAreas(plannerState).join(" · ") || "지역 미정"}
             nights={plannerState.nights} preferences={exploration.preferences}
             onPreferencesChange={preferences => {
+              if (requestBusyRef.current || keepingRef.current || explorationBusy || keeping || phase === "loading") return;
+              invalidateExplorationRecommendation();
               const retained = retainExplorationChoices({ selectedCards: explorationSelectedCards,
                 rejectedIds: explorationRejectedIds, groupById: explorationGroupById.current,
                 activities: preferences.activities });
+              explorationSelectionRef.current = retained.selectedCards;
               setExplorationSelectedCards(retained.selectedCards);
               setExplorationSelectedIds(retained.selectedCards.map(card => card.candidateId));
               setExplorationRejectedIds(retained.rejectedIds);
@@ -941,21 +1197,23 @@ export function AIPlanEditor({
             }}
             groups={exploration.groups} selectedIds={explorationSelectedIds}
             selectedCards={explorationSelectedCards}
-            rejectedIds={explorationRejectedIds} busy={explorationBusy}
+            rejectedIds={explorationRejectedIds} busy={explorationBusy || keeping || phase === "loading"}
             planned={Boolean(recommendation)}
             onSearch={() => void searchExploration()}
-            onSelect={card => { if (!explorationSelectedIds.includes(card.candidateId)
-              && explorationSelectedIds.length >= maxSelectedExplorationPlaces(plannerState.nights)) return;
+            onSelect={card => { if (requestBusyRef.current || keepingRef.current || explorationBusy || keeping || phase === "loading") return;
+              const current = explorationSelectionRef.current;
+              invalidateExplorationRecommendation();
+              const selected = current.some(item => item.candidateId === card.candidateId);
+              const next = selected ? current.filter(item => item.candidateId !== card.candidateId) : [...current, card];
+              explorationSelectionRef.current = next;
               setActiveExplorationGroup(exploration.groups?.find(group =>
               group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
               if (card.groupId) explorationGroupById.current[card.candidateId] = card.groupId;
-              setExplorationSelectedIds(current => current.includes(card.candidateId)
-              ? current.filter(id => id !== card.candidateId) : [...current, card.candidateId]);
-              setExplorationSelectedCards(current => current.some(item => item.candidateId === card.candidateId)
-                ? current.filter(item => item.candidateId !== card.candidateId) : [...current, card]); }}
+              setExplorationSelectedIds(next.map(item => item.candidateId));
+              setExplorationSelectedCards(next); }}
             onReject={card => void rejectExplorationCandidate(card)}
             onMore={id => { setActiveExplorationGroup(id); void searchExploration(id); }}
-            onRefine={(id, text) => { setActiveExplorationGroup(id); void searchExploration(id, text); }}
+            onRefine={(id, text) => { setActiveExplorationGroup(id); invalidateExplorationRecommendation(); return searchExploration(id, text); }}
             onDetail={card => { setActiveExplorationGroup(exploration.groups?.find(group =>
               group.cards.some(item => item.candidateId === card.candidateId))?.id ?? activeExplorationGroup);
               setPeek({ key: card.candidateId, stop: {
@@ -978,12 +1236,12 @@ export function AIPlanEditor({
           <h2>{mode === "generate" ? kind === "trip" ? "여행 플래너" : "데이트 플래너" : "일정 다듬기"}</h2>
           <p>{mode === "generate" ? kind === "trip" ? "여행 기간에 맞춰 장소부터 일정까지" : "장소부터 고르는 우리만의 하루" : "원하는 부분만 바꿔 보세요"}</p>
         </div>
-        <span className="ai-online"><i /> online</span>
+        <span className="ai-online"><i aria-hidden="true" /> 플래너</span>
       </header>
       {kind === "trip" && (
         <div className="ai-mode-tabs" role="tablist" aria-label="AI 모드">
-          <button type="button" className={mode === "generate" ? "is-active" : ""} onClick={() => switchMode("generate")}>AI 추천</button>
-          <button type="button" className={mode === "edit" ? "is-active" : ""} onClick={() => switchMode("edit")}>일정 수정</button>
+          <button type="button" role="tab" aria-selected={mode === "generate"} disabled={keeping} className={mode === "generate" ? "is-active" : ""} onClick={() => switchMode("generate")}>AI 추천</button>
+          <button type="button" role="tab" aria-selected={mode === "edit"} disabled={keeping} className={mode === "edit" ? "is-active" : ""} onClick={() => switchMode("edit")}>일정 수정</button>
         </div>
       )}
 
@@ -1032,13 +1290,15 @@ export function AIPlanEditor({
                   text={message.text}
                   options={last ? choicePrompt : undefined}
                   selectedChoices={last ? selectedChoices : []}
-                  disabled={phase === "loading" || keeping}
+                  disabled={phase === "loading" || keeping || explorationBusy}
                   openStopKey={peek?.key}
                   onOpenStop={(key, stop) => setPeek(current => current?.key === key ? null : { key, stop })}
                   onPick={pickQuick}
                   onToggle={label => setSelectedChoices(current => label === "추천에 맡기기" ? [label] : current.includes(label) ? current.filter(item => item !== label) : [...current.filter(item => item !== "추천에 맡기기"), label])}
                   onSubmit={submitChoices}
                   progressive={message.progressive}
+                  quickRepliesDisabled={!last}
+                  turnId={`assistant-${index}`}
                 />
                 {message.explorationAnchorId === exploration?.anchorId && explorationPanel}
                 </Fragment>
@@ -1102,10 +1362,10 @@ export function AIPlanEditor({
                   <>
                     <div>
                       <span>어디에 담을까요?</span>
-                      <small>데이트는 하루 코스, 여행은 날짜를 붙인 일정입니다.</small>
+                      <small>{keepDays > 1 ? "여러 날의 코스는 여행 일정에 담아야 모든 일차가 저장됩니다." : "데이트는 하루 코스, 여행은 날짜를 붙인 일정입니다."}</small>
                     </div>
                     <div className="ai-keep-actions">
-                      <button type="button" disabled={keeping} onClick={() => void commitKeep("date")}>{DATE_KEEP_LABEL}</button>
+                      <button type="button" disabled={keeping || keepDays > 1} onClick={() => void commitKeep("date")}>{DATE_KEEP_LABEL}</button>
                       <button type="button" disabled={keeping} onClick={() => askTripDates()}>{TRIP_KEEP_LABEL}</button>
                     </div>
                   </>
@@ -1119,7 +1379,7 @@ export function AIPlanEditor({
                       </span>
                       <small>담을 때 데이트 코스와 여행 중 고를 수 있습니다.</small>
                     </div>
-                    <button type="button" disabled={!recommendation.items.length} onClick={() => beginKeep()}>
+                    <button type="button" disabled={!recommendation.items.length || keeping || explorationBusy || phase === "loading"} onClick={() => beginKeep()}>
                       이 코스 담기
                     </button>
                   </>
@@ -1138,17 +1398,18 @@ export function AIPlanEditor({
                 event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 96)}px`;
               }}
               onKeyDown={event => {
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return;
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  if (phase !== "loading" && !keeping) void runGenerate(plannerState, generatePrompt);
+                  if (phase !== "loading" && !keeping && !explorationBusy) void runGenerate(plannerState, generatePrompt);
                 }
               }}
               rows={1}
               aria-label="AI 플래너에게 메시지"
               placeholder={keepStep === "destination" ? "데이트 코스 또는 여행" : keepStep === "trip-dates" ? "날짜는 캘린더에서 고르세요" : recommendation ? COURSE_PLACEHOLDER : GENERATE_PLACEHOLDER}
-              disabled={phase === "loading" || keeping}
+              disabled={phase === "loading" || keeping || explorationBusy}
             />
-            <button type="button" onClick={() => void runGenerate(plannerState, generatePrompt)} disabled={phase === "loading" || keeping || !generatePrompt.trim()} aria-label="메시지 보내기">
+            <button type="button" onClick={() => void runGenerate(plannerState, generatePrompt)} disabled={phase === "loading" || keeping || explorationBusy || !generatePrompt.trim()} aria-label="메시지 보내기">
               {phase === "loading" ? <i className="ai-spinner" /> : <span>↑</span>}
             </button>
             <small>Enter 전송 · Shift + Enter 줄바꿈</small>
@@ -1189,7 +1450,7 @@ export function AIPlanEditor({
           <div className="proposal-summary">
             <span>선택 <b>{chosen.length}/{changes.length}</b></span>
           </div>
-          <button className="primary-button full" type="button" disabled={!chosen.length} onClick={() => onApply(chosen)}>
+          <button className="primary-button full" type="button" disabled={!chosen.length} onClick={applyChanges}>
             선택한 {chosen.length}개 적용
           </button>
           <button className="outline-button full" type="button" onClick={() => setPhase("idle")}>다시 요청하기</button>
@@ -1199,8 +1460,10 @@ export function AIPlanEditor({
       <p className="form-hint ai-disclaimer">
         {mode === "generate"
           ? recommendation?.design?.routeBasis === "walking"
-            ? "도보 경로는 OSRM/OpenStreetMap 자료 기준입니다. 실제 통행 상황은 달라질 수 있습니다."
-            : "동선은 직선거리 기준입니다. 담을 때 데이트 코스와 여행 중 고를 수 있습니다."
+            ? "확인된 도보 경로로 이동 시간을 계산했어요. 현장 상황에 따라 달라질 수 있어요."
+            : recommendation
+              ? "이동 시간은 추정이에요. 영업시간과 현장 상황을 확인한 뒤 일정에 담아 주세요."
+              : "장소 후보를 고른 뒤 일정을 만들어요. 데이트와 여행 일정에 담을 수 있어요."
           : "이미 담긴 일정만 삭제하거나 체류 시간을 조정합니다."}
       </p>
     </div>

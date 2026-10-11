@@ -26,7 +26,6 @@ export const PLANNING_POLICIES = {
   cuisine_mismatch: { severity: "soft", origin: "legacy_heuristic", legacyFragment: "음식 종류 불일치" },
   excluded_food: { severity: "hard", origin: "explicit_constraint", legacyFragment: "제외 음식이 포함된 장소" },
   allergy_unverified: { severity: "hard", origin: "explicit_constraint", legacyFragment: "알레르기 안전성 미확인" },
-  budget_exceeded: { severity: "hard", origin: "explicit_constraint", legacyFragment: "예산 초과" },
   required_order_mismatch: { severity: "hard", origin: "explicit_constraint", legacyFragment: "유지할 순서 불일치" },
   performance_time_unverified: { severity: "hard", origin: "explicit_constraint", legacyFragment: "방문일 공연 회차 미확인" },
   required_opening_unverified: { severity: "hard", origin: "explicit_constraint", legacyFragment: "요청한 영업시간 확인 불가" },

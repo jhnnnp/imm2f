@@ -43,6 +43,7 @@ export type SessionCandidateRecord = {
   events: CandidateSessionEvent[];
   source: "candidate_pool" | "current_plan";
 };
+export type CandidateSessionScope = { actorId: string; coupleId: string };
 export type SessionCandidateContext = {
   version: 1;
   sessionId: string;
@@ -57,6 +58,8 @@ export type SessionCandidateContext = {
   lastUpdatedAt: string | null;
   /** Server signature over the bounded read model; never supplied by the model. */
   signature?: string;
+  /** Authenticated workspace that produced this snapshot; covered by the signature. */
+  scope?: CandidateSessionScope;
 };
 export type SessionCandidateMergeInfo = { sessionId: string; observedAt: string; turnId: string;
   shownPlaces?: Array<{ name: string; address?: string }>;
@@ -80,19 +83,30 @@ const unsigned = (context: SessionCandidateContext) => {
 const sign = (context: SessionCandidateContext, key: string) =>
   createHmac("sha256", key).update(JSON.stringify(unsigned(context))).digest("hex");
 
-export function sealSessionCandidates(context: SessionCandidateContext): SessionCandidateContext {
+const validScope = (value: unknown): value is CandidateSessionScope => Boolean(value) && typeof value === "object"
+  && !Array.isArray(value) && ["actorId", "coupleId"].every(field => {
+    const id = (value as Record<string, unknown>)[field];
+    return typeof id === "string" && Boolean(id.trim()) && id.length <= 160;
+  });
+
+export function sealSessionCandidates(context: SessionCandidateContext, scope?: CandidateSessionScope): SessionCandidateContext {
+  if (scope !== undefined && !validScope(scope)) throw new Error("invalid_candidate_scope");
+  const scoped = scope === undefined ? context : { ...context, scope: { actorId: scope.actorId, coupleId: scope.coupleId } };
   const key = signingKey();
-  return key ? { ...context, signature: sign(context, key) } : context;
+  return key ? { ...scoped, signature: sign(scoped, key) } : scoped;
 }
 
 /** A client-carried session snapshot is accepted only when it is bounded and server-signed. */
-export function verifiedSessionCandidates(value: unknown, sessionId: string): SessionCandidateContext | null {
+export function verifiedSessionCandidates(value: unknown, sessionId: string, scope?: CandidateSessionScope): SessionCandidateContext | null {
   try {
     const key = signingKey();
     if (!key || !value || typeof value !== "object") return null;
     const context = value as SessionCandidateContext;
+    if (context.scope !== undefined && !validScope(context.scope)) return null;
+    if (scope !== undefined && (!validScope(scope) || !context.scope
+      || context.scope.actorId !== scope.actorId || context.scope.coupleId !== scope.coupleId)) return null;
     if (context.version !== 1 || context.sessionId !== sessionId || !Array.isArray(context.records)
-      || context.records.length > MAX_SESSION_CANDIDATES || typeof context.signature !== "string"
+      || context.records.length > 500 || typeof context.signature !== "string"
       || context.feedback && (context.feedback.version !== 1 || !Array.isArray(context.feedback.entries)
         || context.feedback.entries.length > MAX_SESSION_FEEDBACK)
       || !Array.isArray(context.shownBatchTurnIds) || context.shownBatchTurnIds.length > 8
@@ -230,11 +244,22 @@ const importance = (row: SessionCandidateRecord) => row.currentState === "select
 const byImportance = (a: SessionCandidateRecord, b: SessionCandidateRecord) => importance(b) - importance(a)
   || Date.parse(b.events.at(-1)?.observedAt ?? "") - Date.parse(a.events.at(-1)?.observedAt ?? "");
 function prune(records: SessionCandidateRecord[]): SessionCandidateRecord[] {
+  const selected = records.filter(row => row.currentState === "selected");
+  const remaining = records.filter(row => row.currentState !== "selected");
+  // History can be pruned; user selections cannot. The count is a history budget.
   let retained = records.length > MAX_SESSION_CANDIDATES
-    ? [...records].sort(byImportance).slice(0, MAX_SESSION_CANDIDATES) : records;
+    ? [...selected, ...remaining.sort(byImportance).slice(0, Math.max(0, MAX_SESSION_CANDIDATES - selected.length))] : records;
   if (JSON.stringify(retained).length > MAX_SESSION_SERIALIZED_CHARS) {
     retained = [...retained].sort(byImportance);
-    while (retained.length && JSON.stringify(retained).length > MAX_SESSION_SERIALIZED_CHARS) retained.pop();
+    while (retained.some(row => row.currentState !== "selected")
+      && JSON.stringify(retained).length > MAX_SESSION_SERIALIZED_CHARS) {
+      const removable = retained.findLastIndex(row => row.currentState !== "selected");
+      retained.splice(removable, 1);
+    }
+    if (JSON.stringify(retained).length > MAX_SESSION_SERIALIZED_CHARS)
+      retained = retained.map(row => ({ ...row, facts: row.facts.slice(-1), evidence: [],
+        events: row.events.filter((event, index) => index === row.events.length - 1
+          || event.type === "selected" && event.source === "current_plan").slice(-2) }));
   }
   return retained;
 }
@@ -316,6 +341,7 @@ export function mergeSessionCandidates(previous: SessionCandidateContext | null 
     addEvent(row, "replaced", info, "current_plan");
   const retained = prune(records);
   return { version: 1, sessionId: info.sessionId, turnCount: base.turnCount + 1,
+    ...(base.scope ? { scope: { ...base.scope } } : {}),
     records: retained, selectedCandidateIds: retained.filter(row => row.currentState === "selected")
       .map(row => row.candidateId),
     shownCandidateIds: retained.filter(row => row.shownCount > 0).map(row => row.candidateId),

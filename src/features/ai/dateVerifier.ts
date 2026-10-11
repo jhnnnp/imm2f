@@ -1,7 +1,9 @@
 import type { AIPlanCondition, AIPlannerState } from "@/features/planning/types/plan";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import type { DateCourseRow } from "./dateCourse";
-import { assignStartTimes } from "./dateCourse";
+import { assignStartTimes, dateCandidateKey, performanceVisitDate } from "./dateCourse";
+import { tripDayYmd } from "./dateBrief";
+import { verifiedOpeningAtVisit } from "./planningEvidence";
 import type { CourseEvaluation } from "./courseDesign";
 import type { FootLeg, FootRoute } from "@/lib/routing/footRoute";
 import { legacyPlanningIssue, partitionPlanningIssues, planningIssue, type PlanningIssue, type PlanningQualitySignal } from "./planningPolicy";
@@ -15,12 +17,14 @@ function clockMinutes(value: unknown) {
 /** A real walking leg must fit between the two reserved stops. */
 export function routeLegsFitSchedule(rows: DateCourseRow[], legs: FootLeg[]) {
   for (let index = 1; index < rows.length; index++) {
-    if (rows[index].day_index !== rows[index - 1].day_index) continue;
+    if ((rows[index].day_index ?? 0) !== (rows[index - 1].day_index ?? 0)) continue;
     const previous = rows[index - 1];
     const next = rows[index];
     const previousClock = clockMinutes(previous.start_time);
     const nextClock = clockMinutes(next.start_time);
-    if (previousClock == null || nextClock == null || !legs[index - 1]) return false;
+    if (previousClock == null || nextClock == null || !legs[index - 1]
+      || !Number.isFinite(legs[index - 1].seconds) || legs[index - 1].seconds < 0
+      || !Number.isFinite(Number(previous.duration_minutes ?? 0)) || Number(previous.duration_minutes ?? 0) < 0) return false;
     const available = nextClock - previousClock - Number(previous.duration_minutes ?? 0);
     if (available * 60 < legs[index - 1].seconds) return false;
   }
@@ -29,7 +33,7 @@ export function routeLegsFitSchedule(rows: DateCourseRow[], legs: FootLeg[]) {
 
 export type DateVerification = { passed: boolean; issues: string[]; warnings: string[];
   hardIssues: PlanningIssue[]; softIssues: PlanningIssue[]; qualitySignals: PlanningQualitySignal[];
-  routeVerified: boolean };
+  routeVerified: boolean; scheduledRows?: DateCourseRow[] };
 
 /** Final deterministic critic; the model cannot waive a hard issue. */
 export function verifyDateItinerary(input: {
@@ -41,6 +45,22 @@ export function verifyDateItinerary(input: {
 }): DateVerification {
   const reported = input.course.issues ?? input.course.problems.map(legacyPlanningIssue);
   const issues: PlanningIssue[] = [...reported];
+  let scheduledRows: DateCourseRow[] | undefined;
+  const byId = new Map(input.candidates.map(candidate => [dateCandidateKey(candidate), candidate]));
+  const performanceRows = input.course.rows.filter(row => byId.get(String(row.id ?? ""))?.performanceEvent);
+  for (const row of performanceRows) {
+    const event = byId.get(String(row.id ?? ""))!.performanceEvent!;
+    if (!performanceVisitDate(input.state)) issues.push(planningIssue("performance_time_unverified",
+      "공연 방문 날짜를 먼저 정해야 회차를 확인할 수 있어요.", { candidateId: row.id, dayIndex: row.day_index ?? 0 }));
+    else if (event.dateYmd !== tripDayYmd(input.state, row.day_index ?? 0))
+      issues.push(planningIssue("performance_date_mismatch", `${(row.day_index ?? 0) + 1}일차 공연 날짜 불일치`,
+        { candidateId: row.id, dayIndex: row.day_index ?? 0 }));
+  }
+  if (!input.route && performanceRows.length && performanceVisitDate(input.state)) {
+    scheduledRows = assignStartTimes(input.course.rows, input.candidates, input.state, input.condition.startTime);
+    if (scheduledRows.length !== input.course.rows.length) issues.push(planningIssue("schedule_infeasible",
+      "지정한 시간 안에 공연 회차와 이동·체류를 배치할 수 없음"));
+  }
   if (input.route) {
     const limit = input.state.walkingPreference === "short" ? 1100 : 3000;
     const dailyLimit = input.state.walkingPreference === "short" ? 2500 : 6500;
@@ -58,8 +78,10 @@ export function verifyDateItinerary(input: {
     }
     for (const [day, meters] of distanceByDay) if (meters > dailyLimit)
       issues.push(planningIssue("actual_route_limit", "실제 보행 경로가 이동 한도를 초과함", { dayIndex: day }));
-    if (input.condition.timeSpecified) {
-      const schedule = assignStartTimes(input.course.rows, input.candidates, input.state, input.condition.startTime);
+    {
+      const schedule = assignStartTimes(input.course.rows, input.candidates, input.state, input.condition.startTime,
+        input.route.legs.map(leg => Math.ceil(leg.seconds / 60)));
+      scheduledRows = schedule;
       if (schedule.length !== input.course.rows.length || !routeLegsFitSchedule(schedule, input.route.legs)) {
         const conflict = schedule.findIndex((row, index) => index > 0
           && row.day_index === schedule[index - 1].day_index
@@ -75,6 +97,13 @@ export function verifyDateItinerary(input: {
           conflict >= 0 ? { dayIndex: schedule[conflict].day_index ?? 0,
             candidateId: schedule[conflict].id } : {}));
       }
+      for (const row of schedule) {
+        const candidate = byId.get(row.id!);
+        if (candidate && row.start_time && verifiedOpeningAtVisit(candidate,
+          tripDayYmd(input.state, row.day_index ?? 0), row.start_time, row.duration_minutes ?? 60) === "closed")
+          issues.push(planningIssue("confirmed_closed", "확인된 영업시간과 충돌",
+            { candidateId: row.id, dayIndex: row.day_index ?? 0, constraint: row.start_time }));
+      }
     }
   }
   const partitioned = partitionPlanningIssues(issues);
@@ -82,5 +111,5 @@ export function verifyDateItinerary(input: {
     issues: [...new Set(partitioned.hardViolations.map(issue => issue.message))],
     warnings: [...new Set(partitioned.softWarnings.map(issue => issue.message))],
     hardIssues: partitioned.hardViolations, softIssues: partitioned.softWarnings,
-    qualitySignals: input.course.qualitySignals ?? [], routeVerified: Boolean(input.route) };
+    qualitySignals: input.course.qualitySignals ?? [], routeVerified: Boolean(input.route), scheduledRows };
 }

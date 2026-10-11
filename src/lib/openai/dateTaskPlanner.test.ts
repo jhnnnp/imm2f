@@ -7,15 +7,16 @@ const candidate = (id: string) => ({ externalSource: "kakao", externalPlaceId: i
   name: `전시 ${id}`, category: "photo", coordinates: [127, 37.5] }) as DiscoverCandidate;
 
 describe("date task planner", () => {
-  it("decomposes dated rain, food, budget and schedule requirements", () => {
+  it("decomposes dated rain, food and schedule requirements while ignoring old budgets", () => {
     const state = { ...emptyDateBrief(), dateLabel: "2026-09-26", activities: ["exhibit" as const],
       excludedFoods: ["해산물"], budgetWon: 150000, startTime: "15:00", endTime: "22:00",
       userRequests: ["비 온다던데 잠실에서 전시 보고 해산물 빼고 15만원에 10시 전에 집 가야 해"] };
     const ids = dateTaskObjectives(state).map(task => task.id);
     expect(ids).toEqual(expect.arrayContaining([
       "candidate_coverage", "venue_evidence", "event_date", "food_restriction",
-      "weather", "budget", "schedule", "route",
+      "weather", "schedule", "route",
     ]));
+    expect(ids).not.toContain("budget");
   });
 
   it("replans from observed search results and stops when the missing role is covered", async () => {
@@ -108,7 +109,7 @@ describe("date task planner", () => {
   });
 
   it("counts newly retrieved place facts as tool progress", async () => {
-    const state = { ...emptyDateBrief(), budgetWon: 80000 };
+    const state = { ...emptyDateBrief(), startTime: "15:00" };
     const base = Array.from({ length: 8 }, (_, index) => candidate(String(index)));
     let pool = base;
     const result = await runDateTaskPlanner({ state, regions: ["성수"], attempted: new Set(), canInspectPlaces: true,

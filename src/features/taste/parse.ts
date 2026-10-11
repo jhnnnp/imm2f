@@ -2,7 +2,6 @@ import { DATE_ACTIVITY_OPTIONS } from "@/features/ai/dateBrief";
 import type { DateActivityId, DateAreaScope, DateTimeWindow } from "@/features/planning/types/plan";
 import { canonicalizeArea, TASTE_AVOID_OPTIONS } from "./options";
 import type {
-  TasteBudget,
   TasteCrowd,
   TasteCuisine,
   TasteDateFlow,
@@ -16,7 +15,6 @@ import type {
 const PACE = new Set<TastePace>(["linger", "mixed", "walk"]);
 const SETTING = new Set<TasteSetting>(["indoor", "outdoor", "mix"]);
 const CROWD = new Set<TasteCrowd>(["quiet", "lively", "mix"]);
-const BUDGET = new Set<TasteBudget>(["modest", "comfortable", "generous"]);
 const TIME = new Set<DateTimeWindow>(["afternoon", "evening", "night", "any"]);
 const SCOPE = new Set<DateAreaScope>(["core", "walkable", "nearby"]);
 const DATE_FLOW = new Set<TasteDateFlow>(["meal_first", "cafe_first", "flex"]);
@@ -37,7 +35,7 @@ function unique(values: string[], max: number) {
 
 function asList(value: unknown) {
   if (!Array.isArray(value)) return [];
-  return value.map(item => String(item ?? ""));
+  return value.filter((item): item is string => typeof item === "string");
 }
 
 export function emptyTasteInput(): TasteInput {
@@ -49,7 +47,6 @@ export function emptyTasteInput(): TasteInput {
     avoidFoods: [],
     setting: "",
     crowd: "",
-    budget: "",
     timeWindow: "",
     areaScope: "",
     dateFlow: "",
@@ -68,7 +65,6 @@ export function inputFromProfile(profile: TasteProfile): TasteInput {
     avoidFoods: profile.avoidFoods,
     setting: profile.setting,
     crowd: profile.crowd,
-    budget: profile.budget,
     timeWindow: profile.timeWindow,
     areaScope: profile.areaScope,
     dateFlow: profile.dateFlow,
@@ -88,7 +84,6 @@ export function parseTasteProfile(value: unknown): TasteProfile | null {
   const avoidFoods = unique(asList(row.avoid_foods ?? row.avoidFoods).map(item => item.slice(0, 16)), 8);
   const setting = SETTING.has(row.setting as TasteSetting) ? row.setting as TasteSetting : null;
   const crowd = CROWD.has(row.crowd as TasteCrowd) ? row.crowd as TasteCrowd : null;
-  const budget = BUDGET.has(row.budget as TasteBudget) ? row.budget as TasteBudget : "comfortable";
   const timeWindow = TIME.has(row.time_window as DateTimeWindow)
     ? row.time_window as DateTimeWindow
     : TIME.has(row.timeWindow as DateTimeWindow) ? row.timeWindow as DateTimeWindow : null;
@@ -112,7 +107,6 @@ export function parseTasteProfile(value: unknown): TasteProfile | null {
     avoidFoods,
     setting,
     crowd,
-    budget,
     timeWindow,
     areaScope,
     dateFlow,
@@ -122,8 +116,23 @@ export function parseTasteProfile(value: unknown): TasteProfile | null {
   };
 }
 
-export function parseTasteInput(input: TasteInput): TasteProfile | { error: string } {
-  const budget = BUDGET.has(input.budget as TasteBudget) ? input.budget : "comfortable";
+export function parseTasteInput(value: unknown): TasteProfile | { error: string } {
+  const invalid = { error: "취향 항목의 형식을 확인하고 다시 시도해 주세요." };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return invalid;
+  const row = value as Record<string, unknown>;
+  for (const [key, count, length] of [["areas", 4, 80], ["activities", 4, 32], ["cuisines", 4, 16], ["avoidFoods", 8, 16]] as const) {
+    const entries = row[key];
+    if (!Array.isArray(entries) || entries.length > count || entries.some(item => typeof item !== "string" || item.length > length)) return invalid;
+  }
+  if (typeof row.note !== "string" || row.note.length > 160
+    || typeof row.indoorPlay !== "string" || row.indoorPlay.length > 20
+    || !PACE.has(row.pace as TastePace) || !SETTING.has(row.setting as TasteSetting)
+    || !CROWD.has(row.crowd as TasteCrowd) || !TIME.has(row.timeWindow as DateTimeWindow)
+    || (row.areaScope !== "" && !SCOPE.has(row.areaScope as DateAreaScope))
+    || (row.drink !== "" && !DRINK.has(row.drink as TasteDrink))) return invalid;
+  const input = value as TasteInput;
+  if (input.activities.some(item => !ACTIVITY.has(item)) || input.cuisines.some(item => !CUISINE.has(item))
+    || input.avoidFoods.some(item => item.trim() !== "" && !allowedAvoid(item))) return invalid;
   const areaScope = SCOPE.has(input.areaScope as DateAreaScope) ? input.areaScope : "walkable";
   const dateFlow = DATE_FLOW.has(input.dateFlow as TasteDateFlow) ? input.dateFlow : null;
   const drink = DRINK.has(input.drink as TasteDrink) ? input.drink : "any";
@@ -141,7 +150,6 @@ export function parseTasteInput(input: TasteInput): TasteProfile | { error: stri
     avoid_foods: input.avoidFoods,
     setting: input.setting,
     crowd: input.crowd,
-    budget,
     time_window: input.timeWindow,
     area_scope: areaScope,
     date_flow: dateFlow,

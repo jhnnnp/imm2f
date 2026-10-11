@@ -158,16 +158,16 @@ describe("limited verified course mutation", () => {
     expect(changedWindow.taskResult).toMatchObject({ status: "failed", failureCode: "mutation_verification_failed" });
   });
 
-  it("rejects a hard budget violation and rolls back to the original course", async () => {
+  it("ignores historical budget values when committing an otherwise valid removal", async () => {
     const before = basePlan();
     const invalid: AIPlannerReply = { ...before,
       items: before.items.filter(item => item.placeId !== "dinner").map(item => ({ ...item, expectedCost: 90000 })),
       recommendations: before.recommendations.filter(place => place.placeId !== "dinner") };
     const result = await executeLimitedMutation(input(task([change("remove", 1)]), "저녁 식당 빼줘",
       { primary: invalid }), foot);
-    expect(result.taskResult).toMatchObject({ status: "failed", failureCode: "mutation_verification_failed" });
+    expect(result.taskResult).toMatchObject({ status: "success" });
     expect(result.result.status).toBe("plan");
-    if (result.result.status === "plan") expect(result.result.items.map(item => item.placeId)).toEqual(ids);
+    if (result.result.status === "plan") expect(result.result.items.map(item => item.placeId)).toEqual(["cafe-a", "cafe-b"]);
   });
 
   it("rejects an impossible route and retains the original course", async () => {

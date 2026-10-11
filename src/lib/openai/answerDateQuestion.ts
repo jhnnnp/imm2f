@@ -1,8 +1,9 @@
 import type { AIChatCard, AIChatStop, AIPlannerState, DateChatTurn } from "@/features/planning/types/plan";
-import { selectedAreas, uniqueStrings } from "@/features/ai/dateBrief";
+import { selectedAreas } from "@/features/ai/dateBrief";
 import { completeJson, completeJsonWithWebSearch } from "./client";
 import { isOpenAiConfigured } from "./env";
 import { looksPolite } from "./composeDateChat";
+import { claimsUnperformedAction, cleanChatSuggestions } from "./chatPresentation";
 
 export type QuestionContextStop = Pick<AIChatStop, "name" | "meta" | "address" | "phone" | "mapUrl" | "startTime" | "durationMinutes" | "distanceFromPreviousMeters" | "rating" | "ratingCount" | "dishes" | "openingHours" | "factSourceUrl" | "reason">;
 
@@ -13,7 +14,7 @@ const QUESTION_PROMPT = [
   "You are the couple's date planner inside the ONLY US app, chatting in Korean 해요체 like a thoughtful friend.",
   "Answer the user's question directly using the context: the current course (stops with any known facts), the brief, and the couple's tastes. If the question is about one stop, talk about that stop. Answer only what was asked; do not enumerate unrelated unknowns.",
   "If you do not know something (hours, parking, prices, waiting) and no fact is provided, say plainly 아직 확인이 안 됐어요 and point to the map link or offer to look it up. Never invent hours, prices, ratings, or menus. Never mention 'provided information'; speak as yourself.",
-  "Practical date advice (rain, budget framing, order of stops, what to do first) is welcome when grounded in the stops you have.",
+  "Practical date advice (rain, order of stops, what to do first) is welcome when grounded in the stops you have. The service does not manage a date budget; never claim a cost limit has been checked or ask the user to enter menu costs.",
   "Keep it to 2-5 sentences in 해요체 (never 반말), no emoji, no bullet lists, no markdown. Then propose up to 3 follow-up chips, each under 16 Korean characters, written as the user would type them (e.g. 카페 변경 해줘, 영업시간 알려줘).",
   "Return JSON only: {\"reply\":string,\"suggestions\":[string]}",
 ].join(" ");
@@ -53,18 +54,6 @@ function cleanSourceUrl(value: unknown) {
   }
 }
 
-const SUGGESTION_MAX_CHARS = 18;
-
-/** Chips must stay tappable one-liners; long model sentences fall back to defaults. */
-function cleanSuggestions(value: unknown, fallback: string[]) {
-  const rows = Array.isArray(value) ? value : [];
-  const cleaned = uniqueStrings(
-    rows.map(row => String(row ?? "").replace(/[.!?]\s*$/, "").trim()).filter(row => row.length <= SUGGESTION_MAX_CHARS),
-    3,
-  );
-  return cleaned.length ? cleaned : fallback;
-}
-
 function sourceLabel(url: string) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -82,7 +71,27 @@ function choiceExplanation(stop: QuestionContextStop, state: AIPlannerState) {
 }
 
 /** Reuse facts already attached to the exact venue without a slower, less reliable model call. */
+function scheduleQuestion(message: string): "start" | "duration" | null {
+  if (/영업|오픈|마감|휴무|브레이크|주차|예약|메뉴|가격|(?:몇\s*시|언제).{0,12}(?:열|닫)/.test(message)) return null;
+  if (/(?:체류|머무|머물|이용|배정).{0,12}(?:시간|분|얼마)|(?:얼마나|몇\s*분).{0,12}(?:있|머무|머물|보내)/.test(message)) return "duration";
+  if (/(?:몇\s*시|언제).{0,12}(?:가|갈|도착|시작|방문)|(?:방문|도착|시작)\s*(?:시간|시각)|몇\s*시(?:야|예요|인가|지|에요|\s*\?)/.test(message)) return "start";
+  return null;
+}
+
+function scheduleQuestionCard(message: string, stop: QuestionContextStop): AIChatCard | null {
+  const question = scheduleQuestion(message);
+  if (!question) return null;
+  const knownTime = typeof stop.startTime === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(stop.startTime);
+  const knownDuration = Number.isFinite(stop.durationMinutes) && Number(stop.durationMinutes) > 0;
+  const text = question === "start"
+    ? knownTime ? `현재 코스에서 ${stop.startTime}에 방문하도록 잡혀 있어요. 매장 영업시간과는 별도의 일정이에요.` : "아직 방문 시간을 정하지 않았어요. 원하는 시작 시간을 알려 주시면 코스 시간을 맞출 수 있어요."
+    : knownDuration ? `현재 코스에는 ${stop.durationMinutes}분 머무르도록 잡혀 있어요. 실제 이용 시간은 현장 상황에 따라 달라질 수 있어요.` : "이 장소에 머무를 시간은 아직 정하지 않았어요.";
+  return { headline: stop.name, lines: [text], suggestions: [] };
+}
+
 function knownQuestionCard(message: string, stop: QuestionContextStop, state: AIPlannerState): AIChatCard | null {
+  const scheduled = scheduleQuestionCard(message, stop);
+  if (scheduled) return scheduled;
   if (/비교|차이|둘\s*중|더\s*(?:좋|나)|바뀌|변경|주차|예약|웨이팅|가격|얼마|비싸|저렴|애견|반려|휠체어|콜키지/.test(message)) return null;
   const asks = [
     { pattern: /왜\s*(?:골랐|추천)|고른\s*이유|추천한\s*이유/, value: true, text: choiceExplanation(stop, state) },
@@ -99,7 +108,7 @@ function knownQuestionCard(message: string, stop: QuestionContextStop, state: AI
 export function resolveQuestionFocus(message: string, stops: QuestionContextStop[]) {
   const compact = (text: string) => text.replace(/\s/g, "").toLowerCase();
   const msg = compact(message);
-  const numbers = [...message.matchAll(/(?<!\d)(\d{1,2})\s*번/g)].map(match => Number(match[1]) - 1);
+  const numbers = [...message.matchAll(/(?<!\d)(\d+)\s*번/g)].map(match => Number(match[1]) - 1);
   const ordinals = [/첫\s*(?:번째|째)|처음/, /두\s*(?:번째|째)/, /세\s*(?:번째|째)/, /네\s*(?:번째|째)/, /다섯\s*번째/];
   ordinals.forEach((pattern, index) => { if (pattern.test(message)) numbers.push(index); });
   if (/마지막/.test(message)) numbers.push(stops.length - 1);
@@ -133,6 +142,8 @@ export function fallbackQuestionCard(message: string, stops: QuestionContextStop
     };
   }
   if (focus) {
+    const scheduled = scheduleQuestionCard(message, focus);
+    if (scheduled) return scheduled;
     let answer = "질문하신 내용은 아직 확인하지 못했어요. 장소 상세에서 확인하거나 다른 질문을 해 주세요.";
     if (/왜|이유/.test(message)) answer = choiceExplanation(focus, state);
     else if (/영업|휴무|몇\s*시|언제|브레이크/.test(message)) answer = focus.openingHours
@@ -161,7 +172,7 @@ export async function answerDateQuestion(input: {
   /** Optional tighter budget for a supplementary, failure-isolated lookup. */
   lookupTimeoutMs?: number;
 }): Promise<AIChatCard> {
-  const visible = input.shownStops?.length && !/코스|일정/.test(input.message) ? input.shownStops : input.stops;
+  const visible = input.shownStops?.length && !/코스|일정/.test(input.message) && !scheduleQuestion(input.message) ? input.shownStops : input.stops;
   let resolved = resolveQuestionFocus(input.message, visible);
   if (!resolved.explicit) {
     const named = resolveQuestionFocus(input.message, [...input.stops, ...(input.shownStops ?? [])]);
@@ -175,6 +186,9 @@ export async function answerDateQuestion(input: {
     }
   }
   const focus = resolved.stops.length ? resolved.stops : !resolved.explicit && visible.length === 1 ? visible : [];
+  if (!resolved.explicit && /코스|일정/.test(input.message) && scheduleQuestion(input.message) === "start" && input.stops.length) {
+    return scheduleQuestionCard(input.message, input.stops[0])!;
+  }
   const fallback = () => fallbackQuestionCard(input.message, visible, input.state, focus.length === 1 ? focus[0] : undefined);
   const comparison = /비교|차이|둘|어느|어디가|뭐가/.test(input.message);
   if (resolved.invalid || (resolved.explicit && !focus.length) || (NEEDS_LOOKUP.test(input.message) && focus.length !== 1 && !comparison)) {
@@ -215,7 +229,7 @@ export async function answerDateQuestion(input: {
     },
     focusStops: focus,
     currentCourse: input.stops,
-    lastShownPlaces: (input.shownStops ?? []).slice(0, 6),
+    lastShownPlaces: input.shownStops ?? [],
     couple: input.coupleTaste,
   };
   const defaultChips = input.stops.length ? ["카페 변경 해줘", "한 곳 더 추가해줘"] : ["코스 짜줘", "다른 곳 더 보여줘"];
@@ -233,12 +247,12 @@ export async function answerDateQuestion(input: {
       const reply = cleanReply(searched?.reply);
       const sourceUrl = cleanSourceUrl(searched?.sourceUrl);
       const citedBySearch = searchedSources.some(url => cleanSourceUrl(url) === sourceUrl);
-      if (reply && looksPolite(reply) && sourceUrl && citedBySearch) {
+      if (reply && looksPolite(reply) && !claimsUnperformedAction(reply, true) && sourceUrl && citedBySearch) {
         return {
           headline: focus[0]?.name ?? "",
           lines: [reply],
           sources: [{ label: sourceLabel(sourceUrl), url: sourceUrl }],
-          suggestions: cleanSuggestions(searched?.suggestions, defaultChips),
+          suggestions: cleanChatSuggestions(searched?.suggestions, defaultChips),
         };
       }
       return fallback();
@@ -254,11 +268,11 @@ export async function answerDateQuestion(input: {
       ],
     });
     const reply = cleanReply(parsed?.reply);
-    if (!reply || !looksPolite(reply)) return fallback();
+    if (!reply || !looksPolite(reply) || claimsUnperformedAction(reply)) return fallback();
     return {
       headline: focus.length === 1 ? focus[0].name : "",
       lines: [reply],
-      suggestions: cleanSuggestions(parsed?.suggestions, defaultChips),
+      suggestions: cleanChatSuggestions(parsed?.suggestions, defaultChips),
     };
   } catch {
     return fallback();

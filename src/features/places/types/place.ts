@@ -77,6 +77,8 @@ export type DiscoverCandidate = {
     title: string;
     dateYmd: string;
     showtimes: string[];
+    /** Published runtime, including a separately specified intermission. */
+    durationMinutes?: number;
     genre: string;
     sourceUrl: string;
     checkedAt: string;

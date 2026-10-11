@@ -12,17 +12,21 @@ import type { CouplePlan, PlanItem } from "@/features/planning/types/plan";
 import type { ArchivedTripPlan } from "@/features/planning/actions";
 import type { Memory } from "@/features/memories/types";
 import type { Place } from "@/features/places/types/place";
-import { htmlMarkerPlacement, screenOffsetForStackedPins } from "@/features/map/htmlMarker";
+import { htmlMarkerPlacement, screenOffsetsForNearbyPins } from "@/features/map/htmlMarker";
 import { computeMemorySheetAnchor, pinScreenPoints, type MemorySheetAnchor } from "@/features/map/memorySheetAnchor";
 import { emptyGeoJsonSource, memoryCityStyle } from "@/features/map/memoryCityStyle";
 import { couplePlacePinFromPartner, couplePlacePinLabel } from "@/features/map/placePins";
+import { createMapHoverPreview, type MapHoverPreview } from "@/features/map/mapHoverPreview";
+import "@/features/map/map-hover.css";
 import { distanceMeters } from "@/features/places/geo";
 import { asPlanCoordinates } from "@/features/planning/planCoordinates";
 import { curveRoute } from "@/features/trip/planRoute";
 import { useRoadRoute } from "@/features/map/routing/useRoadRoute";
+import { isLngLat } from "@/features/map/routing/fetchRoadRoute";
 import { useHydratePlanCoordinates } from "@/features/planning/useHydratePlanCoordinates";
 import { useResolvedMemories } from "@/features/memories/resolvePhotoUrls";
 import { MapRouteOverlay } from "./MapRouteOverlay";
+import { SyncNotice } from "@/components/shared/SyncNotice";
 
 const MAP_STYLE: StyleSpecification = memoryCityStyle({
   sources: {
@@ -57,8 +61,8 @@ function tripRouteCollection(pins: TripPin[]) {
 }
 
 function syncCoupleTripRoute(map: MapLibreMap, pins: TripPin[], show: boolean) {
-  if (!map.isStyleLoaded()) return;
   const routeSource = map.getSource("trip-route") as GeoJSONSource | undefined;
+  if (!routeSource) return;
   routeSource?.setData(tripRouteCollection(pins));
   const visibility = show && pins.length >= 2 ? "visible" : "none";
   for (const layerId of TRIP_ROUTE_LAYERS) {
@@ -87,6 +91,29 @@ const FILTERS: ReadonlyArray<{ id: PinLabel; label: string }> = [
 ];
 
 function pinName(pin: MapPin) { return pin.kind === "place" ? pin.place.name : pin.kind === "memory" ? pin.memory.title : pin.item.placeName; }
+function pinPreview(pin: MapPin, places: Place[]): MapHoverPreview {
+  if (pin.kind === "place") return {
+    kind: pin.kind, tone: pin.label, title: pin.place.name,
+    status: `${FILTERS.find(filter => filter.id === pin.label)?.label ?? "우리의 장소"}${couplePlacePinFromPartner(pin.place) ? " · 파트너가 남긴 곳" : ""}`,
+    meta: [pin.place.categoryLabel, pin.place.district].filter(Boolean).join(" · "),
+    detail: pin.place.roadAddress || pin.place.address || pin.place.description,
+    image: pin.place.image,
+  };
+  if (pin.kind === "memory") return {
+    kind: pin.kind, tone: "memory", title: pin.memory.title, status: "우리의 추억",
+    meta: [pin.memory.happenedOn, pin.memory.locationLabel].filter(Boolean).join(" · "),
+    detail: pin.memory.description,
+    image: pin.memory.coverUrl || pin.memory.photos[0]?.storageUrl,
+  };
+  const place = places.find(place => place.id === pin.item.placeId);
+  return {
+    kind: pin.kind, tone: "trip", title: pin.item.placeName,
+    status: `${(pin.item.dayIndex ?? 0) + 1}일차 · ${pin.dayOrder}번째 장소`,
+    meta: [pin.item.startTime, pin.item.category, pin.item.durationMinutes > 0 ? `${pin.item.durationMinutes}분 머물러요` : ""].filter(Boolean).join(" · "),
+    detail: place?.roadAddress || place?.address || pin.item.memo,
+    image: place?.image,
+  };
+}
 function sheetEyebrow(pin: MapPin) {
   if (pin.kind === "place") return `${pin.place.categoryLabel} · ${pin.place.district}`;
   if (pin.kind === "memory") return `${pin.memory.happenedOn} · ${pin.memory.locationLabel || "우리의 추억"}`;
@@ -199,7 +226,7 @@ function framePins(map: MapLibreMap, pins: MapPin[], viewMode: ViewMode, duratio
   const isTrip = pins[0]?.kind === "trip";
   map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
     padding: compact
-      ? { top: 116, right: isTrip ? 92 : 46, bottom: 92, left: isTrip ? 66 : 46 }
+      ? { top: isTrip ? 220 : 128, right: isTrip ? 72 : 46, bottom: 92, left: 46 }
       : { top: 126, right: 132, bottom: 124, left: 116 },
     maxZoom: isTrip ? 13.7 : 14.2,
     pitch: viewMode === "3d" ? 42 : 0,
@@ -208,24 +235,37 @@ function framePins(map: MapLibreMap, pins: MapPin[], viewMode: ViewMode, duratio
   });
 }
 export function CoupleMap({ places: initialPlaces, memories: initialMemories, trip: initialTrip, archivedTrips: initialArchivedTrips }: { places: Place[]; memories: Memory[]; trip: CouplePlan; archivedTrips: ArchivedTripPlan[] }) {
-  const memories = useResolvedMemories(initialMemories);
+  const [memoryRows, setMemoryRows] = useState(initialMemories);
+  const memories = useResolvedMemories(memoryRows);
   const mapHostRef = useRef<HTMLDivElement>(null);
   const container = useRef<HTMLDivElement>(null);
   const sheetRef = useRef<HTMLElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
+  const hoverPreviewRef = useRef<ReturnType<typeof createMapHoverPreview> | null>(null);
+  const framedPinsRef = useRef("");
   const selectionViewportRef = useRef<MapViewportSnapshot | null>(null);
   const clearMapSelectionRef = useRef<(restoreView?: boolean) => void>(() => { });
   const [places, setPlaces] = useState(initialPlaces);
   const [tripItems, setTripItems] = useState(initialTrip.items);
+  const [tripStartDate, setTripStartDate] = useState(initialTrip.startDate ?? "");
+  const [archivedTrips, setArchivedTrips] = useState(initialArchivedTrips);
+  const [syncError, setSyncError] = useState("");
   useHydratePlanCoordinates("trip", tripItems, setTripItems);
-  useSharedRefresh(async () => {
-    const { places: nextPlaces, trip: nextTrip } = await readMapWorkspace();
-    setPlaces(current => JSON.stringify(current) === JSON.stringify(nextPlaces) ? current : nextPlaces); setTripItems(current => JSON.stringify(current) === JSON.stringify(nextTrip.items) ? current : nextTrip.items); setTripTitle(nextTrip.title); setTripDayCount(nextTrip.dayCount);
-  });
+  const retrySync = useSharedRefresh(async ({ isCurrent }) => {
+    try {
+      const { places: nextPlaces, trip: nextTrip, memories: nextMemories, archives } = await readMapWorkspace();
+      if (!isCurrent()) return;
+      setPlaces(current => JSON.stringify(current) === JSON.stringify(nextPlaces) ? current : nextPlaces);
+      setTripItems(current => JSON.stringify(current) === JSON.stringify(nextTrip.items) ? current : nextTrip.items);
+      setTripTitle(nextTrip.title); setTripDayCount(nextTrip.dayCount); setTripStartDate(nextTrip.startDate ?? "");
+      setMemoryRows(nextMemories); setArchivedTrips(archives); setSyncError("");
+    } catch {
+      if (isCurrent()) setSyncError("파트너의 최신 장소와 기억을 불러오지 못했어요.");
+    }
+  }, { tables: ["activities"], activityPrefixes: ["PLACE_", "TRIP_", "MEMORY_", "PARTNER_"] });
   const [tripTitle, setTripTitle] = useState(initialTrip.title || "우리가 고른 여행");
   const [tripDayCount, setTripDayCount] = useState(Math.max(1, initialTrip.dayCount));
-  const [archivedTrips] = useState<ArchivedTripPlan[]>(initialArchivedTrips);
   const [selectedJourneyId, setSelectedJourneyId] = useState("current");
   const [selectedTripDay, setSelectedTripDay] = useState(0);
   const [journeyMenuOpen, setJourneyMenuOpen] = useState(false);
@@ -243,14 +283,16 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     setTripItems(initialTrip.items);
     setTripTitle(initialTrip.title || "우리가 고른 여행");
     setTripDayCount(Math.max(1, initialTrip.dayCount));
-  }, [initialPlaces, initialTrip]);
+    setTripStartDate(initialTrip.startDate ?? "");
+    setMemoryRows(initialMemories); setArchivedTrips(initialArchivedTrips);
+  }, [initialPlaces, initialTrip, initialMemories, initialArchivedTrips]);
 
   const tripJourneys = useMemo<ArchivedTripPlan[]>(() => {
     const journeys: ArchivedTripPlan[] = [
       ...(tripItems.length ? [{
         id: "current",
         title: tripTitle || "우리가 고른 여행",
-        startDate: initialTrip.startDate ?? "",
+        startDate: tripStartDate,
         dayCount: tripDayCount,
         status: "completed" as const,
         items: tripItems,
@@ -258,36 +300,42 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
       ...archivedTrips.filter(journey => journey.items.length > 0),
     ];
     return journeys.filter((journey, index) => journeys.findIndex(candidate => candidate.startDate === journey.startDate && candidate.title === journey.title && candidate.dayCount === journey.dayCount) === index);
-  }, [tripTitle, tripDayCount, tripItems, archivedTrips, initialTrip.startDate]);
+  }, [tripTitle, tripDayCount, tripItems, archivedTrips, tripStartDate]);
   const selectedJourney = tripJourneys.find(journey => journey.id === selectedJourneyId) ?? tripJourneys[0];
   const journeyItems = selectedJourney?.items ?? EMPTY_JOURNEY_ITEMS;
+
+  useEffect(() => {
+    if (!selectedJourney) return;
+    setSelectedJourneyId(selectedJourney.id);
+    setSelectedTripDay(day => Math.min(day, Math.max(0, selectedJourney.dayCount - 1)));
+  }, [selectedJourney?.id, selectedJourney?.dayCount]);
 
   const displayPlaces = places;
 
   const pins = useMemo(() => {
     const next: MapPin[] = [];
     displayPlaces.forEach(place => {
-      if (!place.coordinates) return;
+      if (!isLngLat(place.coordinates)) return;
       const label = couplePlacePinLabel(place);
       if (label) next.push({ kind: "place", id: `place:${place.id}`, label, place, coordinates: place.coordinates });
     });
     memories.forEach(memory => {
-      if (memory.coordinates) next.push({ kind: "memory", id: `memory:${memory.id}`, label: "memory", memory, coordinates: memory.coordinates });
+      if (isLngLat(memory.coordinates)) next.push({ kind: "memory", id: `memory:${memory.id}`, label: "memory", memory, coordinates: memory.coordinates });
     });
     return next;
   }, [displayPlaces, memories]);
   const tripPins = useMemo<TripPin[]>(() => itemsForDay(journeyItems, selectedTripDay)
-    .flatMap(item => {
+    .flatMap((item, index) => {
       const coordinates = asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]);
-      return coordinates ? [{ item, coordinates }] : [];
+      return coordinates ? [{ item, coordinates, dayOrder: index + 1 }] : [];
     })
     .sort((a, b) => (a.item.dayIndex ?? 0) - (b.item.dayIndex ?? 0) || a.item.order - b.item.order)
-    .map(({ item, coordinates }, index) => ({
+    .map(({ item, coordinates, dayOrder }) => ({
       kind: "trip" as const,
       id: `trip:${item.id}`,
       label: "trip" as const,
       item,
-      dayOrder: index + 1,
+      dayOrder,
       coordinates,
     })), [journeyItems, selectedTripDay]);
 
@@ -302,7 +350,7 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
   );
 
   const years = useMemo(() => {
-    const memoryYears = memories.map(memory => Number(memory.happenedOn.slice(0, 4))).filter(Number.isFinite);
+    const memoryYears = memories.map(memory => Number(memory.happenedOn.slice(0, 4))).filter(year => Number.isInteger(year) && year >= 1900 && year <= 2100);
     const newest = Math.max(new Date().getFullYear(), ...memoryYears);
     const oldest = Math.min(newest - 2, ...memoryYears);
     return Array.from({ length: newest - oldest + 1 }, (_, index) => oldest + index);
@@ -320,13 +368,9 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     return modePins.filter(pin => pin.label !== "trip" && activeLabels.has(pin.label));
   }, [mode, modePins, tripPins, activeLabels]);
   const visiblePinsRef = useRef(visiblePins);
-  const tripPinsRef = useRef(tripPins);
-  const modeRef = useRef(mode);
   const selectedRef = useRef(selected);
   const viewModeRef = useRef(viewMode);
   visiblePinsRef.current = visiblePins;
-  tripPinsRef.current = tripPins;
-  modeRef.current = mode;
   selectedRef.current = selected;
   viewModeRef.current = viewMode;
   const counts = useMemo(() => FILTERS.reduce<Record<PinLabel, number>>((result, filter) => {
@@ -335,6 +379,7 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
   }, { want: 0, visited: 0, revisit: 0, memory: 0 }), [pins]);
 
   const clearMapSelection = useCallback((restoreView = true) => {
+    hoverPreviewRef.current?.dismiss();
     markersRef.current.forEach(marker => marker.getElement().classList.remove("is-selected"));
     const map = mapRef.current;
     const saved = restoreView ? selectionViewportRef.current : null;
@@ -361,7 +406,9 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
       setSheetAnchor(null);
       return;
     }
-    const screenOffsets = pinCoordinates.map((_, offsetIndex) => screenOffsetForStackedPins(pinCoordinates, offsetIndex));
+    const screenOffsets = screenOffsetsForNearbyPins(pinCoordinates.map(point => map.project(point)), {
+      width: mapContainer.clientWidth, height: mapContainer.clientHeight,
+    });
     const sheetEl = sheetRef.current;
     const sheetWidth = sheetEl?.offsetWidth ?? 200;
     const sheetHeight = sheetEl?.offsetHeight ?? 54;
@@ -394,7 +441,11 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     updateSheetAnchor();
     const frame = window.requestAnimationFrame(updateSheetAnchor);
     const map = mapRef.current;
-    const onMapChange = () => window.requestAnimationFrame(updateSheetAnchor);
+    let updateFrame = 0;
+    const onMapChange = () => {
+      if (updateFrame) return;
+      updateFrame = window.requestAnimationFrame(() => { updateFrame = 0; updateSheetAnchor(); });
+    };
     map?.on("move", onMapChange);
     map?.on("zoom", onMapChange);
     map?.on("rotate", onMapChange);
@@ -403,6 +454,7 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     window.addEventListener("resize", onMapChange);
     return () => {
       window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(updateFrame);
       map?.off("move", onMapChange);
       map?.off("zoom", onMapChange);
       map?.off("rotate", onMapChange);
@@ -417,6 +469,8 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     let resizeObserver: ResizeObserver | undefined;
     let resizeFrame = 0;
     let resizeTimer: number | undefined;
+    let bootTimer = 0;
+    framedPinsRef.current = "";
     setMapState("loading");
     void import("maplibre-gl").then(maplibregl => {
       if (disposed || !container.current) return;
@@ -438,9 +492,25 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
       });
       mapRef.current = map;
       setMapInstance(map);
+      bootTimer = window.setTimeout(() => { if (!disposed) setMapState("error"); }, 10_000);
+      map.on("webglcontextlost", event => { event.originalEvent?.preventDefault(); if (!disposed) setMapState("error"); });
+      map.on("webglcontextrestored", () => {
+        if (disposed) return;
+        setMapState("loading");
+        window.clearTimeout(bootTimer);
+        bootTimer = window.setTimeout(() => { if (!disposed) setMapState("error"); }, 10_000);
+        // MapLibre installs the recovered style on its next animation frame.
+        map.once("style.load", () => {
+          if (disposed) return;
+          window.clearTimeout(bootTimer);
+          map.resize();
+          setMapState("ready");
+        });
+      });
       map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), "bottom-right");
       map.once("style.load", () => {
         if (disposed) return;
+        window.clearTimeout(bootTimer);
         map.on("movestart", () => container.current?.classList.add("is-moving"));
         map.on("moveend", () => container.current?.classList.remove("is-moving"));
         const syncOverviewState = () => container.current?.parentElement?.classList.toggle("is-map-overview", map.getZoom() < 11.5);
@@ -471,15 +541,15 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
         }
         setMapState("ready");
       });
-      map.once("load", () => {
-        syncCoupleTripRoute(map, tripPinsRef.current, modeRef.current === "trips");
-      });
     }).catch(() => { if (!disposed) setMapState("error"); });
     return () => {
       disposed = true;
       window.cancelAnimationFrame(resizeFrame);
+      window.clearTimeout(bootTimer);
       if (resizeTimer) window.clearTimeout(resizeTimer);
       resizeObserver?.disconnect();
+      hoverPreviewRef.current?.destroy();
+      hoverPreviewRef.current = null;
       markersRef.current.forEach(marker => marker.remove());
       markersRef.current = [];
       mapRef.current?.remove();
@@ -509,27 +579,57 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     } else {
       syncCoupleTripRoute(map, tripPins, showTripRoute);
     }
-    map.setLayoutProperty("buildings-3d", "visibility", is3d ? "visible" : "none");
     if (map.getLayer("buildings-3d")) {
+      map.setLayoutProperty("buildings-3d", "visibility", is3d ? "visible" : "none");
       map.setPaintProperty("buildings-3d", "fill-extrusion-opacity", showTripRoute && is3d ? 0.38 : 0.84);
     }
-    map.easeTo({ pitch: is3d ? 44 : 0, bearing: is3d ? -12 : 0, duration: 620 });
     map.triggerRepaint();
   }, [viewMode, mapState, mode, tripPins, tripRoadPath]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || mapState !== "ready") return;
+    map.easeTo({ pitch: viewMode === "3d" ? 44 : 0, bearing: viewMode === "3d" ? -12 : 0, duration: 620 });
+  }, [viewMode, mapState]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || mapState !== "ready") return;
+    hoverPreviewRef.current?.destroy();
+    hoverPreviewRef.current = null;
     markersRef.current.forEach(marker => marker.remove());
     markersRef.current = [];
     const currentSelection = selectedRef.current;
-    if (currentSelection && !visiblePins.some(pin => pin.id === currentSelection.id)) clearMapSelection(false);
+    if (currentSelection) {
+      const refreshed = visiblePins.find(pin => pin.id === currentSelection.id);
+      if (!refreshed) clearMapSelection(false);
+      else if (refreshed !== currentSelection) setSelected(refreshed);
+    }
     if (!visiblePins.length) { framePins(map, [], viewMode, 480); return; }
+    const hoverPreview = mapHostRef.current ? createMapHoverPreview(mapHostRef.current) : null;
+    hoverPreviewRef.current = hoverPreview;
     let disposed = false;
+    let layoutFrame = 0;
+    const syncMarkerOffsets = () => {
+      if (disposed || mapRef.current !== map || markersRef.current.length !== visiblePins.length) return;
+      const mapContainer = map.getContainer();
+      const offsets = screenOffsetsForNearbyPins(visiblePins.map(pin => map.project(pin.coordinates)), {
+        width: mapContainer.clientWidth, height: mapContainer.clientHeight,
+      });
+      markersRef.current.forEach((marker, index) => marker.setOffset(offsets[index]));
+    };
+    const scheduleMarkerOffsets = () => {
+      if (layoutFrame) return;
+      layoutFrame = window.requestAnimationFrame(() => { layoutFrame = 0; syncMarkerOffsets(); });
+    };
+    map.on("move", scheduleMarkerOffsets);
+    map.on("resize", scheduleMarkerOffsets);
+    const dismissPreview = () => hoverPreview?.dismiss();
+    map.on("movestart", dismissPreview);
+    map.on("resize", dismissPreview);
     void import("maplibre-gl").then(maplibregl => {
       if (disposed || mapRef.current !== map) return;
-      const pinCoordinates = visiblePins.map(item => item.coordinates);
-      markersRef.current = visiblePins.map((pin, index) => {
+      markersRef.current = visiblePins.map(pin => {
         const element = document.createElement("button");
         element.type = "button";
         element.className = `memory-city-marker is-${pin.label} ${viewMode === "3d" ? "is-3d" : ""}`;
@@ -541,11 +641,23 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
             : FILTERS.find(filter => filter.id === pin.label)?.label ?? "장소";
         element.setAttribute("aria-label", `${pinName(pin)} · ${statusLabel}`);
         const image = pin.kind === "memory" ? pin.memory.coverUrl : pin.kind === "place" ? pin.place.image : null;
-        const head = image
-          ? `<img src="${image}" alt="">`
-          : `<span style="background:rgb(${markerColor(pin.label)})">${pin.kind === "trip" ? `<b>${pin.dayOrder}</b>` : markerIcon(pin.label)}</span>`;
-        element.innerHTML = `<span class="memory-city-marker-art">${head}<i></i></span>`;
+        element.innerHTML = `<span class="memory-city-marker-art"><i></i></span>`;
+        const art = element.firstElementChild!;
+        if (image) {
+          const thumbnail = document.createElement("img");
+          thumbnail.src = image;
+          thumbnail.alt = "";
+          thumbnail.loading = "lazy";
+          thumbnail.decoding = "async";
+          art.prepend(thumbnail);
+        } else {
+          const icon = document.createElement("span");
+          icon.style.background = `rgb(${markerColor(pin.label)})`;
+          icon.innerHTML = pin.kind === "trip" ? `<b>${pin.dayOrder}</b>` : markerIcon(pin.label);
+          art.prepend(icon);
+        }
         if (selectedRef.current?.id === pin.id) element.classList.add("is-selected");
+        hoverPreview?.bind(element, pinPreview(pin, places));
         element.addEventListener("click", event => {
           event.stopPropagation();
           markersRef.current.forEach(marker => marker.getElement().classList.remove("is-selected"));
@@ -554,17 +666,29 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
           setSelected(pin);
           map.easeTo({ center: pin.coordinates, zoom: Math.max(map.getZoom(), 15.2), pitch: viewMode === "3d" ? 48 : 0, bearing: viewMode === "3d" ? -14 : 0, duration: 620, offset: [0, -24] });
         });
-        const offset = screenOffsetForStackedPins(pinCoordinates, index);
         return new maplibregl.Marker({
           element,
           ...htmlMarkerPlacement,
-          ...(offset ? { offset } : {}),
         }).setLngLat(pin.coordinates).addTo(map);
       });
-      framePins(map, visiblePins, viewMode, 620);
+      syncMarkerOffsets();
+      const frameKey = `${viewMode}:` + visiblePins.map(pin => `${pin.id}:${pin.coordinates.join(",")}`).join("|");
+      if (framedPinsRef.current !== frameKey) {
+        framedPinsRef.current = frameKey;
+        if (!selectedRef.current) framePins(map, visiblePins, viewMode, 620);
+      }
     });
-    return () => { disposed = true; };
-  }, [visiblePins, mapState, viewMode, clearMapSelection]);
+    return () => {
+      disposed = true;
+      window.cancelAnimationFrame(layoutFrame);
+      map.off("move", scheduleMarkerOffsets);
+      map.off("resize", scheduleMarkerOffsets);
+      map.off("movestart", dismissPreview);
+      map.off("resize", dismissPreview);
+      hoverPreview?.destroy();
+      if (hoverPreviewRef.current === hoverPreview) hoverPreviewRef.current = null;
+    };
+  }, [visiblePins, mapState, viewMode, clearMapSelection, places]);
 
   function toggleFilter(label: PinLabel) {
     setActiveLabels(current => {
@@ -576,11 +700,7 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
 
   const tripRouteAnchors = useMemo(
     () => {
-      const coordinates = tripPins.map(pin => pin.coordinates);
-      return tripPins.map((pin, index) => ({
-        coordinates: pin.coordinates,
-        screenOffset: screenOffsetForStackedPins(coordinates, index),
-      }));
+      return tripPins.map(pin => ({ coordinates: pin.coordinates }));
     },
     [tripPins],
   );
@@ -590,10 +710,13 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
 
   return <div ref={mapHostRef} className={`couple-map-wrap memory-city ${viewMode === "3d" ? "is-3d" : "is-2d"}`}>
     <div ref={container} className="maplibre-canvas" aria-label="우리의기억이 쌓인 3D 지도" />
+    <SyncNotice message={syncError} onRetry={retrySync} />
     <MapRouteOverlay
       map={mapInstance}
       anchors={tripRouteAnchors}
       pinVariant="memory"
+      spreadNearbyPins
+      providedRoadPath={tripRoadPath}
       active={mapState === "ready" && mode === "trips" && tripRouteAnchors.length >= 2}
     />
     {mapState === "loading" && <div className="map-loading" role="status"><span>우리의기억 도시를 만들고 있어요</span><i /></div>}
@@ -613,14 +736,14 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
           </div>
           <span>{journeyItems.length}곳</span>
         </div>}
-        <div className="memory-view-switch" aria-label="지도 입체 보기"><button type="button" className={viewMode === "2d" ? "is-active" : ""} onClick={() => setViewMode("2d")}>2D</button><button type="button" className={viewMode === "3d" ? "is-active" : ""} onClick={() => setViewMode("3d")}>3D</button></div>
+        <div className="memory-view-switch" aria-label="지도 입체 보기"><button type="button" aria-pressed={viewMode === "2d"} className={viewMode === "2d" ? "is-active" : ""} onClick={() => setViewMode("2d")}>2D</button><button type="button" aria-pressed={viewMode === "3d"} className={viewMode === "3d" ? "is-active" : ""} onClick={() => setViewMode("3d")}>3D</button></div>
       </div>
     </div>
 
     {mode === "trips" && selectedJourney && <nav className="trip-day-tabs" aria-label="여행 날짜">{Array.from({ length: selectedJourney.dayCount }, (_, day) => <button type="button" key={day} aria-pressed={selectedTripDay === day} onClick={() => { clearMapSelection(false); setSelectedTripDay(day); }}>DAY {day + 1}{selectedJourney.startDate && <small> · {formatKoShort(addDays(selectedJourney.startDate, day))}</small>}</button>)}</nav>}
     {mode !== "trips" && <div className="memory-map-filters" aria-label="장소 분류">{FILTERS.map(filter => <button type="button" key={filter.id} className={`is-${filter.id} ${activeLabels.has(filter.id) ? "is-active" : ""}`} aria-pressed={activeLabels.has(filter.id)} onClick={() => toggleFilter(filter.id)}><i /><span>{filter.label}</span><b>{counts[filter.id]}</b></button>)}</div>}
 
-    {mode === "trips" && selectedJourney && <div className="memory-map-stats"><b>{formatJourneyRange(selectedJourney.startDate, selectedJourney.dayCount)}</b><span>{tripPins.length}곳</span><i /><span>DAY {selectedTripDay + 1} 동선</span></div>}
+    {mode === "trips" && selectedJourney && <div className="memory-map-stats" role="status"><b>DAY {selectedTripDay + 1}</b><i /><span>지도에 {tripPins.length}곳</span>{itemsForDay(journeyItems, selectedTripDay).length > tripPins.length && <span>위치 미확인 {itemsForDay(journeyItems, selectedTripDay).length - tripPins.length}곳</span>}</div>}
 
     {mode === "trips" && selectedJourney && !tripPins.length && <div className="map-filter-empty">이날은 지도에 표시할 장소가 없어요.</div>}
     {mode === "trips" && !selectedJourney && <div className="memory-map-empty"><b>아직 지도에 올릴 여행이 없어요.</b><span>여행 일정에 장소를 담으면 동선이 보여요.</span><Link href="/trip">여행 짜기 →</Link></div>}

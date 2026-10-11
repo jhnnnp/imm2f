@@ -23,7 +23,7 @@ describe("structured planning policy", () => {
   });
 
   it("uses codes, not display wording, to determine structured severity", () => {
-    expect(blocksCourse([planningIssue("budget_exceeded", "문구가 변경됨")], "deterministic_seed")).toBe(true);
+    expect(blocksCourse([planningIssue("excluded_food", "문구가 변경됨")], "deterministic_seed")).toBe(true);
     expect(blocksCourse([planningIssue("low_variety", "확인된 비용이 예산 초과")], "deterministic_seed")).toBe(false);
     expect(planningIssue("required_activity_missing", "전시 누락", { constraint: "exhibit" },
       "hard", "explicit_constraint")).toMatchObject({ severity: "hard", origin: "explicit_constraint" });
@@ -45,7 +45,7 @@ describe("structured planning policy", () => {
   });
 
   it("retains explicit safety authority separately from heuristic origins", () => {
-    for (const code of ["budget_exceeded", "excluded_place", "excluded_food", "allergy_unverified", "required_place_missing"] as const)
+    for (const code of ["excluded_place", "excluded_food", "allergy_unverified", "required_place_missing"] as const)
       expect(planningIssue(code, "")).toMatchObject({ severity: "hard", origin: "explicit_constraint" });
   });
 

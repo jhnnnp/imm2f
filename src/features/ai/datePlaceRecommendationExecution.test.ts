@@ -101,7 +101,8 @@ describe("limited place recommendation", () => {
     const old = session([venue("a", { openingHours: "09:00-22:00", expectedCostTwo: 50000 })], [],
       state, "2026-09-24T10:00:00Z");
     expect(currentSessionVenue(old.records[0], now, state)?.openingHours).toBeUndefined();
-    expect(currentSessionVenue(old.records[0], now, { ...state, budgetWon: 100000 })).toBeNull();
+    expect(currentSessionVenue(old.records[0], now, { ...state, budgetWon: 100000 }))
+      .toMatchObject({ expectedCostTwo: undefined });
     const staleEvidence = session([venue("hours", { openingHours: "09:00-22:00" })]);
     staleEvidence.records[0].evidence = [{ venueId: "kakao:hours", attribute: "hours",
       sourceType: "maps", sourceUrl: null, retrievedAt: "2026-09-20T10:00:00Z",
@@ -121,7 +122,7 @@ describe("limited place recommendation", () => {
     expect(observeCandidates).toHaveBeenCalledWith([]);
   });
 
-  it("rechecks numeric budget, excluded places, and excluded foods before reuse", () => {
+  it("rechecks excluded places and foods while ignoring historic budgets", () => {
     const ask = { kind: "cafe" as const, query: "카페", area: "성수" };
     const old = session([venue("cheap", { expectedCostTwo: 40000 }),
       venue("expensive", { expectedCostTwo: 200000 }),
@@ -129,7 +130,7 @@ describe("limited place recommendation", () => {
     const current = { ...state, budgetWon: 100000, excludedPlaces: ["cheap 카페"],
       excludedFoods: ["돼지고기"] };
     expect(reusablePlaceCandidates({ session: old, ask, state: current,
-      message: "다른 카페 보여줘", now })).toEqual([]);
+      message: "다른 카페 보여줘", now }).map(place => place.externalPlaceId)).toEqual(["expensive"]);
   });
 
   it("rechecks historical rejections against current hard constraints before revival", () => {

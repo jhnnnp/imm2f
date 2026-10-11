@@ -7,6 +7,17 @@ const BASE = "https://routing.openstreetmap.de/routed-foot/route/v1/driving";
 const TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_CACHE = 256;
 const cache = new Map<string, { expiresAt: number; route: FootRoute }>();
+const inFlight = new Map<string, Promise<FootRoute | null>>();
+
+function untilAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T | null> {
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const abort = () => resolve(null);
+    signal.addEventListener("abort", abort, { once: true });
+    void operation.then(resolve, () => resolve(null))
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
+}
 
 export function parseFootRoute(raw: unknown, coordinates: LngLat[]): FootRoute | null {
   if (!raw || typeof raw !== "object") return null;
@@ -22,22 +33,32 @@ export function parseFootRoute(raw: unknown, coordinates: LngLat[]): FootRoute |
 }
 
 /** Dedicated pedestrian graph. OSRM's /foot path on the car demo is not a foot graph. */
-export async function fetchFootRoute(coordinates: LngLat[]): Promise<FootRoute | null> {
-  if (coordinates.length < 2 || coordinates.length > 7 || coordinates.some(([lng, lat]) => !Number.isFinite(lng) || !Number.isFinite(lat))) return null;
+export async function fetchFootRoute(coordinates: LngLat[], requestSignal?: AbortSignal): Promise<FootRoute | null> {
+  if (requestSignal?.aborted || coordinates.length < 2 || coordinates.length > 7
+    || coordinates.some(([lng, lat]) => !Number.isFinite(lng) || !Number.isFinite(lat)
+      || Math.abs(lng) > 180 || Math.abs(lat) > 90)) return null;
   const key = coordinates.map(([lng, lat]) => `${lng.toFixed(6)},${lat.toFixed(6)}`).join(";");
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.route;
-  try {
-    const response = await fetch(`${BASE}/${key}?overview=false&steps=false`, {
-      headers: { Accept: "application/json", "User-Agent": "OnlyUsDatePlanner/0.2 (date itinerary routing)" },
-      signal: AbortSignal.timeout(6000),
-      next: { revalidate: 86400 },
-    });
-    if (!response.ok) return null;
-    const route = parseFootRoute(await response.json(), coordinates);
-    if (!route) return null;
-    cache.set(key, { route, expiresAt: Date.now() + TTL_MS });
-    if (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value!);
-    return route;
-  } catch { return null; }
+  let pending = inFlight.get(key);
+  if (!pending) {
+    const signal = AbortSignal.timeout(6000);
+    pending = untilAbort((async () => {
+      const response = await fetch(`${BASE}/${key}?overview=false&steps=false`, {
+        headers: { Accept: "application/json", "User-Agent": "OnlyUsDatePlanner/0.2 (date itinerary routing)" },
+        signal,
+        next: { revalidate: 86400 },
+      });
+      if (!response.ok) return null;
+      const route = parseFootRoute(await response.json(), coordinates);
+      signal.throwIfAborted();
+      if (!route) return null;
+      cache.set(key, { route, expiresAt: Date.now() + TTL_MS });
+      if (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value!);
+      return route;
+    })(), signal).finally(() => { inFlight.delete(key); });
+    inFlight.set(key, pending);
+  }
+  // One canceled caller cannot cancel a route shared by another request.
+  return requestSignal ? untilAbort(pending, requestSignal) : pending;
 }

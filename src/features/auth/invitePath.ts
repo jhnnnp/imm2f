@@ -1,3 +1,5 @@
+import { safeNextPath } from "./redirectPath";
+
 const INVITE_TOKEN = /^[0-9a-f]{32,128}$/i;
 const INVITE_PATH = /^\/invite\/([0-9a-f]{32,128})$/i;
 
@@ -31,8 +33,11 @@ export function signedInAuthRedirect(pathname: string, searchParams: { get(name:
     if (isInviteToken(invite)) return inviteAcceptPath(invite);
   }
   if (pathname === "/login") {
-    const token = inviteTokenFromPath(searchParams.get("next"));
+    const next = safeNextPath(searchParams.get("next"));
+    const token = inviteTokenFromPath(next);
     if (token) return inviteAcceptPath(token);
+    // Avoid an authentication-page redirect loop after a successful login.
+    if (!/^\/(?:login|signup|auth)(?:\/|\?|#|$)/.test(next)) return next;
   }
   return "/";
 }

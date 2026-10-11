@@ -137,8 +137,6 @@ export function buildRecommendationExplanationContext(input: { plan: AIPlannerRe
     summary: `요청 지역: ${plan.condition.region}`, source: "date_intent" });
   if (input.hardConstraints?.date && input.hardConstraints.date === plan.condition.dateLabel) hard.push({
     type: "hard_constraint", summary: `요청 날짜: ${plan.condition.dateLabel}`, source: "date_intent" });
-  if (input.hardConstraints?.budgetWon != null && input.hardConstraints.budgetWon === plan.condition.budget)
-    hard.push({ type: "hard_constraint", summary: `예산 기준: ${plan.condition.budget}원`, source: "date_intent" });
   const schedule: RecommendationExplanationFact[] = plan.items
     .filter(item => !target.venueId || item.placeId === target.venueId)
     .map(item => ({ type: "schedule", summary: `${item.placeName}: ${item.startTime} 시작, ${item.durationMinutes}분 체류`,
@@ -163,7 +161,7 @@ export function buildRecommendationExplanationContext(input: { plan: AIPlannerRe
 }
 
 const rejectionReason: Record<string, string> = { excluded_place: "제외 요청한 장소예요",
-  excluded_food: "제외한 음식과 충돌해요", over_budget: "확인된 비용이 예산을 넘어요",
+  excluded_food: "제외한 음식과 충돌해요",
   event_date_mismatch: "공연·행사 날짜가 방문일과 맞지 않아요", search_policy: "현재 탐색 조건에 맞지 않아요" };
 
 /** A rejected candidate is explained directly from its exact pool record, without an LLM call. */

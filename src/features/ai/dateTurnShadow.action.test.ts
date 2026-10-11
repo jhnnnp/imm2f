@@ -4,6 +4,8 @@ import { recommendDatePlan } from "./actions";
 import { interpretDateTurnWithOpenAi } from "@/lib/openai/dateTurnInterpreter";
 import * as executionPlanner from "./dateExecutionPlan";
 
+vi.mock("@/features/auth/session", () => ({ getAppSession: vi.fn(async () => ({ mode: "authenticated", userId: "user", coupleId: "couple", displayName: "나", partner: null })) }));
+
 vi.mock("@/lib/openai/dateTurnInterpreter", () => ({ interpretDateTurnWithOpenAi: vi.fn() }));
 vi.mock("@/features/taste/actions", () => ({ loadTasteBoard: vi.fn(async () => ({})) }));
 vi.mock("@/lib/openai/routeDateChat", () => ({ routeDateChat: vi.fn(async () => ({ mode: "chat", confident: true })) }));

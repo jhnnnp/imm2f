@@ -12,16 +12,17 @@ export function InviteAccept({ token, inviterName, signedIn }: { token: string; 
   async function accept() {
     setPending(true);
     setError("");
-    const result = await acceptCoupleInvite(token);
-    if (result?.error) {
-      setError(result.error);
-      setPending(false);
-    }
+    try {
+      const result = await acceptCoupleInvite(token);
+      if (result?.error) setError(result.error);
+    } catch { setError("초대를 수락하지 못했어요. 다시 시도해 주세요."); }
+    finally { setPending(false); }
   }
 
   return (
     <div className="auth-form">
       <p className="auth-lead"><b>{inviterName}</b>님이 우리의 공간으로 초대했어요.</p>
+      {signedIn && <p className="form-hint">내 공간에 저장된 기록이 있으면 연결을 진행할 수 없어요. 기존 기록을 안전하게 보존하기 위한 안내예요.</p>}
       {signedIn ? (
         <button className="primary-button full" type="button" onClick={() => void accept()} disabled={pending}>
           {pending ? "연결 중..." : "초대 수락하기"}

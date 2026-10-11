@@ -51,7 +51,7 @@ export const PLANNING_SCENARIOS: PlanningScenario[] = [
     [[0, 0], [5, 0]]),
   scenario("H_slim_three_days", { ...threeDay, userRequests: ["2박3일 여유롭게"] },
     [[0, 0], [3, 1], [5, 2]]),
-  scenario("S_budget", { budgetWon: 10000 }, [[1, 0], [2, 0]], "blocked"),
+  scenario("S_legacy_budget_ignored", { budgetWon: 10000 }, [[1, 0], [2, 0]], "accepted"),
   scenario("S_excluded_food", { excludedFoods: ["해산물"] }, [[0, 0], [1, 0]], "blocked",
     [items[0], { ...items[1], dishes: "해산물 파스타" }]),
   scenario("S_required_place", { requiredPlaces: ["부산역"] }, [[0, 0], [1, 0]], "blocked"),

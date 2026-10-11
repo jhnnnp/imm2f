@@ -4,14 +4,14 @@ import { asPlanCoordinates } from "@/features/planning/planCoordinates";
 import { buildPlanRoute } from "../planRoute";
 
 export function planItemsWithCoordinates(items: PlanItem[]) {
-  return items.flatMap(item => {
+  return items.flatMap((item, index) => {
     const coordinates = asPlanCoordinates(item.coordinates?.[0], item.coordinates?.[1]);
-    return coordinates ? [{ ...item, coordinates }] : [];
+    return coordinates ? [{ ...item, coordinates, mapOrder: index + 1 }] : [];
   });
 }
 
 export function syncPlanMapRoute(map: MapLibreMap, coordinates: Array<[number, number]>) {
-  if (!map.isStyleLoaded()) return;
+  if (!map.getSource("plan-route")) return;
   const route = buildPlanRoute(coordinates);
   const write = (sourceId: string, data: ReturnType<typeof buildPlanRoute>[keyof ReturnType<typeof buildPlanRoute>]) => {
     const source = map.getSource(sourceId) as GeoJSONSource | undefined;
@@ -29,7 +29,7 @@ export function syncPlanMapRoute(map: MapLibreMap, coordinates: Array<[number, n
 const emptyCollection = () => ({ type: "FeatureCollection" as const, features: [] });
 
 export function syncPlanMapRoadRoute(map: MapLibreMap, roadPath: Array<[number, number]>) {
-  if (!map.isStyleLoaded() || roadPath.length < 2) return;
+  if (!map.getSource("plan-route") || roadPath.length < 2) return;
   const line = {
     type: "FeatureCollection" as const,
     features: [{

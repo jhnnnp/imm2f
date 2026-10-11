@@ -41,4 +41,13 @@ describe("date course agent orchestration", () => {
     });
     expect(searched).toBe(false);
   });
+  it("does not research around a provably impossible chosen itinerary", async () => {
+    let searched = false;
+    const first = reply(false);
+    first.design!.feasibility = { passed: false, reason: "selected_stays_exceed_time", message: "시간 부족" };
+    const result = await runDateAgentCourse({ candidates: [candidate("a")], propose: async () => first,
+      researchAfterFailure: async () => { searched = true; return [candidate("b")]; } });
+    expect(searched).toBe(false);
+    expect(result.attempts).toBe(1);
+  });
 });

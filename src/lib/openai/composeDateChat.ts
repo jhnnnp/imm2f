@@ -2,6 +2,7 @@ import type { AIChatCard, AIPlannerState, DateChatTurn, DateIntakeSlot } from "@
 import { DATE_AREA_OPTIONS, selectedAreas } from "@/features/ai/dateBrief";
 import { completeJson } from "./client";
 import { isOpenAiConfigured } from "./env";
+import { claimsUnperformedAction, cleanChatSuggestions } from "./chatPresentation";
 
 export type DateChatSituation =
   | "need_area"
@@ -148,10 +149,6 @@ export function looksPolite(text: string) {
   return sentences.every(sentence => /(?:요|니다|세요|까요|게요|죠|시죠|십니까|나요|어요|에요)[.!?~]*$/.test(sentence));
 }
 
-function claimsActionAlreadyTaken(text: string) {
-  return /(?:바꿨|변경했|추가했|삭제했|예약했|결제했|저장했|담았|검색했|찾았|추천해\s*드렸)어요/.test(text);
-}
-
 export async function composeDateChat(input: {
   situation: DateChatSituation;
   userMessage: string;
@@ -176,18 +173,16 @@ export async function composeDateChat(input: {
             situation: input.situation,
             recentTurns: (input.extras?.conversation ?? []).slice(-6),
             areas: selectedAreas(input.state),
-            brief: { activities: input.state.activities, cuisine: input.state.cuisine, budgetWon: input.state.budgetWon, walkingPreference: input.state.walkingPreference, notes: input.state.conversationNotes.slice(-4) },
-            currentCourse: (input.extras?.currentCourse ?? []).slice(0, 6),
-            shownPlaces: (input.state.shownPlaces ?? []).slice(0, 6),
+            brief: { activities: input.state.activities, cuisine: input.state.cuisine, walkingPreference: input.state.walkingPreference, notes: input.state.conversationNotes.slice(-4) },
+            currentCourse: input.extras?.currentCourse ?? [],
+            shownPlaces: input.state.shownPlaces ?? [],
           }),
         },
       ],
     });
     const reply = typeof parsed?.reply === "string" ? parsed.reply.replace(/[*_`#]/g, "").trim().slice(0, 400) : "";
-    if (!reply || !looksPolite(reply) || claimsActionAlreadyTaken(reply)) return card;
-    const suggestions = Array.isArray(parsed?.suggestions)
-      ? [...new Set(parsed.suggestions.map(item => String(item ?? "").replace(/[.!?]\s*$/, "").trim()).filter(item => item && item.length <= 18))].slice(0, 3)
-      : [];
+    if (!reply || !looksPolite(reply) || claimsUnperformedAction(reply)) return card;
+    const suggestions = cleanChatSuggestions(parsed?.suggestions, card.suggestions);
     const safeSuggestions = input.situation === "feedback" || input.situation === "unclear" || input.situation === "thanks"
       ? card.suggestions : Array.isArray(parsed?.suggestions) ? suggestions : card.suggestions;
     return { headline: "", lines: reply.split(/\n\s*\n/).filter(Boolean), suggestions: safeSuggestions };

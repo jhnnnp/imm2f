@@ -78,6 +78,19 @@ function coversDay(start: string, end: string, ymd: string) {
   return /^\d{8}$/.test(from) && /^\d{8}$/.test(to) && from <= ymd && ymd <= to;
 }
 
+export function kopisRuntimeMinutes(value: string): number | undefined {
+  const main = value.split(/[（(]/)[0].trim();
+  const match = main.match(/^(?:(\d{1,2})\s*시간\s*)?(?:(\d{1,3})\s*분)?$/);
+  if (!match || (!match[1] && !match[2])) return undefined;
+  let minutes = Number(match[1] ?? 0) * 60 + Number(match[2] ?? 0);
+  if (/인터미션|휴식/.test(value) && /별도|제외/.test(value)) {
+    const interval = value.match(/(?:인터미션|휴식)\s*(\d{1,2})\s*분/);
+    if (!interval) return undefined;
+    minutes += Number(interval[1]);
+  }
+  return minutes >= 15 && minutes <= 720 ? minutes : undefined;
+}
+
 async function getXml(path: string, params: Record<string, string>, key: string) {
   const url = new URL(`${API_BASE}/${path}`);
   url.searchParams.set("service", key);
@@ -97,7 +110,7 @@ async function fetchKopisPerformances(venue: DiscoverCandidate, ymd: string, key
     stdate: ymd, eddate: ymd, cpage: "1", rows: "30", shprfnmfct: venue.name,
   }, key)).filter(row => /^PF\d+$/.test(field(row, "mt20id")) && coversDay(field(row, "prfpdfrom"), field(row, "prfpdto"), ymd)
     && sameFacility(field(row, "fcltynm")) && active(field(row, "prfstate")));
-  const details = await Promise.all(listing.slice(0, 6).map(async row => {
+  const details = await Promise.all(listing.slice(0, 6).map(async (row): Promise<Event | null> => {
     const id = field(row, "mt20id");
     const detail = rows(await getXml(`pblprfr/${id}`, {}, key))[0];
     if (!detail || field(detail, "mt20id") !== id || !active(field(detail, "prfstate"))) return null;
@@ -111,6 +124,7 @@ async function fetchKopisPerformances(venue: DiscoverCandidate, ymd: string, key
     if (!showtimes.length) return null;
     return {
       id, title: field(detail, "prfnm"), dateYmd: ymd, showtimes,
+      durationMinutes: kopisRuntimeMinutes(field(detail, "prfruntime")),
       genre: field(detail, "genrenm"),
       sourceUrl: `https://kopis.or.kr/por/db/pblprfr/pblprfrView.do?mt20Id=${id}`,
       checkedAt: new Date().toISOString(),

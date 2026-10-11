@@ -7,8 +7,6 @@ export const LEGACY_DEMO_PLACES = [
   { name: "한주옥", lng: 126.7082, lat: 35.9906 },
 ] as const;
 
-const DEMO_NAMES = LEGACY_DEMO_PLACES.map(place => place.name);
-
 function sameCoord(left: number | null | undefined, right: number) {
   return left != null && Number.isFinite(left) && Math.abs(left - right) < 1e-4;
 }
@@ -27,27 +25,5 @@ export function isLegacyDemoPlace(place: {
   );
 }
 
-export async function clearLegacyDemoPlaces(coupleId?: string) {
-  const { createServiceClient } = await import("@/lib/supabase/server");
-  const service = createServiceClient();
-  if (!service) return 0;
-
-  let query = service
-    .from("places")
-    .select("id, name, lng, lat, external_source, external_place_id")
-    .eq("external_source", "manual")
-    .is("external_place_id", null)
-    .in("name", DEMO_NAMES);
-  if (coupleId) query = query.eq("couple_id", coupleId);
-
-  const { data } = await query;
-  const ids = (data ?? []).filter(isLegacyDemoPlace).map(row => row.id);
-  if (!ids.length) return 0;
-
-  const { error } = await service.from("places").delete().in("id", ids);
-  if (error) {
-    console.error("Failed to clear leftover demo places", error);
-    return 0;
-  }
-  return ids.length;
-}
+// A name and coordinate match is useful for recognizing the old sample list,
+// but cannot prove that a row was seeded. Never delete saved places using it.

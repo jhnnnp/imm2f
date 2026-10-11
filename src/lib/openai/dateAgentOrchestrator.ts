@@ -19,7 +19,7 @@ export async function runDateAgentCourse(input: {
 }): Promise<DateAgentRun> {
   const first = await input.propose(input.candidates);
   const firstIssues = first.design?.rejectionReasons ?? [];
-  if (first.items.length || input.allowResearchRepair === false
+  if (first.items.length || first.design?.feasibility?.passed === false || input.allowResearchRepair === false
     || firstIssues.some(issue => /알레르기 안전성 미확인/.test(issue))) {
     return { reply: first, candidates: input.candidates, attempts: 1,
       newCandidatesOnRepair: 0, verifierIssues: firstIssues };

@@ -204,9 +204,6 @@ async function verifyMutation(input: Input, transaction: MutationTransaction, ca
   const excludedFoods = [...new Set([...(previous.state.excludedFoods ?? []), ...(hard?.excludedFoods ?? [])])];
   if (candidate.recommendations.some(place => candidateFoodConflict(`${place.name} ${place.category} ${place.dishes ?? ""}`, excludedFoods)))
     hardProblems.push("excluded_food_present");
-  const budget = hard?.budgetWon ?? input.state.budgetWon ?? previous.condition.budget;
-  if (budget != null && candidate.items.reduce((sum, item) => sum + item.expectedCost, 0) > budget)
-    hardProblems.push("over_budget");
   if (candidate.condition.dateLabel !== (hard?.date ?? previous.condition.dateLabel)
     || candidate.condition.region !== previous.condition.region) hardProblems.push("date_or_area_changed");
   if (candidate.condition.startTime !== previous.condition.startTime
@@ -317,7 +314,7 @@ export async function executeLimitedMutation(input: Input,
     const kind = mutation.operation === "remove" ? "remove" : mutation.operation === "reorder" ? "reorder" : "retime";
     const proposed = editCurrentCourse(before, { kind, indices }, { ...input.state,
       dateLabel: before.condition.dateLabel, startTime: before.condition.startTime,
-      endTime: before.condition.endTime, budgetWon: before.condition.budget,
+      endTime: before.condition.endTime, budgetWon: null,
       excludedPlaces: [...before.state.excludedPlaces],
       requiredPlaces: [...before.state.requiredPlaces] }, {
       ...(mutation.operation === "retime" && mutation.explicitTime

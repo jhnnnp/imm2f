@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createNotesBatch } from "../actions";
 import type { CoupleNote } from "../types";
 import type { VaultScanItemDraft } from "../vaultScan";
+import { noteCreationAttempt, type NoteCreationAttempt } from "../noteCreationAttempt";
 
 type PreviewRow = VaultScanItemDraft & { id: string; selected: boolean };
 
@@ -14,14 +15,16 @@ function rowId(index: number) {
 export function VaultScreenshotImport({
   persist,
   disabled,
-  onBusy,
+  beginMutation,
+  endMutation,
   onError,
   onSaved,
   onPreviewChange,
 }: {
   persist: boolean;
   disabled: boolean;
-  onBusy: (busy: boolean) => void;
+  beginMutation: () => boolean;
+  endMutation: () => void;
   onError: (message: string) => void;
   onSaved: (notes: CoupleNote[]) => void;
   onPreviewChange: (preview: boolean) => void;
@@ -31,12 +34,16 @@ export function VaultScreenshotImport({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const [rows, setRows] = useState<PreviewRow[]>([]);
+  const busyRef = useRef(false);
+  const scanController = useRef<AbortController | null>(null);
+  const creationAttempts = useRef(new Map<string, NoteCreationAttempt>());
 
   useEffect(() => {
     onPreviewChange(phase === "preview");
   }, [phase, onPreviewChange]);
 
   useEffect(() => () => {
+    scanController.current?.abort();
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
   }, []);
 
@@ -45,8 +52,17 @@ export function VaultScreenshotImport({
       onError("로그인 후 사용할 수 있어요.");
       return;
     }
+    if (disabled || busyRef.current) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size <= 0 || file.size > 4 * 1024 * 1024) {
+      onError("4MB 이하 JPEG·PNG·WebP 이미지를 선택해 주세요.");
+      return;
+    }
+    if (!beginMutation()) return;
+    busyRef.current = true;
+    const controller = new AbortController();
+    scanController.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 60_000);
     onError("");
-    onBusy(true);
     setPhase("scanning");
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     const nextUrl = URL.createObjectURL(file);
@@ -57,7 +73,7 @@ export function VaultScreenshotImport({
     body.set("image", file);
 
     try {
-      const response = await fetch("/api/vault/scan", { method: "POST", body });
+      const response = await fetch("/api/vault/scan", { method: "POST", body, signal: controller.signal });
       const payload = await response.json() as { items?: VaultScanItemDraft[]; error?: string };
       if (!response.ok) {
         onError(payload.error ?? "스크린샷을 읽지 못했어요.");
@@ -76,9 +92,12 @@ export function VaultScreenshotImport({
       onError("스크린샷을 읽는 중 문제가 생겼어요.");
       setPhase("idle");
     } finally {
-      onBusy(false);
+      window.clearTimeout(timeout);
+      busyRef.current = false;
+      scanController.current = null;
+      endMutation();
     }
-  }, [onBusy, onError, persist]);
+  }, [beginMutation, disabled, endMutation, onError, persist]);
 
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
@@ -93,6 +112,7 @@ export function VaultScreenshotImport({
   }, [disabled, phase, runScan]);
 
   function resetScan() {
+    creationAttempts.current.clear();
     setPhase("idle");
     setRows([]);
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
@@ -110,10 +130,19 @@ export function VaultScreenshotImport({
       onError("저장할 항목을 하나 이상 선택해 주세요.");
       return;
     }
-    onBusy(true);
+    if (disabled || busyRef.current || !beginMutation()) return;
+    busyRef.current = true;
     onError("");
-    const result = await createNotesBatch("vault", items.map(({ title, detail, extra }) => ({ title, detail, extra })));
-    onBusy(false);
+    const payload = items.map(row => {
+      const input = { title: row.title, detail: row.detail, extra: row.extra };
+      const attempt = noteCreationAttempt(creationAttempts.current.get(row.id) ?? null, "vault", input);
+      creationAttempts.current.set(row.id, attempt);
+      return { ...input, attemptId: attempt.id };
+    });
+    const result = await createNotesBatch("vault", payload)
+      .catch(() => ({ error: "저장 응답을 확인하지 못했어요. 보관함을 확인한 뒤 다시 시도해 주세요." }));
+    busyRef.current = false;
+    endMutation();
     if ("error" in result) {
       onError(result.error);
       return;
@@ -140,6 +169,7 @@ export function VaultScreenshotImport({
               <label className="vault-scan-check">
                 <input
                   type="checkbox"
+                  disabled={disabled}
                   checked={row.selected}
                   onChange={event => setRows(current => current.map(item => (item.id === row.id ? { ...item, selected: event.target.checked } : item)))}
                 />
@@ -150,18 +180,21 @@ export function VaultScreenshotImport({
                   value={row.title}
                   onChange={event => updateRow(row.id, { title: event.target.value })}
                   aria-label={`${index + 1}번째 제목`}
+                  disabled={disabled}
                 />
                 <textarea
                   value={row.detail}
                   onChange={event => updateRow(row.id, { detail: event.target.value })}
                   rows={3}
                   aria-label={`${index + 1}번째 메모`}
+                  disabled={disabled}
                 />
                 <input
                   value={row.extra}
                   onChange={event => updateRow(row.id, { extra: event.target.value })}
                   placeholder="예약번호"
                   aria-label={`${index + 1}번째 예약번호`}
+                  disabled={disabled}
                 />
               </div>
             </li>

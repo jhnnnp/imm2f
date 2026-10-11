@@ -11,7 +11,7 @@ export type VaultScanResponse = {
 const MAX_ITEMS = 15;
 const MAX_TITLE = 140;
 const MAX_DETAIL = 4000;
-const MAX_EXTRA = 320;
+const MAX_EXTRA = 4096;
 
 function trimField(value: unknown, max: number) {
   if (typeof value !== "string") return "";
@@ -32,7 +32,9 @@ export function normalizeVaultScanItems(raw: unknown): VaultScanItemDraft[] {
     if (!title) continue;
     const detail = trimField((entry as { detail?: unknown }).detail, MAX_DETAIL);
     const extra = trimField((entry as { extra?: unknown }).extra, MAX_EXTRA);
-    const key = `${title}|${extra}|${detail.slice(0, 80)}`;
+    // Shared reservation numbers and long common headers still identify
+    // different legs when their route or departure time differs later on.
+    const key = JSON.stringify([title, extra, detail]);
     if (seen.has(key)) continue;
     seen.add(key);
     next.push({ title, detail, extra });
