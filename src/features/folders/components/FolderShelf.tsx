@@ -115,7 +115,7 @@ export function FolderShelf({ scope, controller, items, label }: {
     } finally { dropLock.current = false; setMovingTo(""); }
   }
   return <section className={`folder-shelf ${scope === "places" ? "folder-shelf-sage" : "folder-shelf-blue"} ${isRoot ? "folder-shelf-root" : "folder-shelf-inside"}`} aria-label={`${label} 폴더`} aria-busy={!!movingTo}>
-    <div className="folder-shelf-heading"><div><span className="folder-eyebrow">OUR LITTLE COLLECTIONS</span><h2>{isRoot ? "우리만의 폴더" : locationName}</h2><p>{isRoot ? "폴더를 열어 함께 모은 장소와 기록을 둘러보세요." : "필요한 항목을 고르고, 마음에 맞는 폴더로 정리해요."}</p></div>
+    <div className="folder-shelf-heading"><div><span className="folder-eyebrow">OUR LITTLE COLLECTIONS</span><h2>{isRoot ? "우리만의 장소" : locationName}</h2><p>{isRoot ? "폴더를 열어 함께 모은 장소와 기록을 둘러보세요." : "필요한 항목을 고르고, 마음에 맞는 폴더로 정리해요."}</p></div>
       <div className="folder-heading-actions"><button className={`folder-all-items${selectedFolderId === "all" ? " is-active" : ""}`} type="button" aria-pressed={selectedFolderId === "all"} onClick={() => setSelectedFolderId("all")}>전체 {label} 보기 <span>{items.length}</span></button>
       <button className="folder-new" type="button" disabled={pending || !workspace.persist} onClick={() => open({ mode: "create", attemptId: crypto.randomUUID() })}>＋ 새 폴더</button></div></div>
     <nav className="folder-breadcrumb" aria-label="폴더 위치">
