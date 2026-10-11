@@ -2,7 +2,8 @@
 
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import Link from "next/link";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
+import { ExpandableText } from "@/components/shared/ExpandableText";
 import type { TripScheduleStop } from "../tripPlaceMatch";
 import type { Place, PlacePreferenceStatus } from "../types/place";
 import { isDiscoverPlace } from "../discover";
@@ -19,16 +20,7 @@ const STATUS_OPTIONS: PlacePreferenceStatus[] = ["want", "visited", "revisit", "
 const HEART_SAVED: PlacePreferenceStatus[] = ["want", "must_visit", "revisit"];
 
 function ReadablePlaceText({ text, label = "설명" }: { text: string; label?: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const textId = useId();
-  const long = text.length > 180 || text.split("\n").length > 4;
-  useEffect(() => { setExpanded(false); }, [text]);
-  return <div className={styles.readableText}>
-    <p id={textId} className={`${styles.text} ${long && !expanded ? styles.collapsed : ""}`}>{text}</p>
-    {long && <button className={styles.expandButton} type="button" aria-expanded={expanded} aria-controls={textId} onClick={() => setExpanded(value => !value)}>
-      {expanded ? `${label} 접기` : `전체 ${label} 보기`} <span aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
-    </button>}
-  </div>;
+  return <ExpandableText text={text} className={styles.readableText} moreLabel={`전체 ${label} 보기`} lessLabel={`${label} 접기`} />;
 }
 
 function optionIsActive(current: PlacePreferenceStatus, option: PlacePreferenceStatus) {
@@ -235,7 +227,7 @@ export function PlaceDetailPanel({
       {place.homepage && <a className="place-source-link" href={place.homepage} target="_blank" rel="noreferrer">공식 홈페이지 <span>↗</span></a>}
     </div>
     {preview ? (
-      <button className={preferredPlan ? "outline-button full" : "primary-button full"} type="button" onClick={onSave}>나중을 위해 저장</button>
+      <button className={preferredPlan ? "outline-button full" : "primary-button full"} type="button" onClick={onSave}>장소 저장하기</button>
     ) : (
       <div className="status-box"><span>내 마음</span>{onStatusChange ? <div className="status-picker" role="group" aria-label="이 장소에 대한 내 마음">{STATUS_OPTIONS.map(status => {
         const active = optionIsActive(place.userStatus, status);

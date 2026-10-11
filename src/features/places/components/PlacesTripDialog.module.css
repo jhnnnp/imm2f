@@ -1,0 +1,16 @@
+.dialog { width: min(100% - 32px, 520px); }
+.heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.heading h2 { margin: 6px 0 14px; font-size: 1.3rem; }
+.places { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+.places span { padding: 5px 10px; background: var(--sage-soft); color: var(--sage-deep); border-radius: 20px; font-size: .82rem; }
+.destination { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 14px; }
+.hint { font-size: .82rem; line-height: 1.6; color: var(--muted); margin: 8px 0 18px; }
+.arrangement { display: grid; gap: 8px; border: 0; padding: 0; margin: 0 0 20px; }
+.arrangement legend { font-size: .85rem; font-weight: 700; margin-bottom: 8px; }
+.arrangement label { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.arrangement label:has(input:checked) { background: var(--sage-soft); border-color: var(--sage); }
+.arrangement input { margin-top: 5px; accent-color: var(--sage-deep); }
+.arrangement span { display: grid; gap: 3px; }
+.arrangement b { font-size: .9rem; }
+.arrangement small { color: var(--muted); font-size: .8rem; }
+@media (max-width: 420px) { .destination { grid-template-columns: 1fr; } }

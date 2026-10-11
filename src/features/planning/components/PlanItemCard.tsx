@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import type { PlanItem } from "../types/plan";
+import { ExpandableText } from "@/components/shared/ExpandableText";
+import styles from "./PlanItemCard.module.css";
 
 export function PlanItemCard({
   item,
@@ -130,12 +132,8 @@ export function PlanItemCard({
       </div>
       <div className="timeline-item-body">
         <h3>{item.placeName}</h3>
-        {(item.memo || (!letter && showTime)) && (
-          <p>
-            {item.memo && <span>{item.memo}</span>}
-            {!letter && showTime && <small>{item.durationMinutes}분</small>}
-          </p>
-        )}
+        {item.memo && <ExpandableText text={item.memo} className={styles.memo} label={`${item.placeName} 메모`} />}
+        {!letter && showTime && <small className={styles.duration}>{item.durationMinutes}분</small>}
       </div>
       {editing && onUpdate && (
         <div className="timeline-edit-panel">

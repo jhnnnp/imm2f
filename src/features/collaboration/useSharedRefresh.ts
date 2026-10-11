@@ -13,6 +13,7 @@ export type SharedRefreshContext = { isCurrent: () => boolean };
 export function useSharedRefresh(refresh: (context: SharedRefreshContext) => Promise<void>, options: SharedRefreshOptions = {}) {
   const session = useAppSession();
   const coupleId = session.mode === "authenticated" ? session.coupleId : "";
+  const userId = session.mode === "authenticated" ? session.userId : "";
   const scope = session.mode === "authenticated" ? `${session.userId}:${coupleId}` : "";
   const latestScope = useRef(scope);
   latestScope.current = scope;
@@ -44,7 +45,7 @@ export function useSharedRefresh(refresh: (context: SharedRefreshContext) => Pro
       if (change.source === "poll" && Date.now() - lastRead < (settings.current.pollIntervalMs ?? 60_000)) return;
       guard.current.invalidate();
       queue.schedule();
-    }, { refreshOnConnect: settings.current.refreshOnConnect });
+    }, { refreshOnConnect: settings.current.refreshOnConnect, userId });
     return () => {
       stopped = true;
       if (retryRef.current === retry) retryRef.current = () => {};
@@ -52,6 +53,6 @@ export function useSharedRefresh(refresh: (context: SharedRefreshContext) => Pro
       queue.stop();
       live.unsubscribe();
     };
-  }, [coupleId, scope]);
+  }, [coupleId, scope, userId]);
   return useCallback(() => retryRef.current(), []);
 }

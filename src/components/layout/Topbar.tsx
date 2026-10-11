@@ -30,7 +30,7 @@ export function Topbar() {
   const accountRef = useRef<HTMLDivElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const session = useAppSession();
-  const { items: activities, loaded: notifyLoaded } = useCoupleActivityFeed(8);
+  const { items: activities, loaded: notifyLoaded, error: notifyError, retry: retryNotifications } = useCoupleActivityFeed(8);
   const label = session.mode === "authenticated" || session.mode === "setup_error" ? initialFromName(session.displayName) : "나";
   const unread = useMemo(() => activities.filter(item => item.important).length, [activities]);
 
@@ -92,7 +92,8 @@ export function Topbar() {
           <div className="notify-popover" role="dialog" aria-label="최근 활동">
             <p>최근 활동</p>
             {!notifyLoaded && <small>불러오는 중이에요.</small>}
-            {notifyLoaded && !activities.length && <small>아직 알릴 변화가 없어요.</small>}
+            {notifyError && <div role="alert"><small>{notifyError}</small><button type="button" onClick={retryNotifications}>다시 불러오기</button></div>}
+            {notifyLoaded && !notifyError && !activities.length && <small>아직 알릴 변화가 없어요.</small>}
             {activities.slice(0, 6).map(item => (
               <Link href={hrefForActivity(item.action)} key={item.id} onClick={() => setNotifyOpen(false)}>
                 <b>{item.title}</b>

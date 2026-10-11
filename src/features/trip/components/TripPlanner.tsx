@@ -25,6 +25,7 @@ import { tripSnapshotRecorded } from "../archiveSnapshot";
 import { hasTripContent, tripDateRange, tripDraftsWithActive, type TripDateSnapshot } from "../tripDates";
 import { useDialogFocus } from "@/components/shared/useDialogFocus";
 import styles from "./TripDateWorkspace.module.css";
+import { ExpandableText } from "@/components/shared/ExpandableText";
 
 const PlanMap = dynamic(() => import("./PlanMap").then(mod => mod.PlanMap), {
   ssr: false,
@@ -552,7 +553,7 @@ export function TripPlanner({
                 </div>
               ) : (
                 <>
-                  {viewingArchiveId ? <ol className={styles.recordAgenda} aria-label="저장된 여행의 장소 순서">{dayItems.map((item, index) => <li key={item.id}><span>{index + 1}</span><div><small>{item.category}</small><h3>{item.placeName}</h3>{item.memo && <p>{item.memo}</p>}</div></li>)}</ol> : <PlanTimeline
+                  {viewingArchiveId ? <ol className={styles.recordAgenda} aria-label="저장된 여행의 장소 순서">{dayItems.map((item, index) => <li key={item.id}><span>{index + 1}</span><div><small>{item.category}</small><h3>{item.placeName}</h3>{item.memo && <ExpandableText text={item.memo} className={styles.recordMemo} label={`${item.placeName} 메모`} />}</div></li>)}</ol> : <PlanTimeline
                     items={dayItems}
                     showTime={false}
                     dayCount={dayCount}

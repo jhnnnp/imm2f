@@ -70,6 +70,11 @@
 
 .saved-place-selection-bar > span { flex: 1; }
 .saved-place-selection-bar > button { border: 0; background: none; color: var(--sage, #536f63); padding: 5px; }
+.saved-place-selection-bar > .saved-places-trip-button { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:36px; padding:8px 14px; border-radius:9px; background:var(--sage, #536f63); color:white; font:600 .78rem/1.4 var(--default, sans-serif); box-shadow:0 3px 10px #536f6315; }
+.saved-places-trip-button svg { width:16px; height:16px; }
+.saved-places-trip-button:hover:not(:disabled) { background:var(--sage-deep, #3f5e4e); }
+.saved-places-trip-button:disabled { opacity:.5; cursor:not-allowed; }
+.saved-place-selection-bar > button:focus-visible { outline:2px solid var(--sage, #536f63); outline-offset:3px; }
 .saved-place-selection-bar:has(> .folder-move-select) { border-color:#b9cbbd; background:#edf3ec; }
 .saved-place-selection-bar > .folder-move-select { font-size:12px; padding:8px 28px 8px 11px; background:#fff; }
 .saved-place-file.is-list { flex-direction: row; align-items: center; gap: 10px; padding-right: 8px; }

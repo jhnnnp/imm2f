@@ -1,0 +1,12 @@
+.memo {
+  margin-top: 7px;
+  color: #707a72;
+  font: 400 .82rem/1.7 var(--default, sans-serif);
+  text-align: left;
+}
+.duration {
+  display: block;
+  margin-top: 7px;
+  color: #7b877f;
+  font: 500 .75rem/1.4 var(--default, sans-serif);
+}

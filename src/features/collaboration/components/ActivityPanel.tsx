@@ -3,9 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { useTossDismiss } from "@/lib/useTossDismiss";
+import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { emitCoupleActivitiesChanged } from "../activityClient";
 import { groupActivities } from "../activityFeed";
-import { useCoupleActivityFeed, hideCoupleActivitiesInFeed, restoreCoupleActivitiesInFeed } from "../activityLive";
+import { useCoupleActivityFeed, hideCoupleActivitiesInFeed } from "../activityLive";
 import { clearCoupleActivities, dismissCoupleActivities } from "../actions";
 import { hrefForActivity, type CoupleActivity } from "../types";
 
@@ -85,6 +86,12 @@ function ActivityCard({
 export function ActivityPanel() {
   const router = useRouter();
   const live = useCoupleActivityFeed(20);
+  const session = useAppSession();
+  const currentScope = useRef({ scope: live.scope, version: 0 });
+  if (currentScope.current.scope !== live.scope) currentScope.current = { scope: live.scope, version: currentScope.current.version + 1 };
+  const active = useRef(true);
+  const pendingIds = useRef(new Set<string>());
+  const [pendingMutations, setPendingMutations] = useState(0);
   const feedRef = useRef<HTMLDivElement>(null);
   const skipClick = useRef(false);
   const dragged = useRef<string[] | null>(null);
@@ -103,27 +110,60 @@ export function ActivityPanel() {
   const feedError = error || live.error;
 
   useEffect(() => {
+    active.current = true;
+    pendingIds.current = new Set();
+    setPendingMutations(0);
+    setConfirmClear(false);
+    setError("");
+    setStatus("");
+    setDraggingId(null);
+    setOpenKeys(new Set());
+    dragged.current = null;
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
     return () => {
+      active.current = false;
       if (confirmTimer.current) clearTimeout(confirmTimer.current);
     };
-  }, []);
+  }, [live.scope]);
 
   const toss = (ids: string[]) => {
-    hideCoupleActivitiesInFeed(ids);
+    if (session.mode !== "authenticated" || !live.scope) return;
+    const pending = pendingIds.current;
+    const unique = [...new Set(ids)].filter(id => !pending.has(id));
+    if (!unique.length) return;
+    unique.forEach(id => pending.add(id));
+    const scope = live.scope;
+    const version = currentScope.current.version;
+    const mutationScope = { coupleId: session.coupleId, userId: session.userId };
+    const detail = { ...mutationScope, activityOnly: true };
+    const isCurrent = () => active.current && currentScope.current.scope === scope && currentScope.current.version === version;
+    const restore = hideCoupleActivitiesInFeed(unique, scope);
+    setPendingMutations(value => value + 1);
     setError("");
     setStatus(ids.length > 1 ? "같은 이야기를 지웠어요" : "이야기를 지웠어요");
-    void dismissCoupleActivities(ids).then(result => {
+    void dismissCoupleActivities(unique, mutationScope).then(result => {
       if (result.error) {
-        restoreCoupleActivitiesInFeed(ids);
+        restore();
+        if (!isCurrent()) return;
         setError(result.error);
         setStatus("");
         return;
       }
-      emitCoupleActivitiesChanged();
+      emitCoupleActivitiesChanged(detail);
+    }).catch(() => {
+      restore();
+      if (!isCurrent()) return;
+      setError("이야기를 지우지 못했어요. 연결을 확인하고 다시 시도해 주세요.");
+      setStatus("");
+    }).finally(() => {
+      unique.forEach(id => pending.delete(id));
+      if (isCurrent()) setPendingMutations(value => Math.max(0, value - 1));
     });
   };
 
   const askClear = () => {
+    if (session.mode !== "authenticated" || !live.scope) return;
+    if (pendingMutations > 0) return;
     if (!confirmClear) {
       setConfirmClear(true);
       if (confirmTimer.current) clearTimeout(confirmTimer.current);
@@ -133,16 +173,31 @@ export function ActivityPanel() {
     if (confirmTimer.current) clearTimeout(confirmTimer.current);
     setConfirmClear(false);
     const ids = items.map(item => item.id);
-    hideCoupleActivitiesInFeed(ids);
+    const scope = live.scope;
+    const version = currentScope.current.version;
+    const mutationScope = { coupleId: session.coupleId, userId: session.userId };
+    const detail = { ...mutationScope, activityOnly: true };
+    const isCurrent = () => active.current && currentScope.current.scope === scope && currentScope.current.version === version;
+    const restore = hideCoupleActivitiesInFeed(ids, scope);
+    setError("");
+    setPendingMutations(value => value + 1);
     setStatus("오늘의 이야기를 비웠어요");
-    void clearCoupleActivities().then(result => {
+    void clearCoupleActivities(mutationScope).then(result => {
       if (result.error) {
-        restoreCoupleActivitiesInFeed(ids);
+        restore();
+        if (!isCurrent()) return;
         setError(result.error);
         setStatus("");
         return;
       }
-      emitCoupleActivitiesChanged();
+      emitCoupleActivitiesChanged(detail);
+    }).catch(() => {
+      restore();
+      if (!isCurrent()) return;
+      setError("이야기를 비우지 못했어요. 연결을 확인하고 다시 시도해 주세요.");
+      setStatus("");
+    }).finally(() => {
+      if (isCurrent()) setPendingMutations(value => Math.max(0, value - 1));
     });
   };
 
@@ -190,6 +245,7 @@ export function ActivityPanel() {
             <button
               className={`activity-clear${confirmClear ? " is-confirm" : ""}`}
               type="button"
+              disabled={pendingMutations > 0}
               onClick={askClear}
             >
               {confirmClear ? "정말 지울까요?" : "모두 비우기"}
@@ -203,9 +259,9 @@ export function ActivityPanel() {
         data-toss-hint="바깥에 놓으면 지워져요"
       >
         {!loaded && <div className="panel-loading" aria-label="이야기 불러오는 중"><i /><i /><i /></div>}
-        {feedError && <p className="panel-error" role="alert">{feedError}</p>}
+        {feedError && <div className="panel-error" role="alert"><p>{feedError}</p>{live.error && <button type="button" onClick={live.retry}>다시 불러오기</button>}</div>}
         {status && <p className="sr-only" role="status">{status}</p>}
-        {loaded && !items.length && (
+        {loaded && !items.length && !feedError && (
           <p className="form-hint">아직 기록이 없어요. 장소를 저장하거나 일정을 바꾸면 여기에 쌓여요.</p>
         )}
         {groups.map(group => {

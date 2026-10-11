@@ -7,6 +7,7 @@ export function subscribeMemoryWallBoard(
   coupleId: string,
   onRemote: (state: CorkBoardState, updatedAt: string, updatedBy: string | null) => void,
   onRefresh?: () => void,
+  userId?: string,
 ) {
   return subscribeWorkspaceChanges(coupleId, change => {
     if (change.source !== "database") {
@@ -20,5 +21,5 @@ export function subscribeMemoryWallBoard(
     const parsed = parseBoardState(raw);
     if (!parsed) { onRefresh?.(); return; }
     onRemote(parsed, row.updated_at, typeof row.updated_by === "string" ? row.updated_by : null);
-  });
+  }, { userId });
 }

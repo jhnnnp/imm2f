@@ -383,7 +383,7 @@ export function MemoryCanvas({
         if (state && updatedAt) receive(state, updatedAt);
       } catch { if (!cancelled) setSyncError("벽면의 최신 변경을 불러오지 못했어요. 현재 내용은 보관되어 있어요."); }
     }, { canRun: () => !cancelled && document.visibilityState === "visible" });
-    const live = subscribeMemoryWallBoard(coupleId, receive, queue.schedule);
+    const live = subscribeMemoryWallBoard(coupleId, receive, queue.schedule, userId ?? undefined);
 
     return () => {
       cancelled = true;

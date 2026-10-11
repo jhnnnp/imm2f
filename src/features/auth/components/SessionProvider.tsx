@@ -89,6 +89,7 @@ export function SessionProvider({ children, initialSession }: { children: ReactN
   }, [router]);
 
   const coupleId = session.mode === "authenticated" ? session.coupleId : "";
+  const userId = session.mode === "authenticated" ? session.userId : "";
   useEffect(() => {
     if (!coupleId) return;
     let lastVerified = Date.now();
@@ -99,9 +100,9 @@ export function SessionProvider({ children, initialSession }: { children: ReactN
       else if (change.source === "poll" && Date.now() - lastVerified < 120_000) return;
       lastVerified = Date.now();
       requestRefresh.current();
-    });
+    }, { userId });
     return () => live.unsubscribe();
-  }, [coupleId]);
+  }, [coupleId, userId]);
 
   // RSC children belong to the server's identity. Do not display an old
   // couple's local state while a changed account/space is being re-rendered.

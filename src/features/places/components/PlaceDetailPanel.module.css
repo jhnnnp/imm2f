@@ -29,41 +29,10 @@
   color: var(--muted);
 }
 
-.readableText .text {
-  margin: 0;
+.readableText {
   font: .9rem/1.7 var(--default);
   color: var(--ink);
-  white-space: pre-line;
-  overflow-wrap: anywhere;
   word-break: keep-all;
-}
-
-.readableText .collapsed {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-  line-clamp: 4;
-  overflow: hidden;
-}
-
-.expandButton {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  min-height: 32px;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--sage-deep);
-  font-size: .78rem;
-  font-weight: 700;
-  text-align: left;
-}
-
-.expandButton:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 
 .recommendation {

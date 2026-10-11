@@ -120,23 +120,21 @@ async function attachStoredPlanCoordinates(
     const parsed = parseDiscoverPlaceId(item.placeId);
     return parsed ? [parsed.externalPlaceId] : [];
   }))];
-  const rows: Array<{ id: string; lng: number | null; lat: number | null; external_source?: string | null; external_place_id?: string | null }> = [];
-  if (uuidIds.length) {
-    const { data } = await supabase
+  // UUID and external place IDs are independent lookups. Mixed courses should
+  // wait for one database round trip instead of starting the second afterwards.
+  const results = await Promise.all([
+    uuidIds.length ? supabase
       .from("places")
       .select("id, lng, lat, external_source, external_place_id")
       .eq("couple_id", coupleId)
-      .in("id", uuidIds);
-    rows.push(...(data ?? []));
-  }
-  if (discoverIds.length) {
-    const { data } = await supabase
+      .in("id", uuidIds) : Promise.resolve({ data: [] }),
+    discoverIds.length ? supabase
       .from("places")
       .select("id, lng, lat, external_source, external_place_id")
       .eq("couple_id", coupleId)
-      .in("external_place_id", discoverIds);
-    rows.push(...(data ?? []));
-  }
+      .in("external_place_id", discoverIds) : Promise.resolve({ data: [] }),
+  ]);
+  const rows = results.flatMap(result => result.data ?? []);
   return withLookedUpCoordinates(items, placeCoordinateLookup(rows));
 }
 
@@ -744,7 +742,7 @@ export const listArchivedTripPlans = cache(async (): Promise<ArchivedTripPlan[]>
   if (!supabase) return [];
   const { data: memories, error } = await supabase
     .from("memories")
-    .select("id, title, happened_on, description")
+    .select("id, title, happened_on")
     .eq("couple_id", session.coupleId)
     .eq("memory_type", "trip")
     .order("happened_on", { ascending: false });

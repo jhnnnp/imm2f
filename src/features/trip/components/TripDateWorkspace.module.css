@@ -48,8 +48,9 @@
   background: #eef1e5;
 }
 .recordAgenda small { color: #8d9684; }
+.recordAgenda li > div { min-width: 0; flex: 1; }
 .recordAgenda h3 { margin: 5px 0; font-size: 1.07rem; }
-.recordAgenda p { margin: 8px 0 0; color: #777b6e; white-space: pre-wrap; }
+.recordMemo { margin-top: 8px; color: #72796f; font: 400 .86rem/1.7 var(--default, sans-serif); }
 .rescheduleDialog { max-width: 500px; }
 .rescheduleDialog > p { margin: 0 0 20px; color: #7b8578; line-height: 1.8; font-size: .84rem; }
 .targetWarning { padding: 15px; margin: 14px 0; border: 1px solid #daceb5; border-radius: 12px; background: #faf5e8; color: #857044; }

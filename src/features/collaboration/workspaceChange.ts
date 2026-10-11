@@ -8,10 +8,13 @@ export type SharedRefreshOptions = {
 };
 
 export function isRelevantWorkspaceChange(change: WorkspaceChange, options: SharedRefreshOptions) {
+  if (change.source === "local" && change.activityOnly) return false;
   if (change.source !== "database") return true;
   // Activities announce domain writes. Wall drawing has its own consumer and
   // should not cause an unrelated planner to fetch its entire workspace.
   if (change.table !== "activities") return options.tables?.includes(change.table) ?? false;
+  // Hiding a notification leaves its stored plan/memo/insight intact.
+  if (change.eventType === "UPDATE" && change.row.title === "") return false;
   const action = typeof change.row.action === "string" ? change.row.action : "";
   if (!action) return true;
   return !options.activityPrefixes || options.activityPrefixes.some(prefix => action.startsWith(prefix));

@@ -15,12 +15,14 @@ import { PLACE_ADMINISTRATIVE_AREAS, PLACE_AREA_GROUPS, areaGroupById, browseDis
 import { listPlaces, searchDiscoverPlaces, loadTourPlaceDetail, lookupPlaceLocation, updateMyPlaceStatus, updatePlaceDescription, updatePlaceLocation } from "../actions";
 import { applyPlaceLocation } from "../location";
 import { addItemToCouplePlan } from "@/features/planning/actions";
+import { addPlacesToTrip } from "@/features/planning/tripPlaceBatch";
 import { placePlanDestination } from "../planDestination";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { isDiscoverPlace, mergeCandidateWithSaved, placeToCandidate, uniqueByExternalId } from "../discover";
 import type { DiscoverCandidate, Place, PlaceCategoryId, PlacePreferenceStatus } from "../types/place";
 import { PlaceCard } from "./PlaceCard";
 import { PlaceCreateDialog } from "./PlaceCreateDialog";
+import { PlacesTripDialog } from "./PlacesTripDialog";
 import { PlaceDetailPanel } from "./PlaceDetailPanel";
 import { PlaceDiscoverResults } from "./PlaceDiscoverResults";
 import { PlaceCategoryIcon } from "./PlaceCategoryIcon";
@@ -70,6 +72,7 @@ export function PlacesExperience({
   persist,
   initialSelectedId,
   initialTripItems = [],
+  initialTripStartDate = null,
   tripPlanTitle = "",
   initialArchivedTrips = [],
   initialFolderWorkspace,
@@ -78,6 +81,7 @@ export function PlacesExperience({
   persist: boolean;
   initialSelectedId?: string;
   initialTripItems?: PlanItem[];
+  initialTripStartDate?: string | null;
   tripPlanTitle?: string;
   initialArchivedTrips?: ArchivedTripPlan[];
   initialFolderWorkspace?: FolderWorkspace;
@@ -103,6 +107,7 @@ export function PlacesExperience({
   const [tripItems, setTripItems] = useState<PlanItem[]>(initialTripItems);
   const [archivedTrips, setArchivedTrips] = useState<ArchivedTripPlan[]>(initialArchivedTrips);
   const [currentTripTitle, setCurrentTripTitle] = useState(tripPlanTitle);
+  const [currentTripStartDate, setCurrentTripStartDate] = useState(initialTripStartDate);
   const [syncError, setSyncError] = useState("");
   const [savedQuery, setSavedQuery] = useState("");
   const [layout, setLayout] = useState<Layout>("grid");
@@ -116,7 +121,9 @@ export function PlacesExperience({
   const [planPending, setPlanPending] = useState<"trip" | "date" | null>(null);
   const [statusPendingId, setStatusPendingId] = useState<string | null>(null);
   const [dialogPending, setDialogPending] = useState(false);
+  const [dialogInitialFolderId, setDialogInitialFolderId] = useState<string | null>(null);
   const [selectedPlaceIds, setSelectedPlaceIds] = useState<string[]>([]);
+  const [tripBatch, setTripBatch] = useState<{ ids: string[]; names: string[]; initialDate: string; initialDay: number } | null>(null);
   const [draggingPlaceIds, setDraggingPlaceIds] = useState<string[]>([]);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -140,7 +147,7 @@ export function PlacesExperience({
   const selectedParamRequestRef = useRef({ id: selectedParam, applied: false });
   const discoverRequestRef = useRef(0);
   const regionSearchRef = useRef<HTMLDivElement>(null);
-  const saveFolderIdRef = useRef<string | null>(null);
+  const selectAllRef = useRef<HTMLInputElement>(null);
   placesRef.current = places;
   const retrySync = useSharedRefresh(async ({ isCurrent }) => {
     const before = placesRef.current;
@@ -148,7 +155,7 @@ export function PlacesExperience({
       const { places: result, trip, archives } = await readPlacesWorkspace(tripDestination.targetDate);
       if (!isCurrent() || before !== placesRef.current) return;
       if (result.persist) {
-        setPlaces(result.places); setTripItems(trip.items); setArchivedTrips(archives); setCurrentTripTitle(trip.title);
+        setPlaces(result.places); setTripItems(trip.items); setArchivedTrips(archives); setCurrentTripTitle(trip.title); setCurrentTripStartDate(trip.startDate);
         setSyncError("");
       }
     } catch {
@@ -221,6 +228,9 @@ export function PlacesExperience({
     return matchesStatus && matchesCategory && place.name.toLowerCase().includes(savedQuery.toLowerCase());
   }), [folderPlaces, filter, savedCategory, savedQuery, tripItems, archivedTrips]);
   const visibleSelectedIds = visibleSaved.filter(place => selectedPlaceIds.includes(place.id)).map(place => place.id);
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = visibleSelectedIds.length > 0 && visibleSelectedIds.length < visibleSaved.length;
+  }, [visibleSelectedIds.length, visibleSaved.length, section, folderController.selectedFolderId]);
   const isFolderRoot = folderController.selectedFolderId === "root";
   const currentFolderName = folderController.workspace.folders.find(folder => folder.id === folderController.selectedFolderId)?.name;
   const hasSavedFilters = filter !== "all" || savedCategory !== "all" || Boolean(savedQuery.trim());
@@ -352,7 +362,7 @@ export function PlacesExperience({
         return;
       }
       setPendingCandidate(candidate);
-      saveFolderIdRef.current = selectedUserFolderId();
+      setDialogInitialFolderId(selectedUserFolderId() ?? folderController.folderFor(place.id));
       setPendingInitialDescription(memoSeedForSaveDialog(place));
       setDialogMode("confirm");
       setDialogOpen(true);
@@ -363,14 +373,13 @@ export function PlacesExperience({
   }
 
   function openManual() {
-    saveFolderIdRef.current = selectedUserFolderId();
+    setDialogInitialFolderId(selectedUserFolderId());
     setPendingCandidate(null);
     setDialogMode("manual");
     setDialogOpen(true);
   }
 
-  function handleSaved(place: Place, message: string) {
-    const wasArchived = placesRef.current.some(item => item.id === place.id && isKeptInArchive(item));
+  async function handleSaved(place: Place, message: string, folderId: string | null) {
     setPlaces(current => {
       const index = current.findIndex(item => item.id === place.id || (place.externalPlaceId && item.externalPlaceId === place.externalPlaceId && item.externalSource === place.externalSource));
       if (index >= 0) {
@@ -381,13 +390,19 @@ export function PlacesExperience({
       return [...current, place];
     });
     setDiscover(current => current.map(item => (
-      item.externalPlaceId && item.externalPlaceId === place.externalPlaceId && item.externalSource === place.externalSource ? place : item
+      item.externalPlaceId && item.externalPlaceId === place.externalPlaceId && item.externalSource === place.externalSource ? { ...item, ...place } : item
     )));
     setSelectedId(place.id);
     setNotice(message);
     setNoticePlanLink(Boolean(source));
-    if (!wasArchived && saveFolderIdRef.current) void assignSavedToFolder(place.id, saveFolderIdRef.current, message);
     if (source) setNoticeHref(placePlanDestination(source, source, searchParams.get("day"), tripDateParam).href);
+    if (folderId !== folderController.folderFor(place.id)) {
+      const moved = await assignSavedToFolder(place.id, folderId, message);
+      if (moved && folderId) {
+        const folder = folderController.workspace.folders.find(item => item.id === folderId);
+        if (folder) setNotice(`${place.name} · ‘${folder.name}’에 저장했어요.`);
+      }
+    }
   }
 
   function selectedUserFolderId() {
@@ -395,12 +410,37 @@ export function PlacesExperience({
     return id !== "root" && id !== "all" && id !== "unfiled" ? id : null;
   }
 
-  async function assignSavedToFolder(itemId: string, folderId: string, savedMessage: string) {
+  async function assignSavedToFolder(itemId: string, folderId: string | null, savedMessage: string) {
     const moved = await folderController.moveItems([itemId], folderId).catch(() => false);
     if (!moved) {
       setNoticePlanLink(false);
-      setNotice(`${savedMessage} 폴더 이동은 완료되지 않았어요. 저장한 장소에서 다시 옮길 수 있어요.`);
+      setNotice(`${savedMessage} 폴더 이동 결과는 확인하지 못했어요. 저장한 장소에서 다시 확인해 주세요.`);
     }
+    return moved;
+  }
+
+  function openSelectedPlacesTrip() {
+    if (!visibleSelectedIds.length || planPending) return;
+    setTripBatch({ ids: [...visibleSelectedIds], names: visibleSaved.filter(place => visibleSelectedIds.includes(place.id)).map(place => place.name),
+      initialDate: tripDestination.targetDate ?? currentTripStartDate ?? "", initialDay: tripDestination.dayIndex });
+  }
+
+  async function addSelectedPlacesToTrip(input: { targetDate: string; dayIndex: number; spread: boolean }) {
+    if (!tripBatch) return { error: "여행에 담을 장소를 다시 골라 주세요." };
+    setPlanPending("trip");
+    try {
+      const result = await addPlacesToTrip(tripBatch.ids, input);
+      if ("error" in result) return { error: result.error };
+      if (tripDestination.targetDate === undefined || tripDestination.targetDate === input.targetDate) {
+        setTripItems(result.items); setCurrentTripTitle(result.title); setCurrentTripStartDate(result.startDate || null);
+      }
+      setSelectedPlaceIds(current => current.filter(id => !tripBatch.ids.includes(id)));
+      setNotice(result.added ? `${result.added}곳을 여행에 담았어요.${result.skipped ? ` 이미 담긴 ${result.skipped}곳은 유지했어요.` : ""}` : "선택한 장소가 이미 이 여행에 담겨 있어요.");
+      setNoticePlanLink(true);
+      setNoticeHref(`/trip?date=${encodeURIComponent(input.targetDate)}&day=${input.dayIndex}`);
+      if (result.added) emitCoupleActivitiesChanged();
+      return {};
+    } finally { setPlanPending(null); }
   }
 
   function togglePlaceSelection(id: string) {
@@ -706,13 +746,14 @@ export function PlacesExperience({
             <label><span>⌕</span><input id="place-archive-search" value={savedQuery} onChange={event => setSavedQuery(event.target.value)} placeholder={currentFolderName ? "이 폴더에서 이름 찾기" : "저장한 이름만 찾기"} aria-label="저장한 장소 이름 검색" /></label>
           </div>
           {visibleSaved.length > 0 && <div className="saved-place-selection-bar">
-            <label><input type="checkbox" disabled={folderController.pending} checked={visibleSelectedIds.length === visibleSaved.length}
+            <label><input ref={selectAllRef} type="checkbox" disabled={folderController.pending || Boolean(planPending)} checked={visibleSelectedIds.length === visibleSaved.length}
               onChange={event => setSelectedPlaceIds(event.target.checked ? visibleSaved.map(place => place.id) : [])} />현재 목록 모두 선택</label>
-            <span aria-live="polite">{visibleSelectedIds.length ? `${visibleSelectedIds.length}곳 선택` : `${visibleSaved.length}곳 · 선택하면 한 번에 옮길 수 있어요`}</span>
+            <span aria-live="polite">{visibleSelectedIds.length ? `${visibleSelectedIds.length}곳 선택` : `${visibleSaved.length}곳 · 함께 정리하거나 여행에 담아요`}</span>
             {visibleSelectedIds.length > 0 && <>
               <FolderMoveMenu folders={folderController.workspace.folders} value={null} disabled={folderController.pending || !folderController.workspace.persist}
                 onMove={moveSelectedPlaces} />
-              <button type="button" onClick={() => setSelectedPlaceIds([])} disabled={folderController.pending}>선택 해제</button>
+              <button className="saved-places-trip-button" type="button" onClick={openSelectedPlacesTrip} disabled={folderController.pending || Boolean(planPending) || !persist}><PlaceTripFilterIcon />여행에 추가</button>
+              <button type="button" onClick={() => setSelectedPlaceIds([])} disabled={folderController.pending || Boolean(planPending)}>선택 해제</button>
             </>}
           </div>}
           </div>}
@@ -1012,10 +1053,14 @@ export function PlacesExperience({
         persist={persist}
         candidate={pendingCandidate}
         initialDescription={pendingInitialDescription}
+        folders={folderController.workspace.folders}
+        initialFolderId={dialogInitialFolderId}
         onClose={closePlaceDialog}
         onSaved={handleSaved}
         onPendingChange={setDialogPending}
       />
+      {tripBatch && <PlacesTripDialog names={tripBatch.names} initialDate={tripBatch.initialDate} initialDay={tripBatch.initialDay}
+        onClose={() => setTripBatch(null)} onSubmit={addSelectedPlacesToTrip} />}
     </>
   );
 }

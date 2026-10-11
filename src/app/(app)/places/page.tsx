@@ -32,6 +32,7 @@ async function PlacesPageContent({ searchParams }: { searchParams: Promise<Place
       persist={persist}
       initialSelectedId={params.selected}
       initialTripItems={tripPlan.items}
+      initialTripStartDate={tripPlan.startDate}
       tripPlanTitle={tripPlan.title}
       initialArchivedTrips={archivedTrips}
       initialFolderWorkspace={folders}

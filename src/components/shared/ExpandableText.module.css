@@ -1,0 +1,38 @@
+.root {
+  position: relative;
+  min-width: 0;
+  line-height: 1.7;
+}
+.text {
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: inherit;
+}
+.probe {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  margin: 5px 0 0;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: #4f715e;
+  font: 600 .8rem/1.5 var(--default, sans-serif);
+  cursor: pointer;
+}
+.toggle:hover { color: #2d513d; }
+.toggle:focus-visible { outline: 2px solid #749982; outline-offset: 3px; }
+.toggle svg { width: 14px; height: 14px; flex: none; }
+.toggle path { stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
