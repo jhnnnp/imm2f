@@ -295,6 +295,12 @@ export type Database = {
         };
         Relationships: [];
       };
+      trip_drafts: {
+        Row: { id: string; couple_id: string; scheduled_on: string | null; title: string; notes: string; day_count: number; items: Json; updated_at: string };
+        Insert: { id?: string; couple_id: string; scheduled_on?: string | null; title?: string; notes?: string; day_count?: number; items?: Json; updated_at?: string };
+        Update: { scheduled_on?: string | null; title?: string; notes?: string; day_count?: number; items?: Json; updated_at?: string };
+        Relationships: [];
+      };
       plans: {
         Row: {
           id: string;
@@ -784,6 +790,10 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      reschedule_couple_trip: {
+        Args: { target_start_date: string; expected_revision: number; expected_target_updated_at?: string | null; expected_couple_id?: string | null };
+        Returns: Json;
+      };
       move_couple_folder_items: { Args: { p_scope: string; p_item_ids: string[]; p_folder_id: string | null }; Returns: number };
       match_date_playbook: {
         Args: { query_embedding: string; target_stage: string | null; match_count?: number };
@@ -822,6 +832,7 @@ export type Database = {
           target_items: Json;
           target_summary: string;
           expected_revision?: number | null;
+          expected_couple_id?: string | null;
         };
         Returns: Json;
       };

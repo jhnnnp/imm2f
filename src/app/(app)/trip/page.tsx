@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 import { RouteSuspense } from "@/components/layout/RouteSuspense";
 import { TripPlanner } from "@/features/trip/components/TripPlanner";
-import { listArchivedTripPlans, loadCouplePlan } from "@/features/planning/actions";
+import { readTripWorkspace } from "@/features/collaboration/workspaceReads";
 import { candidateExplorationMode } from "@/features/ai/candidateExplorationMode";
+import { isIsoDate } from "@/lib/dates";
 
 export const metadata: Metadata = { title: "Trip" };
 
-export default function TripPage({ searchParams }: { searchParams: Promise<{ day?: string }> }) {
+type TripSearchParams = Promise<{ day?: string; date?: string; archive?: string }>;
+export default function TripPage({ searchParams }: { searchParams: TripSearchParams }) {
   return (
     <RouteSuspense>
       <TripPageContent searchParams={searchParams} />
@@ -14,9 +16,14 @@ export default function TripPage({ searchParams }: { searchParams: Promise<{ day
   );
 }
 
-async function TripPageContent({ searchParams }: { searchParams: Promise<{ day?: string }> }) {
+async function TripPageContent({ searchParams }: { searchParams: TripSearchParams }) {
   const params = await searchParams;
-  const [plan, archives] = await Promise.all([loadCouplePlan("trip"), listArchivedTripPlans()]);
-  return <TripPlanner key={params.day ?? "default"} initialDay={Number(params.day) || 0} initialPlan={plan}
-    initialArchives={archives} candidateExplorationActive={candidateExplorationMode() === "active"} />;
+  const selectedDate = params.date !== undefined && (params.date === "" || isIsoDate(params.date)) ? params.date : undefined;
+  const { plan: active, archives, drafts: allDrafts } = await readTripWorkspace(selectedDate);
+  const archive = archives.find(journey => journey.id === params.archive);
+  const plan = archive ? { ...active, ...archive, notes: archive.notes ?? "" }
+    : active;
+  return <TripPlanner key={`${params.archive ?? ""}:${params.date ?? "active"}:${params.day ?? "0"}`} initialDay={Number(params.day) || 0} initialPlan={plan}
+    initialArchives={archives} initialDrafts={allDrafts} initialArchiveId={archive?.id}
+    candidateExplorationActive={candidateExplorationMode() === "active"} />;
 }

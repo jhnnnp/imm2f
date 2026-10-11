@@ -12,7 +12,7 @@ import type { CouplePlan, PlanItem } from "@/features/planning/types/plan";
 import type { ArchivedTripPlan } from "@/features/planning/actions";
 import type { Memory } from "@/features/memories/types";
 import type { Place } from "@/features/places/types/place";
-import { htmlMarkerPlacement, screenOffsetsForNearbyPins } from "@/features/map/htmlMarker";
+import { htmlMarkerPlacement } from "@/features/map/htmlMarker";
 import { computeMemorySheetAnchor, pinScreenPoints, type MemorySheetAnchor } from "@/features/map/memorySheetAnchor";
 import { emptyGeoJsonSource, memoryCityStyle } from "@/features/map/memoryCityStyle";
 import { couplePlacePinFromPartner, couplePlacePinLabel } from "@/features/map/placePins";
@@ -400,25 +400,20 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
       return;
     }
     const pins = visiblePinsRef.current;
-    const pinCoordinates = pins.map(item => item.coordinates);
     const index = pins.findIndex(item => item.id === pin.id);
     if (index < 0) {
       setSheetAnchor(null);
       return;
     }
-    const screenOffsets = screenOffsetsForNearbyPins(pinCoordinates.map(point => map.project(point)), {
-      width: mapContainer.clientWidth, height: mapContainer.clientHeight,
-    });
     const sheetEl = sheetRef.current;
     const sheetWidth = sheetEl?.offsetWidth ?? 200;
     const sheetHeight = sheetEl?.offsetHeight ?? 54;
-    const otherPinPoints = pinScreenPoints(map, mapContainer, mapHost, pins, screenOffsets, pin.id);
+    const otherPinPoints = pinScreenPoints(map, mapContainer, mapHost, pins, pin.id);
     const next = computeMemorySheetAnchor({
       map,
       mapContainer,
       mapHost,
       coordinates: pin.coordinates,
-      screenOffset: screenOffsets[index],
       sheetWidth,
       sheetHeight,
       otherPinPoints,
@@ -609,21 +604,6 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     const hoverPreview = mapHostRef.current ? createMapHoverPreview(mapHostRef.current) : null;
     hoverPreviewRef.current = hoverPreview;
     let disposed = false;
-    let layoutFrame = 0;
-    const syncMarkerOffsets = () => {
-      if (disposed || mapRef.current !== map || markersRef.current.length !== visiblePins.length) return;
-      const mapContainer = map.getContainer();
-      const offsets = screenOffsetsForNearbyPins(visiblePins.map(pin => map.project(pin.coordinates)), {
-        width: mapContainer.clientWidth, height: mapContainer.clientHeight,
-      });
-      markersRef.current.forEach((marker, index) => marker.setOffset(offsets[index]));
-    };
-    const scheduleMarkerOffsets = () => {
-      if (layoutFrame) return;
-      layoutFrame = window.requestAnimationFrame(() => { layoutFrame = 0; syncMarkerOffsets(); });
-    };
-    map.on("move", scheduleMarkerOffsets);
-    map.on("resize", scheduleMarkerOffsets);
     const dismissPreview = () => hoverPreview?.dismiss();
     map.on("movestart", dismissPreview);
     map.on("resize", dismissPreview);
@@ -671,7 +651,6 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
           ...htmlMarkerPlacement,
         }).setLngLat(pin.coordinates).addTo(map);
       });
-      syncMarkerOffsets();
       const frameKey = `${viewMode}:` + visiblePins.map(pin => `${pin.id}:${pin.coordinates.join(",")}`).join("|");
       if (framedPinsRef.current !== frameKey) {
         framedPinsRef.current = frameKey;
@@ -680,9 +659,6 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     });
     return () => {
       disposed = true;
-      window.cancelAnimationFrame(layoutFrame);
-      map.off("move", scheduleMarkerOffsets);
-      map.off("resize", scheduleMarkerOffsets);
       map.off("movestart", dismissPreview);
       map.off("resize", dismissPreview);
       hoverPreview?.destroy();
@@ -714,8 +690,6 @@ export function CoupleMap({ places: initialPlaces, memories: initialMemories, tr
     <MapRouteOverlay
       map={mapInstance}
       anchors={tripRouteAnchors}
-      pinVariant="memory"
-      spreadNearbyPins
       providedRoadPath={tripRoadPath}
       active={mapState === "ready" && mode === "trips" && tripRouteAnchors.length >= 2}
     />

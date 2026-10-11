@@ -1,117 +1,129 @@
-import { describe, expect, it } from "vitest";
-import { htmlMarkerPlacement, screenOffsetForStackedPins, screenOffsetsForNearbyPins } from "./htmlMarker";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from "vitest";
+import { Evented, LngLat, Marker, type Map as MapLibreMap } from "maplibre-gl";
+import Point from "@mapbox/point-geometry";
+import { htmlMarkerPlacement } from "./htmlMarker";
 
-describe("htmlMarkerPlacement", () => {
-  it("keeps HTML markers viewport-aligned with subpixel positioning", () => {
-    expect(htmlMarkerPlacement).toEqual({
-      anchor: "bottom",
-      pitchAlignment: "viewport",
-      rotationAlignment: "viewport",
-      subpixelPositioning: true,
-    });
-  });
-});
-
-describe("screenOffsetForStackedPins", () => {
-  it("does not offset unique coordinates", () => {
-    expect(screenOffsetForStackedPins([[126.9, 37.5], [127.0, 37.6]], 0)).toBeUndefined();
-  });
-
-  it("fans overlapping pins around the shared point", () => {
-    const coordinates: Array<[number, number]> = [
-      [126.978, 37.5665],
-      [126.978, 37.5665],
-      [126.978, 37.5665],
-    ];
-    const first = screenOffsetForStackedPins(coordinates, 0);
-    const second = screenOffsetForStackedPins(coordinates, 1);
-    const third = screenOffsetForStackedPins(coordinates, 2);
-    expect(first).toEqual([0, -10]);
-    expect(second).not.toEqual(first);
-    expect(third).not.toEqual(first);
-    expect(new Set([first, second, third].map(point => point?.join(","))).size).toBe(3);
-  });
-});
-
-describe("screenOffsetsForNearbyPins", () => {
-  const viewport = { width: 390, height: 680 };
-  const positions = (points: { x: number; y: number }[], bounds?: { width: number; height: number }) => {
-    const offsets = screenOffsetsForNearbyPins(points, bounds);
-    return points.map((point, index) => ({ x: point.x + offsets[index][0], y: point.y + offsets[index][1] }));
+/** Use the installed Marker projection/event implementation without a WebGL canvas. */
+function mapHarness() {
+  const container = document.createElement("div");
+  document.body.append(container);
+  let scale = 20;
+  let panX = 0;
+  let panY = 0;
+  let bearing = 0;
+  let pitch = 0;
+  const project = (coordinate: LngLat | [number, number]) => {
+    const point = LngLat.convert(coordinate);
+    const angle = bearing * Math.PI / 180;
+    const x = (point.lng - 127) * scale;
+    const y = (37 - point.lat) * scale;
+    return new Point(300 + panX + x * Math.cos(angle) - y * Math.sin(angle),
+      250 + panY + (x * Math.sin(angle) + y * Math.cos(angle)) * Math.cos(pitch * Math.PI / 180));
   };
-  const expectSeparated = (points: { x: number; y: number }[]) => {
-    points.forEach((point, index) => points.slice(index + 1).forEach(other => {
-      expect(Math.hypot(point.x - other.x, point.y - other.y)).toBeGreaterThanOrEqual(51.99);
-    }));
+  const events = new Evented();
+  const map = Object.assign(events, {
+    project,
+    getCanvasContainer: () => container,
+    loaded: () => true,
+    isMoving: () => false,
+    getBearing: () => bearing,
+    getPitch: () => pitch,
+    _ownerWindow: window,
+    _camera: { transform: {
+      width: 600, height: 500,
+      getCoveringTilesDetailsProvider: () => ({ allowWorldCopies: () => false }),
+      isLocationOccluded: () => false,
+    } },
+  }) as unknown as MapLibreMap;
+  return {
+    map,
+    camera(next: { scale?: number; x?: number; y?: number; bearing?: number; pitch?: number }) {
+      scale = next.scale ?? scale; panX = next.x ?? panX; panY = next.y ?? panY;
+      bearing = next.bearing ?? bearing; pitch = next.pitch ?? pitch;
+      events.fire("move");
+      events.fire("moveend");
+    },
   };
+}
 
-  it("keeps unique projected positions unchanged", () => {
-    expect(screenOffsetsForNearbyPins([])).toEqual([]);
-    expect(screenOffsetsForNearbyPins([{ x: 100, y: 100 }], viewport)).toEqual([[0, 0]]);
-    expect(screenOffsetsForNearbyPins([{ x: 60, y: 100 }, { x: 200, y: 280 }], viewport)).toEqual([[0, 0], [0, 0]]);
+const live: Marker[] = [];
+function pin(map: MapLibreMap, coordinates: [number, number]) {
+  const button = document.createElement("button");
+  button.className = "memory-city-marker";
+  button.innerHTML = '<span class="memory-city-marker-art"></span>';
+  const marker = new Marker({ element: button, ...htmlMarkerPlacement }).setLngLat(coordinates).addTo(map);
+  live.push(marker);
+  return marker;
+}
+function renderedPoint(marker: Marker) {
+  const translation = marker.getElement().style.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/);
+  if (!translation) throw new Error("Marker has no projected translation");
+  return [Number(translation[1]), Number(translation[2])];
+}
+function expectAnchored(marker: Marker, map: MapLibreMap, coordinates: [number, number]) {
+  const projected = map.project(coordinates);
+  const rendered = renderedPoint(marker);
+  expect(rendered[0]).toBeCloseTo(projected.x, 9);
+  expect(rendered[1]).toBeCloseTo(projected.y, 9);
+  expect(marker.getOffset()).toEqual(new Point(0, 0));
+  expect(marker.getElement().style.transform).toContain("translate(-50%,-100%)");
+}
+afterEach(() => { live.splice(0).forEach(marker => marker.remove()); document.body.replaceChildren(); });
+
+describe("geographic HTML marker anchoring", () => {
+  it("anchors the tip to the actual coordinate with no application offset or pixel rounding", () => {
+    const { map } = mapHarness();
+    const coordinate: [number, number] = [127.01321, 37.01093];
+    expectAnchored(pin(map, coordinate), map, coordinate);
   });
-
-  it("separates identical markers around their shared map position", () => {
-    const spread = positions([{ x: 180, y: 220 }, { x: 180, y: 220 }], viewport);
-    expectSeparated(spread);
-    expect((spread[0].x + spread[1].x) / 2).toBe(180);
-    expect(spread[0].y).toBe(220);
-    expect(spread[1].y).toBe(220);
+  it("keeps close and identical locations at their actual projections instead of a screen grid", () => {
+    const { map } = mapHarness();
+    const coordinates: [number, number][] = [[127, 37], [127.001, 37.001], [127, 37]];
+    const markers = coordinates.map(coordinate => pin(map, coordinate));
+    markers.forEach((marker, index) => expectAnchored(marker, map, coordinates[index]));
+    expect(renderedPoint(markers[0])).toEqual(renderedPoint(markers[2]));
+    expect(Math.abs(renderedPoint(markers[0])[0] - renderedPoint(markers[1])[0])).toBeLessThan(1);
   });
-
-  it("separates nearby places at low zoom without moving an unrelated place", () => {
-    const points = [{ x: 140, y: 180 }, { x: 144, y: 181 }, { x: 320, y: 420 }];
-    const offsets = screenOffsetsForNearbyPins(points, viewport);
-    expectSeparated(positions(points, viewport));
-    expect(offsets[2]).toEqual([0, 0]);
-    expect(offsets.slice(0, 2).every(offset => offset.some(value => value !== 0))).toBe(true);
+  it("tracks pan, zoom, rotation and pitch through MapLibre's native move events", () => {
+    const harness = mapHarness();
+    const coordinate: [number, number] = [127.071, 37.12];
+    const marker = pin(harness.map, coordinate);
+    for (const next of [
+      { x: 140.3, y: -63.7 }, { scale: 178.23 }, { bearing: -32.7, pitch: 44 },
+      { scale: 1200.65, x: -17.31, y: 45.87 }, { scale: 14.67, bearing: 0, pitch: 0 },
+    ]) {
+      harness.camera(next);
+      expectAnchored(marker, harness.map, coordinate);
+      expect(marker.getElement().style.transform).toContain("rotateX(0deg)");
+      expect(marker.getElement().style.transform).toContain("rotateZ(0deg)");
+    }
   });
-
-  it("removes spreading once zoom already separates the same places", () => {
-    const lowZoom = [{ x: 140, y: 180 }, { x: 144, y: 181 }];
-    const highZoom = [{ x: 110, y: 180 }, { x: 230, y: 185 }];
-    expect(screenOffsetsForNearbyPins(lowZoom, viewport)).not.toEqual([[0, 0], [0, 0]]);
-    expect(screenOffsetsForNearbyPins(highZoom, viewport)).toEqual([[0, 0], [0, 0]]);
+  it("leaves offscreen pins offscreen instead of pulling their artwork inside map edges", () => {
+    const harness = mapHarness();
+    const coordinate: [number, number] = [127, 37];
+    const marker = pin(harness.map, coordinate);
+    harness.camera({ x: -900, y: -900 });
+    expectAnchored(marker, harness.map, coordinate);
+    expect(renderedPoint(marker)[0]).toBeLessThan(0);
   });
-
-  it("keeps a vertically adjacent pair distinguishable", () => {
-    const spread = positions([{ x: 180, y: 220 }, { x: 181, y: 224 }], viewport);
-    expectSeparated(spread);
-    expect(Math.abs(spread[0].y - spread[1].y)).toBe(60);
+  it("focus and selection styling leave the marker's positioning transform and coordinate unchanged", () => {
+    const { map } = mapHarness();
+    const coordinate: [number, number] = [127, 37];
+    const marker = pin(map, coordinate);
+    const transform = marker.getElement().style.transform;
+    marker.getElement().focus();
+    marker.getElement().classList.add("is-selected", "has-map-preview");
+    expect(marker.getElement().style.transform).toBe(transform);
+    expectAnchored(marker, map, coordinate);
   });
-
-  it("spreads an entire chained cluster, including points not directly adjacent", () => {
-    expectSeparated(positions([{ x: 140, y: 220 }, { x: 180, y: 220 }, { x: 220, y: 220 }], viewport));
-  });
-
-  it("keeps clustered marker artwork inside the viewport near its edge", () => {
-    const spread = positions([{ x: 3, y: 10 }, { x: 7, y: 12 }, { x: 5, y: 14 }], viewport);
-    expectSeparated(spread);
-    spread.forEach(point => {
-      expect(point.x).toBeGreaterThanOrEqual(28);
-      expect(point.x).toBeLessThanOrEqual(viewport.width - 28);
-      expect(point.y).toBeGreaterThanOrEqual(58);
-      expect(point.y).toBeLessThanOrEqual(viewport.height - 12);
-    });
-  });
-
-  it("avoids placing a spread cluster over a previously separated marker", () => {
-    const points = [{ x: 100, y: 220 }, { x: 104, y: 220 }, { x: 160, y: 220 }];
-    expectSeparated(positions(points, viewport));
-    expect(screenOffsetsForNearbyPins(points, viewport)[2]).toEqual([0, 0]);
-  });
-
-  it("does not pull distant off-screen places into the visible city", () => {
-    const points = [{ x: -2000, y: 200 }, { x: -1996, y: 201 }, { x: 4000, y: 1000 }, { x: 4004, y: 1001 }, { x: 180, y: 220 }, { x: 184, y: 220 }];
-    const offsets = screenOffsetsForNearbyPins(points, viewport);
-    expect(offsets.slice(0, 4)).toEqual([[0, 0], [0, 0], [0, 0], [0, 0]]);
-    expectSeparated(positions(points.slice(4), viewport));
-  });
-
-  it("fits larger identical clusters into a mobile viewport", () => {
-    const points = Array.from({ length: 12 }, () => ({ x: 190, y: 240 }));
-    const spread = positions(points, viewport);
-    expectSeparated(spread);
-    expect(spread.every(point => point.x >= 28 && point.x <= viewport.width - 28 && point.y >= 58 && point.y <= viewport.height - 12)).toBe(true);
+  it("removes native movement subscriptions with the marker so stale pins no longer update", () => {
+    const harness = mapHarness();
+    const marker = pin(harness.map, [127, 37]);
+    marker.remove();
+    const transform = marker.getElement().style.transform;
+    harness.camera({ x: 110 });
+    expect(marker.getElement().isConnected).toBe(false);
+    expect(marker.getElement().style.transform).toBe(transform);
   });
 });

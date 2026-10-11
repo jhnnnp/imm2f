@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Map as MapLibreMap, Marker, StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { PlanItem } from "@/features/planning/types/plan";
-import { htmlMarkerPlacement, screenOffsetsForNearbyPins } from "@/features/map/htmlMarker";
+import { htmlMarkerPlacement } from "@/features/map/htmlMarker";
 import { emptyGeoJsonSource, memoryCityStyle } from "@/features/map/memoryCityStyle";
 import { cinematicBearing } from "../planRoute";
 import { MapRouteOverlay } from "@/features/map/components/MapRouteOverlay";
@@ -209,21 +209,6 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
     if (!map || !ready || error) return;
     const current = locatedRef.current;
     let disposed = false;
-    let layoutFrame = 0;
-    const syncMarkerOffsets = () => {
-      if (disposed || mapRef.current !== map || markersRef.current.length !== current.length) return;
-      const mapContainer = map.getContainer();
-      const offsets = screenOffsetsForNearbyPins(current.map(item => map.project(item.coordinates)), {
-        width: mapContainer.clientWidth, height: mapContainer.clientHeight,
-      });
-      markersRef.current.forEach((marker, index) => marker.setOffset(offsets[index]));
-    };
-    const scheduleMarkerOffsets = () => {
-      if (layoutFrame) return;
-      layoutFrame = window.requestAnimationFrame(() => { layoutFrame = 0; syncMarkerOffsets(); });
-    };
-    map.on("move", scheduleMarkerOffsets);
-    map.on("resize", scheduleMarkerOffsets);
     void import("maplibre-gl").then(maplibregl => {
       if (disposed || mapRef.current !== map) return;
       map.resize();
@@ -251,7 +236,6 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
         });
         return new maplibregl.Marker({ element, ...htmlMarkerPlacement }).setLngLat(item.coordinates).addTo(map);
       });
-      syncMarkerOffsets();
       const bearing = cinematicBearing(current.map(item => item.coordinates));
       const frame = (center: [number, number], zoom: number) => {
         map.easeTo({ center, zoom, pitch: MAP_PITCH, bearing, duration: 850 });
@@ -275,9 +259,6 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
     });
     return () => {
       disposed = true;
-      window.cancelAnimationFrame(layoutFrame);
-      map.off("move", scheduleMarkerOffsets);
-      map.off("resize", scheduleMarkerOffsets);
     };
   }, [ready, routeKey, error]);
 
@@ -300,8 +281,6 @@ export function PlanMap({ items, dayLabel, expanded = false, routeProfile = "dri
     <MapRouteOverlay
       map={mapInstance}
       anchors={routeAnchors}
-      pinVariant="planner"
-      spreadNearbyPins
       roadProfile={routeProfile}
       providedRoadPath={roadPath}
       active={ready && !error && located.length >= 2}

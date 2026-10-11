@@ -2,12 +2,14 @@ import type { Metadata } from "next";
 import { RouteSuspense } from "@/components/layout/RouteSuspense";
 import { PlacesExperience } from "@/features/places/components/PlacesExperience";
 import { listPlaces } from "@/features/places/actions";
-import { listArchivedTripPlans, loadCouplePlan } from "@/features/planning/actions";
+import { listArchivedTripPlans, loadCouplePlan, readTripDate } from "@/features/planning/actions";
 import { listFolderWorkspace } from "@/features/folders/actions";
+import { placePlanDestination } from "@/features/places/planDestination";
 
 export const metadata: Metadata = { title: "Places" };
 
-export default function PlacesPage({ searchParams }: { searchParams: Promise<{ selected?: string }> }) {
+type PlacesParams = { selected?: string; from?: string; day?: string; tripDate?: string };
+export default function PlacesPage({ searchParams }: { searchParams: Promise<PlacesParams> }) {
   return (
     <RouteSuspense>
       <PlacesPageContent searchParams={searchParams} />
@@ -15,11 +17,12 @@ export default function PlacesPage({ searchParams }: { searchParams: Promise<{ s
   );
 }
 
-async function PlacesPageContent({ searchParams }: { searchParams: Promise<{ selected?: string }> }) {
+async function PlacesPageContent({ searchParams }: { searchParams: Promise<PlacesParams> }) {
   const params = await searchParams;
+  const destination = placePlanDestination("trip", params.from === "trip" ? "trip" : null, params.day ?? null, params.tripDate);
   const [{ places, persist }, tripPlan, archivedTrips, folders] = await Promise.all([
     listPlaces(),
-    loadCouplePlan("trip"),
+    destination.targetDate === undefined ? loadCouplePlan("trip") : readTripDate(destination.targetDate).then(result => result.plan),
     listArchivedTripPlans(),
     listFolderWorkspace("places"),
   ]);

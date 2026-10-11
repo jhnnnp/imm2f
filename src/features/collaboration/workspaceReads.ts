@@ -1,6 +1,6 @@
 "use server";
 
-import { listArchivedDatePlans, listArchivedTripPlans, listDateDrafts, loadCouplePlan } from "@/features/planning/actions";
+import { listArchivedDatePlans, listArchivedTripPlans, listDateDrafts, loadCouplePlan, readTripDate } from "@/features/planning/actions";
 import { listMemories, listMemoryCalendarMarks } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
 import { withWorkspaceRead } from "@/lib/supabase/readContext";
@@ -15,10 +15,10 @@ export async function readDateWorkspace() {
 
 export async function readCalendarWorkspace() {
   return withWorkspaceRead(async () => {
-    const [trip, date, drafts, memories] = await Promise.all([
-      loadCouplePlan("trip"), loadCouplePlan("date"), listDateDrafts(), listMemoryCalendarMarks(),
+    const [travel, date, drafts, memories, archives] = await Promise.all([
+      readTripDate(), loadCouplePlan("date"), listDateDrafts(), listMemoryCalendarMarks(), listArchivedTripPlans(),
     ]);
-    return { trip, date, drafts, memories };
+    return { trip: travel.plan, date, drafts, memories, tripDrafts: travel.drafts, archives };
   });
 }
 
@@ -31,16 +31,16 @@ export async function readMapWorkspace() {
   });
 }
 
-export async function readTripWorkspace() {
+export async function readTripWorkspace(startDate?: string | null) {
   return withWorkspaceRead(async () => {
-    const [plan, archives] = await Promise.all([loadCouplePlan("trip"), listArchivedTripPlans()]);
-    return { plan, archives };
+    const [current, archives] = await Promise.all([readTripDate(startDate), listArchivedTripPlans()]);
+    return { ...current, archives };
   });
 }
 
-export async function readPlacesWorkspace() {
+export async function readPlacesWorkspace(tripDate?: string) {
   return withWorkspaceRead(async () => {
-    const [places, trip, archives] = await Promise.all([listPlaces(), loadCouplePlan("trip"), listArchivedTripPlans()]);
+    const [places, trip, archives] = await Promise.all([listPlaces(), tripDate === undefined ? loadCouplePlan("trip") : readTripDate(tripDate).then(result => result.plan), listArchivedTripPlans()]);
     return { places, trip, archives };
   });
 }

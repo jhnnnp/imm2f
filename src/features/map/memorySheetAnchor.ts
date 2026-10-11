@@ -19,14 +19,13 @@ function projectPin(
   mapContainer: HTMLElement,
   mapHost: HTMLElement,
   coordinates: [number, number],
-  screenOffset?: [number, number],
 ): PinScreenPoint {
   const projected = map.project(coordinates);
   const mapRect = mapContainer.getBoundingClientRect();
   const hostRect = mapHost.getBoundingClientRect();
   return {
-    x: projected.x + (mapRect.left - hostRect.left) + (screenOffset?.[0] ?? 0),
-    y: projected.y + (mapRect.top - hostRect.top) + (screenOffset?.[1] ?? 0),
+    x: projected.x + (mapRect.left - hostRect.left),
+    y: projected.y + (mapRect.top - hostRect.top),
   };
 }
 
@@ -55,16 +54,15 @@ export function computeMemorySheetAnchor(input: {
   mapContainer: HTMLElement;
   mapHost: HTMLElement;
   coordinates: [number, number];
-  screenOffset?: [number, number];
   sheetWidth: number;
   sheetHeight: number;
   otherPinPoints: PinScreenPoint[];
 }): MemorySheetAnchor {
-  const { map, mapContainer, mapHost, coordinates, screenOffset, sheetWidth, sheetHeight, otherPinPoints } = input;
+  const { map, mapContainer, mapHost, coordinates, sheetWidth, sheetHeight, otherPinPoints } = input;
   const hostRect = mapHost.getBoundingClientRect();
   const mapWidth = hostRect.width;
   const mapHeight = hostRect.height;
-  const tip = projectPin(map, mapContainer, mapHost, coordinates, screenOffset);
+  const tip = projectPin(map, mapContainer, mapHost, coordinates);
 
   let placement: MemorySheetPlacement = "top";
   if (tip.y - PIN_GAP - sheetHeight < EDGE) placement = "bottom";
@@ -93,11 +91,10 @@ export function pinScreenPoints(
   mapContainer: HTMLElement,
   mapHost: HTMLElement,
   pins: ReadonlyArray<{ id: string; coordinates: [number, number] }>,
-  screenOffsets: ReadonlyArray<[number, number] | undefined>,
   excludeId?: string,
 ): PinScreenPoint[] {
-  return pins.flatMap((pin, index) => {
+  return pins.flatMap(pin => {
     if (pin.id === excludeId) return [];
-    return [projectPin(map, mapContainer, mapHost, pin.coordinates, screenOffsets[index])];
+    return [projectPin(map, mapContainer, mapHost, pin.coordinates)];
   });
 }

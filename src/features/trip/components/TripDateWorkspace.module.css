@@ -1,0 +1,57 @@
+.archiveBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 13px 16px;
+  margin: 14px 0;
+  border: 1px solid #dae4d9;
+  border-radius: 12px;
+  background: #f2f6ef;
+  color: #607563;
+  font-size: .8rem;
+  line-height: 1.7;
+}
+.archiveBanner button {
+  border: 0;
+  background: transparent;
+  color: #446b53;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.recordAgenda {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  margin: 12px 0;
+  list-style: none;
+}
+.recordAgenda li {
+  display: flex;
+  align-items: start;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid #e3e4db;
+  border-radius: 16px;
+  background: #fffefa;
+}
+.recordAgenda li > span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  color: #687c60;
+  background: #eef1e5;
+}
+.recordAgenda small { color: #8d9684; }
+.recordAgenda h3 { margin: 5px 0; font-size: 1.07rem; }
+.recordAgenda p { margin: 8px 0 0; color: #777b6e; white-space: pre-wrap; }
+.rescheduleDialog { max-width: 500px; }
+.rescheduleDialog > p { margin: 0 0 20px; color: #7b8578; line-height: 1.8; font-size: .84rem; }
+.targetWarning { padding: 15px; margin: 14px 0; border: 1px solid #daceb5; border-radius: 12px; background: #faf5e8; color: #857044; }
+.targetWarning p { margin: 6px 0 12px; font-size: .8rem; }
+.targetWarning label { display: flex; align-items: center; gap: 8px; font-size: .8rem; }

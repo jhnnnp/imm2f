@@ -10,7 +10,7 @@ import { clampRadius, distanceMeters } from "../geo";
 import { isDiscoverPlace, uniqueByExternalId } from "../discover";
 import { isLngLat } from "@/features/map/routing/fetchRoadRoute";
 import type { Place, PlaceCategoryId } from "../types/place";
-import { htmlMarkerPlacement, screenOffsetsForNearbyPins } from "@/features/map/htmlMarker";
+import { htmlMarkerPlacement } from "@/features/map/htmlMarker";
 import { memoryCityStyle } from "@/features/map/memoryCityStyle";
 
 const MAP_STYLE = memoryCityStyle();
@@ -132,24 +132,9 @@ export function PlacesMapPane({
     const map = mapRef.current;
     if (!map || !mapReady) return;
     let disposed = false;
-    let layoutFrame = 0;
     const located = uniqueByExternalId([...saved, ...results]).flatMap(place =>
       isLngLat(place.coordinates) ? [{ place, coordinates: place.coordinates }] : [],
     );
-    const syncMarkerOffsets = () => {
-      if (disposed || mapRef.current !== map || markersRef.current.length !== located.length) return;
-      const mapContainer = map.getContainer();
-      const offsets = screenOffsetsForNearbyPins(located.map(item => map.project(item.coordinates)), {
-        width: mapContainer.clientWidth, height: mapContainer.clientHeight,
-      });
-      markersRef.current.forEach(({ marker }, index) => marker.setOffset(offsets[index]));
-    };
-    const scheduleMarkerOffsets = () => {
-      if (layoutFrame) return;
-      layoutFrame = window.requestAnimationFrame(() => { layoutFrame = 0; syncMarkerOffsets(); });
-    };
-    map.on("move", scheduleMarkerOffsets);
-    map.on("resize", scheduleMarkerOffsets);
     void import("maplibre-gl").then(maplibregl => {
       if (disposed || mapRef.current !== map) return;
       markersRef.current.forEach(({ marker }) => marker.remove());
@@ -172,13 +157,9 @@ export function PlacesMapPane({
           anchor: discover ? "center" : "bottom",
         }).setLngLat(coordinates).addTo(map) });
       });
-      syncMarkerOffsets();
     });
     return () => {
       disposed = true;
-      window.cancelAnimationFrame(layoutFrame);
-      map.off("move", scheduleMarkerOffsets);
-      map.off("resize", scheduleMarkerOffsets);
     };
   }, [results, saved, mapReady]);
 

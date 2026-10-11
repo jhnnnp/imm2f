@@ -19,11 +19,11 @@ export function useFolderWorkspace(scope: FolderScope | null, initialFolderWorks
   const generation = useRef(0);
   const locked = useRef(false);
   const [state, setState] = useState(() => ({ key, workspace: initialFolderWorkspace ?? EMPTY_FOLDER_WORKSPACE }));
-  const [selection, setSelection] = useState<{ key: string; id: FolderSelection }>({ key, id: "all" });
+  const [selection, setSelection] = useState<{ key: string; id: FolderSelection }>({ key, id: "root" });
   const [failure, setFailure] = useState<{ key: string; message: string; source: "read" | "write" | "" }>({ key, message: "", source: "" });
   const [working, setWorking] = useState("");
   const workspace = state.key === key ? state.workspace : EMPTY_FOLDER_WORKSPACE;
-  const selectedFolderId = selection.key === key ? selection.id : "all";
+  const selectedFolderId = selection.key === key ? selection.id : "root";
   const error = failure.key === key ? failure.message : "";
   const pending = working === key;
   const refresh = useCallback(async (isCurrent: () => boolean = () => true) => {
@@ -52,7 +52,7 @@ export function useFolderWorkspace(scope: FolderScope | null, initialFolderWorks
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, scope, refresh]);
   useEffect(() => {
-    if (selectedFolderId !== "all" && selectedFolderId !== "unfiled" && !workspace.folders.some(folder => folder.id === selectedFolderId)) setSelection({ key, id: "all" });
+    if (selectedFolderId !== "root" && selectedFolderId !== "all" && selectedFolderId !== "unfiled" && !workspace.folders.some(folder => folder.id === selectedFolderId)) setSelection({ key, id: "root" });
   }, [key, selectedFolderId, workspace.folders]);
   const byItem = useMemo(() => {
     const folderIds = new Set(workspace.folders.map(folder => folder.id));
@@ -60,7 +60,7 @@ export function useFolderWorkspace(scope: FolderScope | null, initialFolderWorks
   }, [workspace.memberships, workspace.folders]);
   const setSelectedFolderId = useCallback((id: FolderSelection) => { setSelection({ key, id }); }, [key]);
   const folderFor = useCallback((id: string) => byItem.get(id) ?? null, [byItem]);
-  const matchesFolder = useCallback((id: string) => selectedFolderId === "all" || (selectedFolderId === "unfiled" ? !byItem.has(id) : byItem.get(id) === selectedFolderId), [byItem, selectedFolderId]);
+  const matchesFolder = useCallback((id: string) => selectedFolderId !== "root" && (selectedFolderId === "all" || (selectedFolderId === "unfiled" ? !byItem.has(id) : byItem.get(id) === selectedFolderId)), [byItem, selectedFolderId]);
 
   async function mutate<T extends { error: string } | object>(write: () => Promise<T>, apply: (value: Exclude<T, { error: string }>, before: FolderWorkspace) => FolderWorkspace) {
     if (!scope || locked.current) return false;

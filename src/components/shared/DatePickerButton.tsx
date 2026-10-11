@@ -11,6 +11,8 @@ export function DatePickerButton({
   ariaLabel,
   markedDates = [],
   markedLabels = {},
+  clearLabel = "날짜 지우기",
+  markedHint = "색이 있는 날은 이미 짠 데이트예요. 다른 날을 고르면 이 날은 그대로 둡니다.",
   disabled = false,
 }: {
   value: string;
@@ -19,6 +21,8 @@ export function DatePickerButton({
   ariaLabel: string;
   markedDates?: readonly string[];
   markedLabels?: Readonly<Record<string, string>>;
+  clearLabel?: string;
+  markedHint?: string;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -74,10 +78,10 @@ export function DatePickerButton({
             onSelect={select}
           />
           <div className="date-popover-foot">
-            <button type="button" onClick={() => { onChange(""); setOpen(false); }}>날짜 지우기</button>
+            <button type="button" onClick={() => { onChange(""); setOpen(false); }}>{clearLabel}</button>
             <button type="button" onClick={() => { select(today); }}>오늘</button>
           </div>
-          {markedDates.length > 0 && <p className="date-popover-hint">색이 있는 날은 이미 짠 데이트예요. 다른 날을 고르면 이 날은 그대로 둡니다.</p>}
+          {markedDates.length > 0 && <p className="date-popover-hint">{markedHint}</p>}
         </div>
       )}
     </div>

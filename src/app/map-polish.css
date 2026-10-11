@@ -22,14 +22,14 @@
 .memory-city-marker.is-memory{--marker-color:169,126,67}
 .memory-city-marker:hover .memory-city-marker-art,
 .memory-city-marker:focus-visible .memory-city-marker-art{
-  transform:translateY(-3px) scale(1.04);
+  transform:scale(1.04);
 }
 .memory-city-marker.is-selected .memory-city-marker-art{
   transform:scale(1.06);
 }
 .memory-city-marker.is-selected:hover .memory-city-marker-art,
 .memory-city-marker.is-selected:focus-visible .memory-city-marker-art{
-  transform:translateY(-3px) scale(1.08);
+  transform:scale(1.08);
 }
 .memory-city-marker-art>span,
 .memory-city-marker-art>img{
@@ -86,10 +86,10 @@
 }
 .memory-city.is-map-overview .memory-city-marker-art{transform:scale(.78)}
 .memory-city.is-map-overview .memory-city-marker:hover .memory-city-marker-art,
-.memory-city.is-map-overview .memory-city-marker:focus-visible .memory-city-marker-art{transform:translateY(-2px) scale(.84)}
+.memory-city.is-map-overview .memory-city-marker:focus-visible .memory-city-marker-art{transform:scale(.84)}
 .memory-city.is-map-overview .memory-city-marker.is-selected .memory-city-marker-art{transform:scale(.86)}
 .memory-city.is-map-overview .memory-city-marker.is-selected:hover .memory-city-marker-art,
-.memory-city.is-map-overview .memory-city-marker.is-selected:focus-visible .memory-city-marker-art{transform:translateY(-2px) scale(.9)}
+.memory-city.is-map-overview .memory-city-marker.is-selected:focus-visible .memory-city-marker-art{transform:scale(.9)}
 .memory-city-marker.is-trip .memory-city-marker-art>span b{font: 800 .90rem/1 var(--default);color:#fff}
 .memory-city>.maplibre-canvas.is-moving .memory-city-marker-art{
   filter:none;

@@ -18,7 +18,7 @@ const items = [
 ];
 const workspace: FolderWorkspace = { folders, memberships: [ { itemId: "item-a", folderId: folders[0].id }, { itemId: "item-b", folderId: folders[0].id } ], persist: true };
 function controller(overrides: Partial<FolderController> = {}): FolderController {
-  return { workspace, selectedFolderId: "all", setSelectedFolderId: vi.fn(), matchesFolder: () => true, folderFor: () => null,
+  return { workspace, selectedFolderId: "root", setSelectedFolderId: vi.fn(), matchesFolder: () => true, folderFor: id => workspace.memberships.find(entry => entry.itemId === id)?.folderId ?? null,
     moveItems: vi.fn().mockResolvedValue(true), error: "", pending: false, reload: vi.fn(),
     create: vi.fn().mockResolvedValue(true), rename: vi.fn().mockResolvedValue(true), remove: vi.fn().mockResolvedValue(true), ...overrides };
 }
@@ -39,7 +39,8 @@ afterEach(cleanup);
 
 it("shows folder and unfiled counts with an image preview and total breadcrumb", () => {
   mount();
-  expect(screen.getByRole("button", { name: /전체 장소\s*3/ }).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("button", { name: /장소 폴더/ }).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("button", { name: /전체 장소 보기\s*3/ }).getAttribute("aria-pressed")).toBe("false");
   expect(within(tile(folders[0].name)).getByText("2개 함께 보관 중")).toBeTruthy();
   expect(within(tile(folders[1].name)).getByText("0개 함께 보관 중")).toBeTruthy();
   expect(screen.getByText("1개 · 아직 이름 없는 모음")).toBeTruthy();
@@ -58,6 +59,7 @@ it("keeps stale memberships of a deleted folder visible in unfiled", () => {
 it("navigates named folders, unfiled and the root and reflects the current folder", () => {
   const value = controller({ selectedFolderId: folders[0].id });
   mount(value);
+  fireEvent.click(screen.getByRole("button", { name: /다른 폴더로 이동/ }));
   expect(screen.getByRole("button", { name: `${folders[0].name} 폴더 열기` }).getAttribute("aria-pressed")).toBe("true");
   expect(within(screen.getByRole("navigation", { name: "폴더 위치" })).getByText(folders[0].name)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: `${folders[1].name} 폴더 열기` }));
@@ -66,6 +68,19 @@ it("navigates named folders, unfiled and the root and reflects the current folde
   expect(value.setSelectedFolderId).toHaveBeenLastCalledWith("unfiled");
   fireEvent.click(screen.getByRole("button", { name: /전체 장소/ }));
   expect(value.setSelectedFolderId).toHaveBeenLastCalledWith("all");
+  fireEvent.click(screen.getByRole("button", { name: "폴더 목록으로 돌아가기" }));
+  expect(value.setSelectedFolderId).toHaveBeenLastCalledWith("root");
+});
+
+it("keeps the inside view compact and opens drop targets when a same-scope item drag begins", () => {
+  mount(controller({ selectedFolderId: folders[0].id }));
+  expect(screen.queryByRole("button", { name: `${folders[1].name} 폴더 열기` })).toBeNull();
+  expect(screen.getByRole("button", { name: /다른 폴더로 이동/ }).getAttribute("aria-expanded")).toBe("false");
+  act(() => document.dispatchEvent(new CustomEvent("only-us:folder-drag", { detail: "vault" })));
+  expect(screen.queryByRole("button", { name: `${folders[1].name} 폴더 열기` })).toBeNull();
+  act(() => document.dispatchEvent(new CustomEvent("only-us:folder-drag", { detail: "places" })));
+  expect(screen.getByRole("button", { name: `${folders[1].name} 폴더 열기` })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /다른 폴더로 이동/ }).getAttribute("aria-expanded")).toBe("true");
 });
 
 it("creates a folder with a user name, color and stable retry identity", async () => {
@@ -179,6 +194,43 @@ it("moves a validated same-scope drop once and reports the item count", async ()
   fireEvent.drop(destination, { dataTransfer });
   await waitFor(() => expect(value.moveItems).toHaveBeenCalledWith(["item-a", "item-b"], folders[1].id));
   expect(screen.getByRole("status").textContent).toContain("2개 항목을 폴더에 옮겼어요.");
+  expect(destination.className).toContain("is-drop-complete");
+});
+
+it("shows drop progress and successful animation only after the write completes", async () => {
+  let complete!: (result: boolean) => void;
+  const moveItems = vi.fn(() => new Promise<boolean>(resolve => { complete = resolve; }));
+  mount(controller({ moveItems }));
+  const destination = tile(folders[1].name);
+  fireEvent.drop(destination, { dataTransfer: dragData({ scope: "places", ids: ["item-a"] }) });
+  expect(screen.getByRole("status").textContent).toContain("항목을 옮기고 있어요");
+  expect(destination.className).toContain("is-moving");
+  expect(destination.className).not.toContain("is-drop-complete");
+  fireEvent.drop(destination, { dataTransfer: dragData({ scope: "places", ids: ["item-b"] }) });
+  expect(moveItems).toHaveBeenCalledTimes(1);
+  await act(async () => complete(true));
+  expect(screen.getByRole("status").textContent).toContain("1개 항목을 폴더에 옮겼어요");
+  expect(destination.className).toContain("is-drop-complete");
+});
+
+it("skips items already in the destination and preserves their membership", () => {
+  const value = controller();
+  mount(value);
+  fireEvent.drop(tile(folders[0].name), { dataTransfer: dragData({ scope: "places", ids: ["item-a", "item-b"] }) });
+  expect(value.moveItems).not.toHaveBeenCalled();
+  expect(screen.getByRole("status").textContent).toContain("이미 이 폴더에 있어요");
+  expect(tile(folders[0].name).className).not.toContain("is-drop-complete");
+});
+
+it("clears drop highlighting after cancellation and keeps it while moving over a child", () => {
+  mount();
+  const destination = tile(folders[1].name);
+  const dataTransfer = dragData({ scope: "places", ids: ["item-a"] });
+  fireEvent.dragOver(destination, { dataTransfer });
+  fireEvent(destination, new MouseEvent("dragleave", { bubbles: true, relatedTarget: destination.querySelector("button") }));
+  expect(destination.className).toContain("is-drag-over");
+  fireEvent.dragEnd(document);
+  expect(destination.className).not.toContain("is-drag-over");
 });
 
 it.each([
@@ -206,11 +258,16 @@ it.each(["pending", "unavailable"])("ignores drops while %s", condition => {
 
 it("moves to unfiled explicitly and does not report success for a failed drop", async () => {
   const moveItems = vi.fn().mockResolvedValue(false);
-  mount(controller({ moveItems }));
+  const value = controller({ moveItems });
+  mount(value);
   fireEvent.drop(screen.getByRole("button", { name: /미분류/ }).closest("article")!, { dataTransfer: dragData({ scope: "places", ids: ["item-a"] }) });
   await waitFor(() => expect(moveItems).toHaveBeenCalledWith(["item-a"], null));
   await act(async () => undefined);
   expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.getByRole("alert").textContent).toContain("이동 결과를 확인하지 못했어요");
+  expect(screen.getByRole("button", { name: /미분류/ }).closest("article")!.className).not.toContain("is-drop-complete");
+  fireEvent.click(screen.getByRole("button", { name: "이동 결과 다시 확인" }));
+  expect(value.reload).toHaveBeenCalledTimes(1);
 });
 
 it("allows repeated explicit bulk moves to null even with current value null", () => {

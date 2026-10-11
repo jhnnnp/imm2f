@@ -46,6 +46,18 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("useFolderWorkspace session and scope isolation", () => {
+  it("starts at a folder-only root and exposes all items only after an explicit selection", () => {
+    const { result } = renderHook(() => useFolderWorkspace("places", initial));
+    expect(result.current.selectedFolderId).toBe("root");
+    expect(result.current.matchesFolder("item-a")).toBe(false);
+    expect(result.current.matchesFolder("item-c")).toBe(false);
+    act(() => result.current.setSelectedFolderId("all"));
+    expect(result.current.matchesFolder("item-a")).toBe(true);
+    expect(result.current.matchesFolder("item-c")).toBe(true);
+    act(() => result.current.setSelectedFolderId("root"));
+    expect(result.current.matchesFolder("item-a")).toBe(false);
+    expect(result.current.workspace).toBe(initial);
+  });
   it("uses initial server data without an unnecessary initial read and subscribes to scoped folder changes", () => {
     const { result } = renderHook(() => useFolderWorkspace("places", initial));
     expect(result.current.workspace).toBe(initial);
@@ -65,7 +77,7 @@ describe("useFolderWorkspace session and scope isolation", () => {
     mocks.session = session;
     rerender();
     expect(result.current.workspace).toEqual(empty);
-    expect(result.current.selectedFolderId).toBe("all");
+    expect(result.current.selectedFolderId).toBe("root");
     expect(result.current.folderFor("item-a")).toBeNull();
     expect(mocks.read).toHaveBeenCalledWith("places");
     const current: FolderWorkspace = { persist: session.mode === "authenticated", folders: [], memberships: [] };
@@ -282,7 +294,7 @@ describe("useFolderWorkspace folder removal", () => {
     expect(mocks.remove).toHaveBeenCalledWith("vault", folderA.id, folderA.updatedAt);
     expect(result.current.workspace.folders).toEqual([folderB]);
     expect(result.current.workspace.memberships).toEqual([{ itemId: "item-b", folderId: folderB.id }]);
-    expect(result.current.selectedFolderId).toBe("all");
+    expect(result.current.selectedFolderId).toBe("root");
     act(() => result.current.setSelectedFolderId("unfiled"));
     expect(result.current.matchesFolder("item-a")).toBe(true);
     expect(result.current.matchesFolder("item-b")).toBe(false);

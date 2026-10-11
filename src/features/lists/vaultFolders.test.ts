@@ -28,7 +28,7 @@ vi.mock("./components/VaultScreenshotImport", async () => {
 vi.mock("@/features/folders/useFolderWorkspace", async () => {
   const { useCallback, useState } = await import("react");
   return { useFolderWorkspace: (scope: string | null) => {
-    const [selectedFolderId, setSelectedFolderId] = useState("all");
+    const [selectedFolderId, setSelectedFolderId] = useState("root");
     const [memberships, setMemberships] = useState(mocks.initialMemberships);
     const folderFor = useCallback((id: string) => memberships[id] ?? null, [memberships]);
     const matchesFolder = useCallback((id: string) => selectedFolderId === "all"
@@ -55,7 +55,7 @@ vi.mock("@/features/folders/components/FolderShelf", async () => {
   const { createElement } = await import("react");
   type Controller = { setSelectedFolderId: (id: string) => void; workspace: { folders: { id: string; name: string }[] } };
   return { FolderShelf: ({ controller }: { controller: Controller }) => createElement("nav", { "aria-label": "보관함 폴더" },
-    ...[{ id: "all", name: "전체 기록 보기" }, { id: "unfiled", name: "미분류 기록 보기" }, ...controller.workspace.folders]
+    ...[{ id: "root", name: "폴더 목록" }, { id: "all", name: "전체 기록 보기" }, { id: "unfiled", name: "미분류 기록 보기" }, ...controller.workspace.folders]
       .map(folder => createElement("button", { key: folder.id, type: "button", onClick: () => controller.setSelectedFolderId(folder.id) }, folder.name)),
   ) };
 });
@@ -86,7 +86,9 @@ beforeEach(() => {
 afterEach(cleanup);
 
 function board(notes: CoupleNote[] = [train, letter, hotel]) {
-  return render(createElement(CoupleNotesBoard, { kind: "vault", initialNotes: notes, persist: true }));
+  const result = render(createElement(CoupleNotesBoard, { kind: "vault", initialNotes: notes, persist: true }));
+  openFolder("전체 기록 보기");
+  return result;
 }
 
 function openFolder(name: string) {
@@ -98,6 +100,20 @@ function card(title: string) {
 }
 
 describe("vault folder organization", () => {
+  it("starts at the folder root and only shows records after opening a location", () => {
+    render(createElement(CoupleNotesBoard, { kind: "vault", initialNotes: [train, letter, hotel], persist: true }));
+    expect(screen.queryByRole("heading", { name: train.title })).toBeNull();
+    expect(screen.queryByRole("group", { name: "상태 필터" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "목록 검색" })).toBeNull();
+    openFolder("여행의 조각");
+    expect(screen.getByRole("heading", { name: train.title })).toBeTruthy();
+    openFolder("폴더 목록");
+    expect(screen.queryByRole("heading", { name: train.title })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "현재 목록 모두 선택" })).toBeNull();
+    openFolder("전체 기록 보기");
+    expect(screen.getByRole("heading", { name: train.title })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: letter.title })).toBeTruthy();
+  });
   it("combines folder, status, and search and preserves the scope when clearing filters", () => {
     board();
     openFolder("여행의 조각");

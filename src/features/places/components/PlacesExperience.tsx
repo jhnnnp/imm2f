@@ -39,6 +39,7 @@ const PlacesMapPane = dynamic(
   },
 );
 import { withObjectParticle } from "@/lib/korean";
+import { formatKoShort } from "@/lib/dates";
 import type { FolderWorkspace } from "@/features/folders/types";
 import { FOLDER_DRAG_MIME } from "@/features/folders/types";
 import { useFolderWorkspace } from "@/features/folders/useFolderWorkspace";
@@ -84,6 +85,11 @@ export function PlacesExperience({
   const folderController = useFolderWorkspace("places", initialFolderWorkspace);
   const searchParams = useSearchParams();
   const source = searchParams.get("from") === "date" ? "date" : searchParams.get("from") === "trip" ? "trip" : null;
+  const tripDateParam = searchParams.has("tripDate") ? searchParams.get("tripDate") ?? "" : undefined;
+  const tripDestination = placePlanDestination("trip", source, searchParams.get("day"), tripDateParam);
+  const selectedTripDayLabel = source === "trip"
+    ? `${tripDestination.targetDate === "" ? "날짜 미정 여행" : tripDestination.targetDate ? `${formatKoShort(tripDestination.targetDate)} 출발 여행` : "현재 여행"} · ${tripDestination.dayIndex + 1}일차`
+    : undefined;
   const selectedParam = searchParams.get("selected") ?? initialSelectedId ?? "";
   const [places, setPlaces] = useState<Place[]>(initialPlaces);
   const [section, setSection] = useState<Section>(source ? "search" : "saved");
@@ -102,7 +108,7 @@ export function PlacesExperience({
   const [layout, setLayout] = useState<Layout>("grid");
   const [notice, setNotice] = useState("");
   const [noticePlanLink, setNoticePlanLink] = useState(false);
-  const [noticeHref, setNoticeHref] = useState(placePlanDestination(source ?? "trip", source, searchParams.get("day")).href);
+  const [noticeHref, setNoticeHref] = useState(placePlanDestination(source ?? "trip", source, searchParams.get("day"), tripDateParam).href);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("manual");
   const [pendingCandidate, setPendingCandidate] = useState<DiscoverCandidate | null>(null);
@@ -111,6 +117,7 @@ export function PlacesExperience({
   const [statusPendingId, setStatusPendingId] = useState<string | null>(null);
   const [dialogPending, setDialogPending] = useState(false);
   const [selectedPlaceIds, setSelectedPlaceIds] = useState<string[]>([]);
+  const [draggingPlaceIds, setDraggingPlaceIds] = useState<string[]>([]);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchCategory, setSearchCategory] = useState<PlaceCategoryId | "all">("all");
@@ -138,7 +145,7 @@ export function PlacesExperience({
   const retrySync = useSharedRefresh(async ({ isCurrent }) => {
     const before = placesRef.current;
     try {
-      const { places: result, trip, archives } = await readPlacesWorkspace();
+      const { places: result, trip, archives } = await readPlacesWorkspace(tripDestination.targetDate);
       if (!isCurrent() || before !== placesRef.current) return;
       if (result.persist) {
         setPlaces(result.places); setTripItems(trip.items); setArchivedTrips(archives); setCurrentTripTitle(trip.title);
@@ -161,7 +168,8 @@ export function PlacesExperience({
     selectedParamRequestRef.current.applied = true;
     setSelectedId(selectedParam);
     setSection("saved");
-  }, [selectedParam, selectedParamExists]);
+    folderController.setSelectedFolderId(folderController.folderFor(selectedParam) ?? "unfiled");
+  }, [selectedParam, selectedParamExists, folderController.setSelectedFolderId, folderController.folderFor]);
 
   useEffect(() => {
     if (!regionSuggestionsOpen) return;
@@ -171,6 +179,12 @@ export function PlacesExperience({
     document.addEventListener("mousedown", closeSuggestions);
     return () => document.removeEventListener("mousedown", closeSuggestions);
   }, [regionSuggestionsOpen]);
+
+  useEffect(() => {
+    const finishDrag = () => setDraggingPlaceIds([]);
+    document.addEventListener("dragend", finishDrag);
+    return () => document.removeEventListener("dragend", finishDrag);
+  }, []);
 
   const archivedPlaces = useMemo(() => places.filter(isKeptInArchive), [places]);
   const folderPlaces = useMemo(() => archivedPlaces.filter(place => folderController.matchesFolder(place.id)),
@@ -207,6 +221,7 @@ export function PlacesExperience({
     return matchesStatus && matchesCategory && place.name.toLowerCase().includes(savedQuery.toLowerCase());
   }), [folderPlaces, filter, savedCategory, savedQuery, tripItems, archivedTrips]);
   const visibleSelectedIds = visibleSaved.filter(place => selectedPlaceIds.includes(place.id)).map(place => place.id);
+  const isFolderRoot = folderController.selectedFolderId === "root";
   const currentFolderName = folderController.workspace.folders.find(folder => folder.id === folderController.selectedFolderId)?.name;
   const hasSavedFilters = filter !== "all" || savedCategory !== "all" || Boolean(savedQuery.trim());
 
@@ -372,12 +387,12 @@ export function PlacesExperience({
     setNotice(message);
     setNoticePlanLink(Boolean(source));
     if (!wasArchived && saveFolderIdRef.current) void assignSavedToFolder(place.id, saveFolderIdRef.current, message);
-    if (source) setNoticeHref(placePlanDestination(source, source, searchParams.get("day")).href);
+    if (source) setNoticeHref(placePlanDestination(source, source, searchParams.get("day"), tripDateParam).href);
   }
 
   function selectedUserFolderId() {
     const id = folderController.selectedFolderId;
-    return id !== "all" && id !== "unfiled" ? id : null;
+    return id !== "root" && id !== "all" && id !== "unfiled" ? id : null;
   }
 
   async function assignSavedToFolder(itemId: string, folderId: string, savedMessage: string) {
@@ -398,6 +413,7 @@ export function PlacesExperience({
     setSavedCategory("all");
     setSavedQuery("");
     setSelectedPlaceIds([]);
+    setSelectedId("");
   }
 
   async function moveSelectedPlaces(folderId: string | null) {
@@ -409,8 +425,11 @@ export function PlacesExperience({
   function dragSavedPlaces(event: DragEvent<HTMLElement>, id: string) {
     if (folderController.pending || !folderController.workspace.persist) { event.preventDefault(); return; }
     const ids = visibleSelectedIds.includes(id) ? visibleSelectedIds : [id];
+    setDraggingPlaceIds(ids);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData(FOLDER_DRAG_MIME, JSON.stringify({ scope: "places", ids }));
+    event.dataTransfer.setData("text/plain", `${ids.length}곳 · ${places.find(place => place.id === id)?.name ?? "선택한 장소"}`);
+    document.dispatchEvent(new CustomEvent("only-us:folder-drag", { detail: "places" }));
   }
 
   function placeOrganization(place: Place) {
@@ -484,7 +503,7 @@ export function PlacesExperience({
 
   async function addSelectedToPlan(kind: "trip" | "date") {
     if (!selected || planPending) return;
-    const destination = placePlanDestination(kind, source, searchParams.get("day"));
+    const destination = placePlanDestination(kind, source, searchParams.get("day"), tripDateParam);
     const label = kind === "date" ? "데이트 일정" : "여행 일정";
     setNoticeHref(destination.href);
     setNoticePlanLink(false);
@@ -616,6 +635,7 @@ export function PlacesExperience({
             key={selected.id}
             place={selected}
             preferredPlan={source}
+            tripDestinationLabel={selectedTripDayLabel}
             tripScheduleStops={selectedTripStops}
             planPending={planPending}
             savePending={isSavePending(selected)}
@@ -643,6 +663,8 @@ export function PlacesExperience({
         </div>
       </div>
 
+      {selectedTripDayLabel && <div className="place-trip-destination"><span><b>{selectedTripDayLabel}</b>에 넣을 장소를 골라요.</span><Link href={tripDestination.href}>여행으로 돌아가기 →</Link></div>}
+
       <div className="toolbar">
         <div className="segmented" role="tablist" aria-label="장소 탐색">
           {SECTIONS.map(item => (
@@ -652,8 +674,8 @@ export function PlacesExperience({
           ))}
         </div>
         <div className="view-options">
-          <button className={layout === "grid" && section !== "map" ? "is-active" : ""} type="button" aria-label="그리드 보기" onClick={() => { setLayout("grid"); if (section === "map") setSection("search"); }}>▦</button>
-          <button className={layout === "list" && section !== "map" ? "is-active" : ""} type="button" aria-label="목록 보기" onClick={() => { setLayout("list"); if (section === "map") setSection("search"); }}>☷</button>
+          {(section !== "saved" || !isFolderRoot) && <><button className={layout === "grid" && section !== "map" ? "is-active" : ""} type="button" aria-label="그리드 보기" onClick={() => { setLayout("grid"); if (section === "map") setSection("search"); }}>▦</button>
+          <button className={layout === "list" && section !== "map" ? "is-active" : ""} type="button" aria-label="목록 보기" onClick={() => { setLayout("list"); if (section === "map") setSection("search"); }}>☷</button></>}
           <button className={section === "map" ? "is-active" : ""} type="button" aria-label="지도 보기" onClick={() => handleSection("map")}>⌖</button>
         </div>
       </div>
@@ -661,6 +683,8 @@ export function PlacesExperience({
       {section === "saved" && (
         <>
           <FolderShelf scope="places" controller={{ ...folderController, setSelectedFolderId: selectPlaceFolder }} items={folderItems} label="장소" />
+          {!isFolderRoot && <div className="saved-place-content-controls">
+          <div className="saved-place-content-heading"><h2>저장한 장소</h2><span>{folderPlaces.length}곳 함께 보관 중</span></div>
           <div className="segmented status-tabs" role="tablist" aria-label="장소 상태">
             {([
               ["all", "전체", counts.all, null],
@@ -684,12 +708,13 @@ export function PlacesExperience({
           {visibleSaved.length > 0 && <div className="saved-place-selection-bar">
             <label><input type="checkbox" disabled={folderController.pending} checked={visibleSelectedIds.length === visibleSaved.length}
               onChange={event => setSelectedPlaceIds(event.target.checked ? visibleSaved.map(place => place.id) : [])} />현재 목록 모두 선택</label>
-            <span aria-live="polite">{visibleSelectedIds.length ? `${visibleSelectedIds.length}곳 선택` : `${visibleSaved.length}곳 · 이름 붙인 폴더에 함께 정리해요`}</span>
+            <span aria-live="polite">{visibleSelectedIds.length ? `${visibleSelectedIds.length}곳 선택` : `${visibleSaved.length}곳 · 선택하면 한 번에 옮길 수 있어요`}</span>
             {visibleSelectedIds.length > 0 && <>
               <FolderMoveMenu folders={folderController.workspace.folders} value={null} disabled={folderController.pending || !folderController.workspace.persist}
                 onMove={moveSelectedPlaces} />
               <button type="button" onClick={() => setSelectedPlaceIds([])} disabled={folderController.pending}>선택 해제</button>
             </>}
+          </div>}
           </div>}
         </>
       )}
@@ -850,15 +875,15 @@ export function PlacesExperience({
         </div>
       )}
 
-      {notice && <div className="inline-notice" role="status">{notice} {noticePlanLink ? <Link href={noticeHref}>{noticeHref === "/date" ? "데이트로 돌아가기" : "여행으로 돌아가기"}</Link> : null}<button type="button" onClick={() => setNotice("")} aria-label="알림 닫기">×</button></div>}
+      {notice && <div className="inline-notice" role="status">{notice} {noticePlanLink ? <Link href={noticeHref}>{noticeHref.startsWith("/date") ? "데이트로 돌아가기" : "여행으로 돌아가기"}</Link> : null}<button type="button" onClick={() => setNotice("")} aria-label="알림 닫기">×</button></div>}
 
-      {section === "saved" && (
+      {section === "saved" && !isFolderRoot && (
         visibleSaved.length ? (
           layout === "list" ? (
             <ul className="place-result-list">
               {visibleSaved.map(place => (
-                <li key={place.id} className="saved-place-file is-list" draggable={folderController.workspace.persist && !folderController.pending}
-                  onDragStart={event => dragSavedPlaces(event, place.id)}>
+                <li key={place.id} className={`saved-place-file is-list${draggingPlaceIds.includes(place.id) ? " is-dragging" : ""}`} draggable={folderController.workspace.persist && !folderController.pending}
+                  onDragStart={event => dragSavedPlaces(event, place.id)} onDragEnd={() => setDraggingPlaceIds([])}>
                   <button type="button" className={`kakao-result ${selectedId === place.id ? "is-selected" : ""}`} onClick={() => void handleSelect(place.id)}>
                     <b className="place-list-title">{place.name}{tripLinkedPlaceIds.has(place.id) ? <PlaceTripStamp compact /> : null}</b>
                     <small>{place.categoryLabel} · {place.district}</small>
@@ -869,8 +894,8 @@ export function PlacesExperience({
             </ul>
           ) : (
             <div className="place-grid">{visibleSaved.map(place => (
-              <div key={place.id} className={`saved-place-file${selectedPlaceIds.includes(place.id) ? " is-picked" : ""}`}
-                draggable={folderController.workspace.persist && !folderController.pending} onDragStart={event => dragSavedPlaces(event, place.id)}>
+              <div key={place.id} className={`saved-place-file${selectedPlaceIds.includes(place.id) ? " is-picked" : ""}${draggingPlaceIds.includes(place.id) ? " is-dragging" : ""}`}
+                draggable={folderController.workspace.persist && !folderController.pending} onDragStart={event => dragSavedPlaces(event, place.id)} onDragEnd={() => setDraggingPlaceIds([])}>
               <PlaceCard
                 place={place}
                 selected={selectedId === place.id}
@@ -890,7 +915,7 @@ export function PlacesExperience({
             <div className="dialog-actions">
               {(hasSavedFilters || folderController.selectedFolderId !== "all") && <button className="outline-button" type="button" onClick={() => {
                 if (hasSavedFilters) { setFilter("all"); setSavedCategory("all"); setSavedQuery(""); }
-                else folderController.setSelectedFolderId("all");
+                else selectPlaceFolder("all");
               }}>{hasSavedFilters ? "필터 초기화" : "전체 장소 보기"}</button>}
               <button className="primary-button" type="button" onClick={() => handleSection("search")}>장소 찾기</button>
               <button className="outline-button" type="button" onClick={openManual}>직접 입력</button>

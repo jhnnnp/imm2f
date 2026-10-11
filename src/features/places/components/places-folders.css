@@ -11,6 +11,16 @@
 .saved-place-file[draggable="true"]:active { cursor: grabbing; }
 .saved-place-file .place-info { cursor: pointer; }
 .saved-place-file .place-image img { pointer-events: none; }
+.saved-place-file.is-dragging { opacity:.42; transform:scale(.98); }
+.saved-place-file.is-dragging > .place-card { outline:2px dashed var(--sage, #536f63); outline-offset:2px; }
+.saved-place-content-heading { display:flex; align-items:center; gap:12px; margin:4px 0 8px; }
+.saved-place-content-heading h2 { margin:0; font-size:19px; color:#3e5145; }
+.saved-place-content-heading > span { font-size:11px; color:#8a958b; }
+.saved-place-content-controls .status-tabs { margin-top:0; }
+.place-trip-destination { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:9px; padding:12px 15px; margin:0 0 15px; border:1px solid #d9e4d8; border-radius:11px; background:#edf3eb; color:#6b7f6e; font-size:12px; }
+.place-trip-destination b { color:#4e6e56; font-weight:600; }
+.place-trip-destination a { color:#4e6e56; white-space:nowrap; }
+.place-plan-destination { margin:12px 0 7px; color:#738772; font-size:11px; text-align:center; }
 
 .saved-place-organization {
   display: flex;
@@ -60,6 +70,8 @@
 
 .saved-place-selection-bar > span { flex: 1; }
 .saved-place-selection-bar > button { border: 0; background: none; color: var(--sage, #536f63); padding: 5px; }
+.saved-place-selection-bar:has(> .folder-move-select) { border-color:#b9cbbd; background:#edf3ec; }
+.saved-place-selection-bar > .folder-move-select { font-size:12px; padding:8px 28px 8px 11px; background:#fff; }
 .saved-place-file.is-list { flex-direction: row; align-items: center; gap: 10px; padding-right: 8px; }
 .saved-place-file.is-list > .kakao-result { flex: 1; min-width: 0; }
 .saved-place-file.is-list > .saved-place-organization { padding: 7px 0; }

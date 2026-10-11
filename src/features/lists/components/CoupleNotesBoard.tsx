@@ -241,6 +241,7 @@ export function CoupleNotesBoard({
   const selectedIdSet = new Set(selectedIds);
   const foldersById = useMemo(() => new Map(folders.workspace.folders.map(folder => [folder.id, folder])), [folders.workspace.folders]);
   const currentFolder = foldersById.get(folders.selectedFolderId);
+  const showFolderContents = kind !== "vault" || folders.selectedFolderId !== "root";
   const folderNotes = kind === "vault" ? notes.filter(note => folders.matchesFolder(note.id)) : notes;
   const canOrganizeNotes = kind === "vault" && persist && folders.workspace.persist && !pending && !folders.pending;
 
@@ -299,6 +300,7 @@ export function CoupleNotesBoard({
     }));
     draggedNoteRef.current = noteId;
     setDraggingNoteId(noteId);
+    document.dispatchEvent(new CustomEvent("only-us:folder-drag", { detail: "vault" }));
   }
 
   function handleNoteDragEnd() {
@@ -484,6 +486,7 @@ export function CoupleNotesBoard({
       </section>
       {!persist && <p className="inline-notice" role="status">로그인하면 둘이 같은 목록을 봐요. <a href="/login">로그인</a></p>}
       {kind === "vault" && <FolderShelf scope="vault" controller={{ ...folders, setSelectedFolderId: openNoteFolder }} items={notes.map(note => ({ id: note.id, title: note.title }))} label="기록" />}
+      {showFolderContents && <>
       <div className="notes-toolbar">
         <div>
           <span className="eyebrow">{kind === "vault" ? currentFolder?.name ?? (folders.selectedFolderId === "unfiled" ? "미분류 기록" : "전체 기록") : meta.collectionLabel}</span>
@@ -557,6 +560,7 @@ export function CoupleNotesBoard({
       ) : (
         <ul className={`note-list${canReorderNotes ? " is-reorderable" : ""}`}>{visibleNotes.map((note, index) => renderNoteCard(note, notes.findIndex(item => item.id === note.id) ?? index))}</ul>
       )}
+      </>}
       {error && !open && <p className="notes-toast" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></p>}
       {open && (
         <div className="dialog-backdrop" role="presentation" onClick={closeDialog}>

@@ -1,13 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { readCalendarWorkspace } from "@/features/collaboration/workspaceReads";
 import { hasDateContent, upsertDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
 import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
 import type { CouplePlan } from "@/features/planning/types/plan";
-import { addDays, formatKoDate, toIsoDate, seoulTodayIso } from "@/lib/dates";
+import { formatKoDate, toIsoDate, seoulTodayIso } from "@/lib/dates";
 import { SyncNotice } from "@/components/shared/SyncNotice";
+import type { ArchivedTripPlan } from "@/features/planning/actions";
+import type { TripDateSnapshot } from "@/features/trip/tripDates";
+import { tripDateRange } from "@/features/trip/tripDates";
+import { calendarTrips, tripsOnDate } from "../tripCalendar";
+import { useDialogFocus } from "@/components/shared/useDialogFocus";
 
 type MemoryMark = { id: string; title: string; happenedOn: string };
 
@@ -24,41 +29,46 @@ export function CalendarBoard({
   date,
   memories: initialMemories,
   drafts: initialDrafts,
+  tripDrafts: initialTripDrafts = [],
+  archives: initialArchives = [],
 }: {
   trip: CouplePlan;
   date: CouplePlan;
   memories: MemoryMark[];
   drafts: DateDaySnapshot[];
+  tripDrafts?: TripDateSnapshot[];
+  archives?: ArchivedTripPlan[];
 }) {
   const [cursor, setCursor] = useState<Date | null>(null);
   const [todayIso, setTodayIso] = useState("");
   const [selected, setSelected] = useState("");
-  const [tripStart, setTripStart] = useState(trip.startDate ?? "");
   const [dateStart, setDateStart] = useState(date.startDate ?? "");
   const [memories, setMemories] = useState(initialMemories);
   const [drafts, setDrafts] = useState(initialDrafts);
   const [tripPlan, setTripPlan] = useState(trip);
   const [datePlan, setDatePlan] = useState(date);
+  const [tripDrafts, setTripDrafts] = useState(initialTripDrafts);
+  const [tripArchives, setTripArchives] = useState(initialArchives);
   const [modalOpen, setModalOpen] = useState(false);
   const [syncError, setSyncError] = useState("");
   const retrySync = useSharedRefresh(async ({ isCurrent }) => {
     try {
-      const { trip: nextTrip, date: nextDate, drafts: nextDrafts, memories: nextMemories } = await readCalendarWorkspace();
+      const { trip: nextTrip, date: nextDate, drafts: nextDrafts, memories: nextMemories, tripDrafts: nextTripDrafts, archives } = await readCalendarWorkspace();
       if (!isCurrent()) return;
-      setTripPlan(nextTrip); setTripStart(nextTrip.startDate ?? "");
+      setTripPlan(nextTrip); setTripDrafts(nextTripDrafts); setTripArchives(archives);
       setDatePlan(nextDate); setDateStart(nextDate.startDate ?? "");
       setDrafts(nextDrafts); setMemories(nextMemories);
       setSyncError("");
     } catch {
       if (isCurrent()) setSyncError("최신 약속을 불러오지 못했어요. 표시 중인 캘린더는 그대로 있어요.");
     }
-  }, { tables: ["activities"], activityPrefixes: ["DATE_", "TRIP_", "MEMORY_", "PARTNER_"] });
+  }, { tables: ["activities", "trip_drafts"], activityPrefixes: ["DATE_", "TRIP_", "MEMORY_", "PARTNER_"] });
   const dateDays = useMemo(() => {
     const current = { date: dateStart, title: datePlan.title, notes: datePlan.notes, items: datePlan.items };
     return (dateStart && hasDateContent(current) ? upsertDateDay(drafts, current) : drafts).filter(hasDateContent);
   }, [dateStart, datePlan, drafts]);
 
-  const modalCloseRef = useRef<HTMLButtonElement>(null);
+  const modalRef = useDialogFocus<HTMLElement>({ open: modalOpen, onClose: () => setModalOpen(false) });
 
   useEffect(() => {
     const iso = seoulTodayIso();
@@ -68,54 +78,40 @@ export function CalendarBoard({
     setSelected(iso);
   }, []);
 
-  useEffect(() => {
-    if (!modalOpen) return;
-    modalCloseRef.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setModalOpen(false);
-    };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [modalOpen]);
-
-  const tripDays = useMemo(() => {
-    if (!tripStart) return new Set<string>();
-    return new Set(Array.from({ length: Math.max(1, tripPlan.dayCount || 1) }, (_, index) => addDays(tripStart, index)));
-  }, [tripStart, tripPlan.dayCount]);
+  const trips = useMemo(() => calendarTrips(tripPlan, tripDrafts, tripArchives), [tripPlan, tripDrafts, tripArchives]);
+  const selectedTrips = useMemo(() => tripsOnDate(trips, selected), [trips, selected]);
 
   const selectedEvents = useMemo(() => {
-    if (!selected) return [] as Array<{ kind: string; title: string; href: string; detail: string }>;
+    if (!selected) return [] as Array<{ id: string; kind: string; title: string; href: string; detail: string }>;
     const events = [];
-    if (tripDays.has(selected) && tripPlan.items.length) {
-      const offset = [...tripDays].sort().indexOf(selected);
+    for (const { trip, day, href, items } of selectedTrips) {
       events.push({
-        kind: "여행",
-        title: tripPlan.title || "우리가 고른 여행",
-        href: `/trip?day=${offset}`,
-        detail: `DAY ${offset + 1} · ${tripPlan.items.filter(item => (item.dayIndex ?? 0) === offset).length}곳`,
+        id: trip.id, kind: trip.archived ? "여행기록" : "여행",
+        title: trip.title || "우리가 고른 여행", href,
+        detail: `${tripDateRange(trip.startDate, trip.dayCount)} · DAY ${day + 1} · ${items.length}곳`,
       });
     }
     const selectedDate = dateDays.find(day => day.date === selected);
     if (selectedDate) {
       events.push({
-        kind: "데이트",
+        id: `date:${selected}`, kind: "데이트",
         title: selectedDate.title || "우리가 고른 데이트",
         href: `/date?day=${selected}`,
         detail: `${selectedDate.items.length}곳${selectedDate.notes ? " · 메모 있음" : ""}`,
       });
     }
-    memories.filter(item => item.happenedOn === selected).forEach(item => {
-      events.push({ kind: "추억", title: item.title, href: "/memories", detail: "그날의 기록" });
+    const archiveIds = new Set(tripArchives.map(archive => archive.id));
+    memories.filter(item => item.happenedOn === selected && !archiveIds.has(item.id)).forEach(item => {
+      events.push({ id: `memory:${item.id}`, kind: "추억", title: item.title, href: "/memories", detail: "그날의 기록" });
     });
     return events;
-  }, [selected, tripDays, tripPlan, dateDays, memories]);
+  }, [selected, selectedTrips, tripArchives, dateDays, memories]);
   const selectedStops = useMemo(() => {
-    const day = [...tripDays].sort().indexOf(selected);
     return [
-      ...tripPlan.items.filter(item => day >= 0 && (item.dayIndex ?? 0) === day).sort((a, b) => a.order - b.order).map(item => ({ ...item, source: "여행" })),
-      ...[...(dateDays.find(day => day.date === selected)?.items ?? [])].sort((a, b) => a.order - b.order).map(item => ({ ...item, source: "데이트" })),
+      ...selectedTrips.flatMap(({ trip, items }) => items.map(item => ({ ...item, source: trip.title || "여행", sourceId: trip.id }))),
+      ...[...(dateDays.find(day => day.date === selected)?.items ?? [])].sort((a, b) => a.order - b.order).map(item => ({ ...item, source: "데이트", sourceId: "date" })),
     ];
-  }, [tripDays, tripPlan.items, dateDays, selected]);
+  }, [selectedTrips, dateDays, selected]);
 
   if (!cursor) {
     return <p className="form-hint">캘린더를 펼치고 있어요.</p>;
@@ -165,7 +161,7 @@ export function CalendarBoard({
             const isToday = iso === todayIso;
             const isSelected = iso === selected;
             const marks = [
-              tripDays.has(iso) && tripPlan.items.length > 0 ? { label: "여행", className: "is-trip" } : null,
+              tripsOnDate(trips, iso).length ? { label: "여행", className: "is-trip" } : null,
               dateDays.some(day => day.date === iso) ? { label: "데이트", className: "is-date" } : null,
               memories.some(item => item.happenedOn === iso) ? { label: "추억", className: "is-memory" } : null,
             ].filter(Boolean);
@@ -197,15 +193,15 @@ export function CalendarBoard({
         <div className="calendar-modal-backdrop" role="presentation" onMouseDown={event => {
           if (event.target === event.currentTarget) setModalOpen(false);
         }}>
-          <section className="calendar-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-modal-title">
-            <button ref={modalCloseRef} className="calendar-modal-close" type="button" aria-label="닫기" onClick={() => setModalOpen(false)}>×</button>
+          <section ref={modalRef} tabIndex={-1} className="calendar-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-modal-title">
+            <button data-dialog-autofocus className="calendar-modal-close" type="button" aria-label="닫기" onClick={() => setModalOpen(false)}>×</button>
             <span className="eyebrow">DAY DETAILS</span>
             <h2 id="calendar-modal-title">{selected ? formatKoDate(selected) : "선택한 날짜"}</h2>
 
             {selectedEvents.length > 0 ? (
               <div className="calendar-event-list">
                 {selectedEvents.map(event => (
-                  <Link className="calendar-event" href={event.href} key={`${event.kind}-${event.title}`}>
+                  <Link className="calendar-event" href={event.href} key={event.id}>
                     <span>{event.kind}</span>
                     <b>{event.title}</b>
                     <small>{event.detail}</small>
@@ -219,7 +215,7 @@ export function CalendarBoard({
                 <p>함께 보낼 하루를 계획해 볼까요?</p>
               </div>
             )}
-            {selectedStops.length > 0 && <ol className="calendar-day-agenda" aria-label="이날의 장소 순서">{selectedStops.map((item, index) => <li key={`${item.source}-${item.id}`}><time>{index + 1}</time><span><b>{item.placeName}</b><small>{item.source}{item.memo ? ` · ${item.memo}` : ""}</small></span></li>)}</ol>}
+            {selectedStops.length > 0 && <ol className="calendar-day-agenda" aria-label="이날의 장소 순서">{selectedStops.map((item, index) => <li key={`${item.sourceId}-${item.id}`}><time>{index + 1}</time><span><b>{item.placeName}</b><small>{item.source}{item.memo ? ` · ${item.memo}` : ""}</small></span></li>)}</ol>}
             <div className="calendar-assign"><Link className="primary-button" href={`/date?day=${selected}`}>이날의 데이트 계획하기</Link></div>
           </section>
         </div>

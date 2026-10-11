@@ -79,6 +79,7 @@ it("subscribes only published tables with explicit couple filters", () => {
     { event: "*", schema: "public", table: "memory_wall_boards", filter: "couple_id=eq.couple-a" },
     { event: "*", schema: "public", table: "couple_folders", filter: "couple_id=eq.couple-a" },
     { event: "*", schema: "public", table: "couple_folder_items", filter: "couple_id=eq.couple-a" },
+    { event: "*", schema: "public", table: "trip_drafts", filter: "couple_id=eq.couple-a" },
   ]);
 });
 

@@ -1,5 +1,6 @@
 export type FolderScope = "vault" | "places";
-export type FolderSelection = "all" | "unfiled" | string;
+/** Root displays folders; All is an explicit view of every saved item. */
+export type FolderSelection = "root" | "all" | "unfiled" | string;
 export const FOLDER_COLORS = ["sage", "blue", "rose", "sand", "lavender"] as const;
 export type FolderColor = typeof FOLDER_COLORS[number];
 export type ArchiveFolder = { id: string; name: string; color: FolderColor; createdAt: string; updatedAt: string };
