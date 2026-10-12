@@ -1,24 +1,35 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { AppLink } from "./AppLink";
 import { NAVIGATION } from "./navigation";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { signOut } from "@/features/auth/session";
-import { initialFromName } from "@/features/auth/types";
+import { appSessionIdentity, initialFromName } from "@/features/auth/types";
 import { pairLabel } from "@/features/auth/koreanName";
 import { BrandMark, SidebarIcon } from "./SidebarIcon";
 import { useDialogFocus } from "@/components/shared/useDialogFocus";
+import { subscribeWorkspaceChanges } from "@/features/collaboration/realtimeSync";
+import { markNavigationDataChanged, releaseNavigationIdentity, setNavigationIdentity } from "./navigationIntent";
 
 export function Sidebar() {
   const pathname = usePathname();
+  const query = useSearchParams().toString();
   const session = useAppSession();
+  const identity = appSessionIdentity(session);
+  const coupleId = session.mode === "authenticated" ? session.coupleId : "";
+  const userId = session.mode === "authenticated" ? session.userId : "";
   const [ready, setReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useDialogFocus<HTMLDivElement>({ open: menuOpen, onClose: () => setMenuOpen(false) });
   useEffect(() => setReady(true), []);
-  useEffect(() => setMenuOpen(false), [pathname]);
+  useEffect(() => setMenuOpen(false), [pathname, query]);
+  useEffect(() => {
+    setNavigationIdentity(identity);
+    const live = coupleId ? subscribeWorkspaceChanges(coupleId, markNavigationDataChanged, { userId }) : null;
+    return () => { live?.unsubscribe(); releaseNavigationIdentity(identity); };
+  }, [identity, coupleId, userId]);
   const hasIdentity = session.mode === "authenticated" || session.mode === "setup_error";
   const youName = hasIdentity ? session.displayName : "나";
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? null : null;
@@ -57,7 +68,7 @@ export function Sidebar() {
         <div ref={menuRef} tabIndex={-1} className="mobile-menu-sheet" id="mobile-all-menu" role="dialog" aria-modal="true" aria-label="전체 메뉴">
           <div className="mobile-menu-head"><strong>전체 메뉴</strong><button type="button" onClick={() => setMenuOpen(false)} aria-label="닫기">×</button></div>
           <div className="mobile-menu-grid">
-            {NAVIGATION.filter((item): item is Extract<(typeof NAVIGATION)[number], { href: string }> => "href" in item).map(item => <AppLink href={item.href} key={item.href} className={pathname === item.href ? "is-active" : ""} onClick={() => setMenuOpen(false)}>
+            {NAVIGATION.filter((item): item is Extract<(typeof NAVIGATION)[number], { href: string }> => "href" in item).map(item => <AppLink href={item.href} key={item.href} className={pathname === item.href ? "is-active" : ""} onClick={() => { if (pathname === item.href && !query) setMenuOpen(false); }}>
               <SidebarIcon name={item.iconName} /><span>{item.label}</span>
             </AppLink>)}
           </div>

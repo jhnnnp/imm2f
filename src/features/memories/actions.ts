@@ -52,6 +52,8 @@ function refreshMemories() {
   revalidatePath("/");
   revalidatePath("/memories");
   revalidatePath("/calendar");
+  revalidatePath("/date");
+  revalidatePath("/trip");
   revalidatePath("/our-map");
 }
 

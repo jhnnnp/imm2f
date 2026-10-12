@@ -2,6 +2,7 @@
 
 import { cache } from "react";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
 import { queuePartnerEmail, recordCoupleActivity } from "@/features/collaboration/activityServer";
@@ -279,15 +280,20 @@ export async function hydrateCouplePlanCoordinates(kind: PlanKind): Promise<Coup
 }
 
 export async function addItemToCouplePlan(kind: PlanKind, item: PlanItem, options?: { targetDate?: string }): Promise<{ ok: true; duplicate: boolean; items: PlanItem[] } | { error: string }> {
-  if (!["date", "trip"].includes(kind) || !validPlanItems([item]) || (kind === "trip" && (!Number.isInteger(item.dayIndex) || item.dayIndex < 0 || item.dayIndex > 6)) || (options?.targetDate !== undefined && !(kind === "trip" && options.targetDate === "") && !isIsoDate(options.targetDate))) {
+  if (!["date", "trip"].includes(kind) || !validPlanItems([item]) || (kind === "trip" && (!Number.isInteger(item.dayIndex) || item.dayIndex < 0 || item.dayIndex > 6)) || (options?.targetDate !== undefined && options.targetDate !== "" && !isIsoDate(options.targetDate))) {
     return { error: "장소를 담을 날짜와 일정을 확인해 주세요." };
   }
   const current = await loadCouplePlan(kind);
   if (!current.persist) return { error: "로그인 후 우리의일정에 저장할 수 있어요." };
+  if (kind === "date" && options?.targetDate && !current.startDate && hasDateContent(current)) {
+    return { error: "날짜 미정 코스가 있어요. Date에서 그 코스의 날짜를 먼저 정한 뒤 다른 날에 장소를 담아 주세요." };
+  }
   const tripTarget = kind === "trip" && options?.targetDate !== undefined
     ? tripForDate(current, await listTripDrafts(), options.targetDate) : current;
-  const target = kind === "date" && options?.targetDate
-    ? landingDateDay({ plan: current, drafts: await listDateDrafts(), today: options.targetDate }).focus
+  const target = kind === "date" && options?.targetDate !== undefined
+    ? options.targetDate === ""
+      ? current.startDate ? emptyDateDay("") : { items: current.items, title: current.title, notes: current.notes, date: "" }
+      : landingDateDay({ plan: current, drafts: await listDateDrafts(), today: options.targetDate }).focus
     : { items: tripTarget.items, title: tripTarget.title, notes: tripTarget.notes, date: tripTarget.startDate };
   const appended = appendPlanItem(target.items, item, kind);
   if (appended.error) return { error: appended.error };
@@ -295,7 +301,7 @@ export async function addItemToCouplePlan(kind: PlanKind, item: PlanItem, option
   const saved = await saveCouplePlan(kind, appended.items, {
     title: target.title || undefined,
     subtitle: target.notes,
-    startDate: target.date,
+    startDate: target.date || null,
     dayCount: kind === "date" ? 1 : Math.max(tripTarget.dayCount, item.dayIndex + 1),
     expectedRevision: current.revision,
   });
@@ -361,13 +367,18 @@ export async function saveCouplePlan(
   if (previousQuery.error) return { error: "기존 일정의 장소를 확인하지 못했어요. 잠시 후 다시 시도해 주세요." };
   const previousRows = previousQuery.data;
   const before = (previousRows ?? []).map(row => toItem(row as PlanItemRow));
+  if (kind === "date" && nextStart && !existing?.start_date && meta?.preservePreviousDate !== false
+    && hasDateContent({ title: existing?.title ?? "우리가 고른 데이트", notes: existing?.subtitle ?? "", items: before })) {
+    return { error: "날짜 미정 코스가 있어요. Date에서 그 코스의 날짜를 먼저 정한 뒤 다른 날에 장소를 담아 주세요." };
+  }
   const created = !existing?.id;
   const summary = meta?.summary ?? (created ? `${normalized.length}곳 일정 시작` : summarizePlanChange(before, normalized));
   const titleText = kind === "trip"
     ? created ? "여행 계획을 만들었어요" : "여행 계획을 수정했어요"
     : created ? "데이트 계획을 만들었어요" : "데이트 계획을 수정했어요";
 
-  if (meta?.preservePreviousDate !== false && kind === "date" && existing?.start_date && existing.start_date !== nextStart && before.length) {
+  if (meta?.preservePreviousDate !== false && kind === "date" && existing?.start_date && existing.start_date !== nextStart
+    && hasDateContent({ title: existing.title ?? "", notes: existing.subtitle ?? "", items: before })) {
     // Check the revision before preserving a snapshot from the previous date.
     if (meta?.expectedRevision !== undefined && existing.revision_id !== undefined && meta.expectedRevision !== existing.revision_id) return { error: "파트너가 일정을 바꿨어요. 최신 일정을 확인하고 다시 저장해 주세요.", conflict: true };
     const preserved = await saveDateDraft({ date: existing.start_date, title: existing.title ?? "우리가 고른 데이트", notes: existing.subtitle ?? "", items: before });
@@ -410,20 +421,23 @@ export async function saveCouplePlan(
   const result = saved as { plan_id?: string; version?: number; revision?: number } | null;
   if (!result?.plan_id || !result.version || !result.revision) return { error: "일정을 저장하지 못했어요." };
 
-  if (!meta?.silent) {
-    try {
-      await queuePartnerEmail({
+  if (!meta?.silent && session.partner?.userId) {
+    // The transaction is complete. Queue delivery after the response so an
+    // outbox round trip does not hold the saved itinerary or next navigation.
+    after(async () => {
+      try { await queuePartnerEmail({
         coupleId: session.coupleId,
         actorUserId: session.userId,
         partnerUserId: session.partner?.userId ?? null,
         subject: `[ONLY US] ${titleText}`,
         body: `${session.displayName}님이 ${summary}`,
-      });
-    } catch { /* Notification delivery must not turn a committed plan into a failed save. */ }
+      }); } catch { /* Notification delivery must not turn a committed plan into a failed save. */ }
+    });
   }
 
   revalidatePath("/");
   revalidatePath(`/${kind}`);
+  if (kind === "trip") revalidatePath("/date");
   revalidatePath("/calendar");
   revalidatePath("/our-map");
 
@@ -500,7 +514,7 @@ export async function rescheduleTripPlan(input: { startDate: string; expectedRev
   }
   const value = result.data as { plan_id?: string; revision?: number } | null;
   if (!value?.plan_id || !value.revision) return { error: "여행 날짜 변경 결과를 확인하지 못했어요. 최신 여행을 불러와 주세요." };
-  revalidatePath("/trip"); revalidatePath("/calendar"); revalidatePath("/our-map");
+  revalidatePath("/trip"); revalidatePath("/date"); revalidatePath("/calendar"); revalidatePath("/our-map");
   return { ok: true, revision: value.revision };
 }
 
@@ -610,6 +624,7 @@ export async function openDateDay(input: {
   toDate: string | null;
   snapshot: { title: string; notes: string; items: PlanItem[] };
   expectedRevision: number;
+  expectedTargetSnapshot?: DateDaySnapshot | null;
 }): Promise<{ ok: true; revision: number; focus: DateDaySnapshot; drafts: DateDaySnapshot[] } | { error: string; conflict?: boolean }> {
   if (!input || (input.fromDate != null && input.fromDate !== "" && !isIsoDate(input.fromDate)) || (input.toDate != null && input.toDate !== "" && !isIsoDate(input.toDate)) || !input.snapshot || typeof input.snapshot.title !== "string" || typeof input.snapshot.notes !== "string" || !validPlanItems(input.snapshot.items) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) return { error: "열려는 일정의 날짜와 장소를 확인해 주세요." };
   const active = await loadCouplePlan("date");
@@ -622,6 +637,18 @@ export async function openDateDay(input: {
     items: input.snapshot.items.map(normalizePlanItem),
   };
   const drafts = await listDateDrafts();
+  if (input.fromDate == null && input.toDate && input.expectedTargetSnapshot !== undefined) {
+    if (active.startDate || !hasDateContent(current)) return { error: "날짜 미정 코스를 다시 확인한 뒤 날짜를 정해 주세요.", conflict: true };
+    const target = drafts.find(day => day.date === input.toDate) ?? null;
+    const expected = input.expectedTargetSnapshot;
+    const content = (day: DateDaySnapshot | null) => day && [day.date, day.title, day.notes,
+      day.items.map(item => [item.id, item.placeId, item.placeName, item.category, item.startTime,
+        item.durationMinutes, item.expectedCost, item.order, item.memo, item.dayIndex])];
+    if (expected && (expected.date !== input.toDate || typeof expected.title !== "string" || typeof expected.notes !== "string" || !validPlanItems(expected.items))) return { error: "날짜를 다시 확인한 뒤 코스를 저장해 주세요." };
+    if (JSON.stringify(content(target)) !== JSON.stringify(content(expected))) {
+      return { error: "고른 날짜의 데이트가 변경됐어요. 최신 내용을 확인하고 다시 날짜를 정해 주세요.", conflict: true };
+    }
+  }
   const switched = applyDateSwitch({ current, drafts, nextDate: input.toDate ?? "" });
   if (current.date && current.date !== switched.focus.date) {
     const stashed = switched.drafts.find(day => day.date === current.date);
@@ -636,7 +663,9 @@ export async function openDateDay(input: {
     expectedRevision: input.expectedRevision,
     preservePreviousDate: false,
     silent: true,
-    summary: switched.focus.date ? `${switched.focus.date} 일정을 열었어요` : "날짜 없는 일정을 열었어요",
+    summary: input.expectedTargetSnapshot !== undefined
+      ? `${switched.focus.date} 데이트의 날짜를 정했어요`
+      : switched.focus.date ? `${switched.focus.date} 일정을 열었어요` : "날짜 없는 일정을 열었어요",
   });
   if ("error" in saved) return saved;
   // The active plan is the authoritative snapshot of the opened day. A second
@@ -812,6 +841,7 @@ export async function archiveTripPlan(input: { title: string; startDate: string;
     return recorded;
   }
   revalidatePath("/trip");
+  revalidatePath("/date");
   revalidatePath("/our-map");
   revalidatePath("/memories");
   revalidatePath("/calendar");

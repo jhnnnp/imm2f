@@ -4,12 +4,20 @@ import { listArchivedDatePlans, listArchivedTripPlans, listDateDrafts, loadCoupl
 import { listMemories, listMemoryCalendarMarks } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
 import { withWorkspaceRead } from "@/lib/supabase/readContext";
+import { projectTripDayPlans } from "@/features/date/tripDayPlans";
 
 // Browser-dispatched Server Actions are queued. Fan out reads inside one action instead.
 export async function readDateWorkspace() {
   return withWorkspaceRead(async () => {
-    const [plan, drafts, archives] = await Promise.all([loadCouplePlan("date"), listDateDrafts(), listArchivedDatePlans()]);
-    return { plan, drafts, archives: archives.dates };
+    // A trip revision may advance while it is read. Keep Date usable and let
+    // its retry refresh the journey; never present a partial trip as empty.
+    const travel = Promise.all([readTripDate(), listArchivedTripPlans()])
+      .then(([current, archives]) => ({ tripDays: projectTripDayPlans(current.plan, current.drafts, archives), tripSyncError: "" }))
+      .catch(() => ({ tripDays: null, tripSyncError: "여행 일정을 확인하지 못했어요. 데이트는 볼 수 있으며, 여행은 다시 조회해 주세요." }));
+    const [plan, drafts, archives, journeys] = await Promise.all([
+      loadCouplePlan("date"), listDateDrafts(), listArchivedDatePlans(), travel,
+    ]);
+    return { plan, drafts, archives: archives.dates, ...journeys };
   });
 }
 

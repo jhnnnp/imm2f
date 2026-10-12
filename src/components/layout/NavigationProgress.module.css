@@ -1,0 +1,29 @@
+.state { display: none; }
+
+.link:has(.state[data-navigation-pending="true"]) { cursor: progress; }
+
+.link:global(.nav-item):has(.state[data-navigation-pending="true"]),
+.link:global(.mobile-nav-item):has(.state[data-navigation-pending="true"]) {
+  position: relative;
+  background: #e3eee8;
+  color: #36584c;
+  box-shadow: inset 0 0 0 1px #bccfc2;
+}
+
+.link:global(.nav-item):has(.state[data-navigation-pending="true"])::after {
+  content: "";
+  position: absolute;
+  top: calc(50% - 5px);
+  right: 12px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #b5c7bb;
+  border-top-color: #36584c;
+  border-radius: 50%;
+  animation: turning .7s linear infinite;
+}
+
+@keyframes turning { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .link:global(.nav-item):has(.state[data-navigation-pending="true"])::after { animation: none; }
+}
