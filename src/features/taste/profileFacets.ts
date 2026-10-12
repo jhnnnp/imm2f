@@ -6,6 +6,7 @@ import {
   labelForDrink,
   labelForPace,
   labelForSetting,
+  labelForScope,
   labelForTime,
 } from "./options";
 import type { TasteProfile } from "./types";
@@ -32,6 +33,7 @@ export function profileFacets(profile: TasteProfile): TasteFacet[] {
   const rhythm = uniqueLabels([
     labelForPace(profile.pace),
     labelForTime(profile.timeWindow),
+    labelForScope(profile.areaScope),
     labelForDateFlow(profile.dateFlow),
     profile.indoorPlay && profile.indoorPlay !== "상관없음" ? profile.indoorPlay : "",
     labelForSetting(profile.setting),

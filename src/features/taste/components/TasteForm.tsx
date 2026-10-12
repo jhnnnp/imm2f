@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import styles from "./TasteStudio.module.css";
 import {
   TASTE_ACTIVITY_OPTIONS,
   TASTE_AREA_CATALOG,
@@ -12,6 +13,7 @@ import {
   TASTE_INDOOR_OPTIONS,
   TASTE_PACE_OPTIONS,
   TASTE_SETTING_OPTIONS,
+  TASTE_SCOPE_OPTIONS,
   TASTE_TIME_OPTIONS,
   areaGroupId,
   canonicalizeArea,
@@ -22,17 +24,18 @@ import {
   labelForDrink,
   labelForPace,
   labelForSetting,
+  labelForScope,
   labelForTime,
 } from "../options";
 import { findRegionByArea, flattenRegionAreas } from "../areaCatalog";
 import type { TasteAreaScope } from "../areaCatalog";
 
-const AREA_SCOPES: readonly TasteAreaScope[] = ["seoul", "metro", "trip"];
 import { allowedAvoid } from "../parse";
 import type { TasteCuisine, TasteInput } from "../types";
 import type { DateActivityId } from "@/features/planning/types/plan";
 
 const MAX_AREAS = 4;
+const AREA_SCOPES: readonly TasteAreaScope[] = ["seoul", "metro", "trip"];
 
 const AREA_SCOPE_LABEL: Record<"seoul" | "metro" | "trip", string> = {
   seoul: "서울",
@@ -75,7 +78,7 @@ const ACTIVITY_HINT: Record<string, string> = {
 
 function toggle<T extends string>(current: T[], value: T, max: number) {
   if (current.includes(value)) return current.filter(item => item !== value);
-  if (current.length >= max) return [...current.slice(1), value];
+  if (current.length >= max) return current;
   return [...current, value];
 }
 
@@ -161,6 +164,9 @@ export function TasteForm({
   error,
   onCancel,
   onSave,
+  conflict,
+  onConflictReload,
+  onChange,
 }: {
   initial: TasteInput;
   youName: string;
@@ -168,10 +174,16 @@ export function TasteForm({
   error: string;
   onCancel?: () => void;
   onSave: (input: TasteInput) => void;
+  conflict?: boolean;
+  onConflictReload?: () => void;
+  onChange?: () => void;
 }) {
   const [step, setStep] = useState(0);
   const [dir, setDir] = useState<"forward" | "back">("forward");
-  const [draft, setDraft] = useState<TasteInput>(initial);
+  const [draft, setDraft] = useState<TasteInput>(() => ({ ...initial, areaScope: initial.areaScope || "walkable" }));
+  const [selectionError, setSelectionError] = useState("");
+  const heading = useRef<HTMLHeadingElement>(null);
+  const firstStep = useRef(true);
   const [areaDraft, setAreaDraft] = useState("");
   const [avoidDraft, setAvoidDraft] = useState("");
   const [areaGroup, setAreaGroup] = useState(() => {
@@ -185,6 +197,11 @@ export function TasteForm({
 
   const extraAvoids = draft.avoidFoods.filter(item => !(TASTE_AVOID_OPTIONS as readonly string[]).includes(item));
   const currentRegion = TASTE_AREA_CATALOG.find(region => region.id === areaGroup) ?? TASTE_AREA_CATALOG[0];
+  useEffect(() => {
+    if (firstStep.current) { firstStep.current = false; return; }
+    heading.current?.focus({ preventScroll: true });
+    heading.current?.scrollIntoView({ block: "nearest" });
+  }, [step]);
   const regionsInScope = useMemo(
     () => TASTE_AREA_CATALOG.filter(region => region.scope === areaScope),
     [areaScope],
@@ -247,6 +264,7 @@ export function TasteForm({
 
   const preview = useMemo(() => ([
     { label: "장소", value: previewLine(draft.areas, ""), set: draft.areas.length > 0 },
+    { label: "이동 범위", value: draft.areaScope ? labelForScope(draft.areaScope) : "", set: Boolean(draft.areaScope) },
     { label: "속도", value: draft.pace ? labelForPace(draft.pace) : "", set: Boolean(draft.pace) },
     { label: "하고 싶은 것", value: previewLine(draft.activities.map(labelForActivity), ""), set: draft.activities.length > 0 },
     { label: "시간", value: draft.timeWindow ? labelForTime(draft.timeWindow) : "", set: Boolean(draft.timeWindow) },
@@ -270,7 +288,7 @@ export function TasteForm({
   ]), [draft]);
 
   const previewStepLabels = useMemo(() => {
-    if (step === 0) return ["장소"];
+    if (step === 0) return ["장소", "이동 범위"];
     if (step === 1) return ["속도", "하고 싶은 것", "순서", "시간", "실내"];
     return ["식사", "술", "빼는 것", "분위기"];
   }, [step]);
@@ -281,13 +299,14 @@ export function TasteForm({
   );
 
   function go(next: number) {
-    if (next === step) return;
+    if (pending || next === step) return;
     if (next > step) {
       for (let index = step; index < next; index += 1) {
         if (!stepReady[index]) return;
       }
     }
     setDir(next > step ? "forward" : "back");
+    setSelectionError("");
     setStep(next);
   }
 
@@ -297,19 +316,28 @@ export function TasteForm({
   }
 
   function addArea() {
+    if (pending) return;
     const next = canonicalizeArea(areaDraft);
-    if (!next) return;
+    if (!next) { setSelectionError("추가할 동네 이름을 입력해 주세요."); return; }
+    if (draft.areas.includes(next)) { setSelectionError("이미 고른 동네예요."); return; }
+    if (draft.areas.length >= MAX_AREAS) { setSelectionError("동네는 최대 네 곳이에요. 바꾸려면 고른 동네를 먼저 빼 주세요."); return; }
+    setSelectionError("");
     setDraft(current => ({
       ...current,
       areas: current.areas.includes(next) ? current.areas : toggle(current.areas, next, MAX_AREAS),
     }));
-    setAreaGroup(areaGroupId(next) || areaGroup);
+    const group = areaGroupId(next);
+    if (group) selectAreaRegion(group);
     setAreaDraft("");
   }
 
   function addAvoid() {
+    if (pending) return;
     const next = allowedAvoid(avoidDraft);
-    if (!next) return;
+    if (!next) { setSelectionError("제외할 음식을 두 글자 이상 입력해 주세요."); return; }
+    if (draft.avoidFoods.includes(next)) { setSelectionError("이미 제외 목록에 있어요."); return; }
+    if (draft.avoidFoods.length >= 8) { setSelectionError("제외 조건은 최대 여덟 개예요. 기존 조건을 해제한 뒤 추가해 주세요."); return; }
+    setSelectionError("");
     setDraft(current => ({
       ...current,
       avoidFoods: current.avoidFoods.includes(next) ? current.avoidFoods : toggle(current.avoidFoods, next, 8),
@@ -318,6 +346,7 @@ export function TasteForm({
   }
 
   function setCuisine(id: TasteCuisine) {
+    if (pending) return;
     setDraft(current => {
       if (id === "any") return { ...current, cuisines: current.cuisines.includes("any") ? [] : ["any"] };
       const withoutAny = current.cuisines.filter(item => item !== "any");
@@ -327,16 +356,22 @@ export function TasteForm({
 
   return (
     <form
-      className={`taste-form is-${dir} is-split-step${step === 0 ? " is-area-step" : step === 1 ? " is-rhythm-step" : " is-table-step"}`}
+      className={`${styles.form} taste-form is-${dir} is-split-step${step === 0 ? " is-area-step" : step === 1 ? " is-rhythm-step" : " is-table-step"}`}
+      aria-busy={pending}
+      onChange={onChange}
       onSubmit={event => {
         event.preventDefault();
+        if (pending || conflict) return;
         if (step < 2) {
           if (stepReady[step]) go(step + 1);
           return;
         }
-        if (stepReady[2]) onSave(draft);
+        const invalidStep = [0, 1, 2].find(index => missingForStep(index, draft));
+        if (invalidStep !== undefined) { go(invalidStep); return; }
+        onSave(draft);
       }}
     >
+      <fieldset disabled={pending} className={styles.fields}>
       <div className="taste-form-cap">
         <div className="taste-form-accent" aria-hidden="true" />
         <header className="taste-form-head">
@@ -345,7 +380,7 @@ export function TasteForm({
             <small>{youName}의 한 장</small>
           </div>
           <div className="taste-form-title">
-            <h2>{STEPS[step].title}</h2>
+            <h2 ref={heading} tabIndex={-1}>{STEPS[step].title}</h2>
             <p>{STEPS[step].hint}</p>
           </div>
           <div
@@ -366,7 +401,7 @@ export function TasteForm({
               >
                 <button
                   type="button"
-                  disabled={!canVisit(index)}
+                  disabled={pending || !canVisit(index)}
                   onClick={() => go(index)}
                   aria-current={index === step ? "step" : undefined}
                 >
@@ -412,13 +447,13 @@ export function TasteForm({
                     value={areaDraft}
                     onChange={event => setAreaDraft(event.target.value)}
                     onKeyDown={event => {
-                      if (event.key === "Enter") {
+                      if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                         event.preventDefault();
                         addArea();
                       }
                     }}
                     placeholder="직접 추가"
-                    maxLength={12}
+                    maxLength={40}
                     aria-label="동네 직접 입력"
                   />
                   <button type="button" className="outline-button" onClick={addArea}>추가</button>
@@ -429,17 +464,16 @@ export function TasteForm({
               </div>
               {draft.areas.length >= MAX_AREAS ? (
                 <p className="taste-area-limit-hint">
-                  네 곳이 찼어요. 다른 동네를 고르면 가장 먼저 담은 곳이 바뀌어요.
+                  네 곳을 골랐어요. 동네를 바꾸려면 고른 곳을 먼저 빼 주세요.
                 </p>
               ) : null}
               <div className="taste-area-scope-panel">
-                <div className="taste-segment taste-segment--scope" role="tablist" aria-label="권역 범위">
+                <div className="taste-segment taste-segment--scope" role="group" aria-label="권역 범위">
                   {AREA_SCOPES.map(scope => (
                     <button
                       key={scope}
                       type="button"
-                      role="tab"
-                      aria-selected={areaScope === scope}
+                      aria-pressed={areaScope === scope}
                       className={areaScope === scope ? "is-active" : undefined}
                       onClick={() => selectAreaScope(scope)}
                     >
@@ -450,7 +484,7 @@ export function TasteForm({
                     </button>
                   ))}
                 </div>
-                <div className="taste-area-region-grid" role="tablist" aria-label="권역">
+                <div className="taste-area-region-grid" role="group" aria-label="권역">
                   {regionsInScope.map(region => {
                     const regionAreas = flattenRegionAreas(region);
                     const selectedCount = regionAreas.filter(area => draft.areas.includes(area)).length;
@@ -459,8 +493,7 @@ export function TasteForm({
                       <button
                         key={region.id}
                         type="button"
-                        role="tab"
-                        aria-selected={current}
+                        aria-pressed={current}
                         className={`taste-area-region-chip${current ? " is-active" : ""}`}
                         onClick={() => selectAreaRegion(region.id)}
                         title={`${region.subtitle}. ${region.hint}`}
@@ -499,10 +532,13 @@ export function TasteForm({
                             aria-pressed={active}
                             aria-label={spot.vibe ? `${spot.name}, ${spot.vibe}` : spot.name}
                             title={spot.vibe ? `${spot.name} · ${spot.vibe}` : spot.name}
-                            onClick={() => setDraft(current => ({
-                              ...current,
-                              areas: toggle(current.areas, spot.name, MAX_AREAS),
-                            }))}
+                            onClick={() => {
+                              if (!active && draft.areas.length >= MAX_AREAS) {
+                                setSelectionError("동네는 최대 네 곳이에요. 고른 동네를 먼저 빼 주세요."); return;
+                              }
+                              setSelectionError("");
+                              setDraft(current => ({ ...current, areas: toggle(current.areas, spot.name, MAX_AREAS) }));
+                            }}
                           >
                             {spot.name}
                           </button>
@@ -512,6 +548,17 @@ export function TasteForm({
                   </section>
                 ))}
               </div>
+              <StepBlock title="이동 범위" hint="고른 동네에서 얼마나 이동해도 괜찮은가요?">
+                <div className="taste-segment taste-segment--wizard" role="group" aria-label="이동 범위">
+                  {TASTE_SCOPE_OPTIONS.map(option => (
+                    <button key={option.id} type="button" aria-pressed={draft.areaScope === option.id}
+                      className={draft.areaScope === option.id ? "is-active" : undefined}
+                      onClick={() => setDraft(current => ({ ...current, areaScope: option.id }))}>
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </StepBlock>
             </section>
           )}
 
@@ -519,7 +566,7 @@ export function TasteForm({
             <section className="taste-form-section taste-step-board">
               <div className="taste-step-stack">
                 <StepBlock title="하루의 속도" hint="코스가 얼마나 숨 가쁠지를 정해요.">
-                  <div className="taste-tile-grid" role="radiogroup" aria-label="데이트 페이스">
+                  <div className="taste-tile-grid" role="group" aria-label="데이트 페이스">
                     {TASTE_PACE_OPTIONS.map(option => {
                       const active = draft.pace === option.id;
                       return (
@@ -542,7 +589,7 @@ export function TasteForm({
                   <StepBlock
                     title="하루를 채우고 싶은 것"
                     count={`${draft.activities.length}/4`}
-                    hint="최대 네 가지. 코스의 뼈대가 됩니다."
+                    hint="최대 네 가지. 고른 활동을 추천에 반영해요."
                   >
                     <div className="taste-area-grid taste-area-grid--chips">
                       {TASTE_ACTIVITY_OPTIONS.map(option => {
@@ -553,15 +600,21 @@ export function TasteForm({
                             type="button"
                             className={`taste-area taste-area--chip${active ? " is-active" : ""}`}
                             aria-pressed={active}
-                            onClick={() => setDraft(current => {
-                              const activities = toggle(current.activities, option.id as DateActivityId, 4);
-                              const hasIndoor = activities.includes("indoor");
-                              return {
-                                ...current,
-                                activities,
-                                indoorPlay: hasIndoor ? (current.indoorPlay || "상관없음") : "",
-                              };
-                            })}
+                            onClick={() => {
+                              if (!active && draft.activities.length >= 4) {
+                                setSelectionError("하고 싶은 것은 최대 네 가지예요. 기존 선택을 먼저 해제해 주세요."); return;
+                              }
+                              setSelectionError("");
+                              setDraft(current => {
+                                const activities = toggle(current.activities, option.id as DateActivityId, 4);
+                                const hasIndoor = activities.includes("indoor");
+                                return {
+                                  ...current,
+                                  activities,
+                                  indoorPlay: hasIndoor ? (current.indoorPlay || "상관없음") : "",
+                                };
+                              });
+                            }}
                           >
                             <span className="taste-area-name">{option.label}</span>
                             <span className="taste-area-tag">{ACTIVITY_HINT[option.id] ?? ""}</span>
@@ -594,7 +647,7 @@ export function TasteForm({
                     </StepBlock>
                   ) : null}
                   <StepBlock title="코스 순서" hint="식사와 카페·산책 중 무엇을 먼저 할지 정해요.">
-                    <div className="taste-tile-grid" role="radiogroup" aria-label="코스 순서">
+                    <div className="taste-tile-grid" role="group" aria-label="코스 순서">
                       {TASTE_DATE_FLOW_OPTIONS.map(option => {
                         const active = draft.dateFlow === option.id;
                         return (
@@ -614,7 +667,7 @@ export function TasteForm({
                     </div>
                   </StepBlock>
                   <StepBlock title="보통 시작하는 시간">
-                    <div className="taste-segment taste-segment--wizard" role="radiogroup" aria-label="시작하는 시간">
+                    <div className="taste-segment taste-segment--wizard" role="group" aria-label="시작하는 시간">
                       {TASTE_TIME_OPTIONS.map(option => (
                         <button
                           key={option.id}
@@ -656,7 +709,7 @@ export function TasteForm({
                   </div>
                 </StepBlock>
                 <StepBlock title="술 한잔" hint="코스에 술자리를 넣을지 정해요.">
-                  <div className="taste-segment taste-segment--wizard" role="radiogroup" aria-label="술">
+                  <div className="taste-segment taste-segment--wizard" role="group" aria-label="술">
                     {TASTE_DRINK_OPTIONS.map(option => (
                       <button
                         key={option.id}
@@ -671,7 +724,7 @@ export function TasteForm({
                   </div>
                 </StepBlock>
                 <Group open={draft.cuisines.length > 0}>
-                  <StepBlock title="코스에서 빼 주세요" hint="여기는 제한입니다. 상대 코스에서도 빠집니다.">
+                  <StepBlock title="코스에서 빼 주세요" hint="한 사람이라도 제외한 조건을 함께 반영해요.">
                     <div className="taste-avoid-row">
                       {[...TASTE_AVOID_OPTIONS, ...extraAvoids].map(option => {
                         const active = draft.avoidFoods.includes(option);
@@ -681,10 +734,13 @@ export function TasteForm({
                             type="button"
                             className={`taste-area taste-area--chip${active ? " is-active" : ""}`}
                             aria-pressed={active}
-                            onClick={() => setDraft(current => ({
-                              ...current,
-                              avoidFoods: toggle(current.avoidFoods, option, 8),
-                            }))}
+                            onClick={() => {
+                              if (!active && draft.avoidFoods.length >= 8) {
+                                setSelectionError("제외 조건은 최대 여덟 개예요. 기존 조건을 해제한 뒤 추가해 주세요."); return;
+                              }
+                              setSelectionError("");
+                              setDraft(current => ({ ...current, avoidFoods: toggle(current.avoidFoods, option, 8) }));
+                            }}
                           >
                             <span className="taste-area-name">{option}</span>
                           </button>
@@ -696,7 +752,7 @@ export function TasteForm({
                           value={avoidDraft}
                           onChange={event => setAvoidDraft(event.target.value)}
                           onKeyDown={event => {
-                            if (event.key === "Enter") {
+                            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                               event.preventDefault();
                               addAvoid();
                             }
@@ -710,7 +766,7 @@ export function TasteForm({
                     </div>
                   </StepBlock>
                   <StepBlock title="실내 / 야외">
-                    <div className="taste-segment taste-segment--wizard" role="radiogroup" aria-label="실내 야외">
+                    <div className="taste-segment taste-segment--wizard" role="group" aria-label="실내 야외">
                       {TASTE_SETTING_OPTIONS.map(option => (
                         <button
                           key={option.id}
@@ -725,7 +781,7 @@ export function TasteForm({
                     </div>
                   </StepBlock>
                   <StepBlock title="거리 분위기">
-                    <div className="taste-segment taste-segment--wizard" role="radiogroup" aria-label="거리 분위기">
+                    <div className="taste-segment taste-segment--wizard" role="group" aria-label="거리 분위기">
                       {TASTE_CROWD_OPTIONS.map(option => (
                         <button
                           key={option.id}
@@ -796,7 +852,11 @@ export function TasteForm({
         </aside>
       </div>
 
-      {error ? <p className="form-error" role="alert">{error}</p> : null}
+      {selectionError ? <p className={styles.inputNotice} role="alert">{selectionError}</p> : null}
+      {error ? <div className={styles.saveError} role="alert"><p>{error}</p>
+        {conflict && onConflictReload ? <><small>입력한 내용 대신 다른 기기에서 저장한 최신 기준을 불러옵니다.</small>
+          <button type="button" className="outline-button" onClick={onConflictReload}>최신 기준으로 다시 열기</button></> : null}
+      </div> : null}
 
       <footer className="taste-form-foot">
         {step > 0 ? (
@@ -805,17 +865,18 @@ export function TasteForm({
           <button type="button" className="text-button" onClick={onCancel}>돌아가기</button>
         ) : <span />}
         <p className="taste-foot-hint" aria-live="polite">
-          {pending ? "저장하는 중이에요." : missing || (step < 2 ? "고른 내용이 미리보기에 바로 반영돼요." : "저장하면 상대와 비교할 기준이 됩니다.")}
+          {pending ? "취향을 저장하고 있어요." : missing || (step < 2 ? "고른 내용은 다음 단계에서도 유지돼요." : "저장하면 두 사람의 추천 조건에 반영돼요.")}
         </p>
         <button
           className="primary-button taste-next"
           type="submit"
-          disabled={pending || !stepReady[step]}
+          disabled={pending || conflict || !stepReady[step]}
         >
           <span>{pending ? "저장하는 중" : step < 2 ? STEPS[step].next : STEPS[2].next}</span>
           {pending ? <i className="taste-spinner" aria-hidden="true" /> : <NextMark />}
         </button>
       </footer>
+      </fieldset>
     </form>
   );
 }

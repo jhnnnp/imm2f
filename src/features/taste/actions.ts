@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { withWorkspaceRead } from "@/lib/supabase/readContext";
 import { listPlaces } from "@/features/places/actions";
 import { cache } from "react";
@@ -26,7 +27,7 @@ function rowToProfile(row: Record<string, unknown> | null | undefined) {
   return row ? parseTasteProfile(row) : null;
 }
 
-export const loadTasteBoard = cache(async (): Promise<TasteBoard> => {
+async function readTasteBoard(): Promise<TasteBoard> {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return emptyBoard();
   const youName = session.displayName;
@@ -55,7 +56,9 @@ export const loadTasteBoard = cache(async (): Promise<TasteBoard> => {
     partnerConnected,
     compare: you && partner ? compareTasteProfiles(you, partner) : null,
   };
-});
+}
+
+export const loadTasteBoard = cache(readTasteBoard);
 
 export async function readTasteWorkspace() {
   return withWorkspaceRead(async () => {
@@ -64,20 +67,44 @@ export async function readTasteWorkspace() {
   });
 }
 
-export async function saveTasteProfile(input: TasteInput): Promise<TasteBoard | { error: string }> {
+export async function saveTasteProfile(input: TasteInput, options?: {
+  expectedSnapshot?: string;
+  expectedScope?: { userId: string; coupleId: string };
+}): Promise<TasteBoard | { error: string; conflict?: boolean }> {
   const parsed = parseTasteInput(input);
   if ("error" in parsed) return parsed;
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { error: "로그인이 필요해요." };
+  if (options?.expectedScope && (options.expectedScope.userId !== session.userId || options.expectedScope.coupleId !== session.coupleId)) {
+    return { error: "계정 또는 커플 공간이 변경됐어요. 최신 취향을 확인한 뒤 다시 저장해 주세요.", conflict: true };
+  }
   const supabase = await createClient();
   if (!supabase) return { error: "저장 환경을 아직 준비하지 못했어요." };
 
   let previous: TasteBoard;
-  try { previous = await loadTasteBoard(); }
+  try { previous = await readTasteBoard(); }
   catch { return { error: "기존 취향을 확인하지 못했어요. 잠시 후 다시 시도해 주세요." }; }
-  // Retrying an already committed save must not queue the same partner email.
-  if (previous.you && JSON.stringify(previous.you) === JSON.stringify(parsed)) return previous;
-  const { data, error } = await supabase.from("taste_profiles").upsert({
+  const current = await supabase.from("taste_profiles").select("*")
+    .eq("couple_id", session.coupleId).eq("user_id", session.userId).maybeSingle();
+  if (current.error) return { error: "기존 취향을 확인하지 못했어요. 다시 저장해 주세요." };
+  const savedProfile = rowToProfile(current.data);
+  // A retry of the same committed content is safe, even after an uncertain response.
+  if (JSON.stringify(savedProfile) === JSON.stringify(parsed)) {
+    return { ...previous, you: parsed, compare: previous.partner ? compareTasteProfiles(parsed, previous.partner) : null };
+  }
+  if (options?.expectedSnapshot !== undefined) {
+    let expected;
+    try {
+      if (typeof options.expectedSnapshot !== "string" || options.expectedSnapshot.length > 10000) throw new Error("invalid snapshot");
+      const raw = JSON.parse(options.expectedSnapshot);
+      expected = raw === null ? null : parseTasteProfile(raw);
+      if (raw !== null && !expected) throw new Error("invalid snapshot");
+    } catch { return { error: "편집을 시작한 취향을 확인하지 못했어요. 최신 기준을 다시 열어 주세요." }; }
+    if (JSON.stringify(expected) !== JSON.stringify(savedProfile)) return {
+      error: "다른 화면에서 내 취향이 변경됐어요. 최신 기준을 확인한 뒤 다시 저장해 주세요.", conflict: true,
+    };
+  }
+  const payload = {
     couple_id: session.coupleId,
     user_id: session.userId,
     areas: parsed.areas,
@@ -95,36 +122,46 @@ export async function saveTasteProfile(input: TasteInput): Promise<TasteBoard | 
     drink: parsed.drink,
     indoor_play: parsed.indoorPlay,
     note: parsed.note,
-  }, { onConflict: "couple_id,user_id" }).select("user_id").single();
+    updated_at: new Date(Math.max(Date.now(), (Date.parse(current.data?.updated_at ?? "") || 0) + 1)).toISOString(),
+  };
+  const { data, error } = current.data
+    ? await supabase.from("taste_profiles").update(payload).eq("couple_id", session.coupleId)
+      .eq("user_id", session.userId).eq("updated_at", current.data.updated_at).select("user_id").maybeSingle()
+    : await supabase.from("taste_profiles").insert(payload).select("user_id").maybeSingle();
+  if (error?.code === "23505" || (!error && !data)) return {
+    error: "다른 화면에서 내 취향을 먼저 저장했어요. 최신 기준을 확인해 주세요.", conflict: true,
+  };
   if (error || !data) {
     return { error: "기준을 저장하지 못했어요. 잠시 후 다시 시도해 주세요." };
   }
 
-  const notifications: Promise<unknown>[] = [recordCoupleActivity({
-    coupleId: session.coupleId,
-    actorUserId: session.userId,
-    entityType: "taste_profile",
-    entityId: session.userId,
-    action: "TASTE_UPDATED",
-    title: "데이트 기준을 남겼어요",
-    detail: `${session.displayName}님이 동네와 페이스를 업데이트했어요`,
-  })];
-  if (session.partner) {
-    notifications.push(queuePartnerEmail({
+  after(async () => {
+    const notifications: Promise<unknown>[] = [recordCoupleActivity({
       coupleId: session.coupleId,
       actorUserId: session.userId,
-      partnerUserId: session.partner.userId,
-      subject: "[ONLY US] 데이트 기준을 남겼어요",
-      body: `${session.displayName}님이 우리의 데이트 기준을 업데이트했어요. 취향 화면에서 비교를 볼 수 있어요.`,
-    }));
-  }
-  // The profile has committed. Optional notifications cannot undo its success
-  // or make the client retry a save that already changed the shared workspace.
-  await Promise.allSettled(notifications);
+      entityType: "taste_profile",
+      entityId: session.userId,
+      action: "TASTE_UPDATED",
+      title: "데이트 기준을 남겼어요",
+      detail: `${session.displayName}님이 동네와 페이스를 업데이트했어요`,
+    })];
+    if (session.partner) {
+      notifications.push(queuePartnerEmail({
+        coupleId: session.coupleId,
+        actorUserId: session.userId,
+        partnerUserId: session.partner.userId,
+        subject: "[ONLY US] 데이트 기준을 남겼어요",
+        body: `${session.displayName}님이 우리의 데이트 기준을 업데이트했어요. 취향 화면에서 비교를 볼 수 있어요.`,
+      }));
+    }
+    // Notifications cannot undo a committed profile or hold its response.
+    await Promise.allSettled(notifications);
+  });
   revalidatePath("/insights");
   revalidatePath("/date");
   revalidatePath("/");
-  return { ...previous, you: parsed, compare: previous.partner ? compareTasteProfiles(parsed, previous.partner) : null };
+  try { return await readTasteBoard(); }
+  catch { return { ...previous, you: parsed, compare: previous.partner ? compareTasteProfiles(parsed, previous.partner) : null }; }
 }
 
 export async function loadTasteSeed() {

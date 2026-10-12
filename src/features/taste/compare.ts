@@ -1,6 +1,7 @@
 import { emptyDateBrief } from "@/features/ai/dateBrief";
 import type { AIPlannerState, DateActivityId, DateAreaScope, DateCuisineChoice } from "@/features/planning/types/plan";
 import {
+  canonicalizeArea,
   labelForActivity,
   labelForCrowd,
   labelForCuisine,
@@ -8,8 +9,10 @@ import {
   labelForDrink,
   labelForPace,
   labelForSetting,
+  labelForScope,
   labelForTime,
 } from "./options";
+import { findRegionByArea } from "./areaCatalog";
 import type { TasteCompare, TasteDateSeed, TasteDifference, TasteProfile } from "./types";
 
 function overlap<T>(left: T[], right: T[]) {
@@ -27,8 +30,8 @@ function plannerPace(pace: TasteProfile["pace"]): AIPlannerState["pace"] {
 }
 
 function mixScope(left: DateAreaScope, right: DateAreaScope): DateAreaScope {
-  if (left === right) return left;
-  if (left === "core" || right === "core") return "walkable";
+  if (left === "core" || right === "core") return "core";
+  if (left === "walkable" || right === "walkable") return "walkable";
   return "nearby";
 }
 
@@ -36,20 +39,29 @@ function cuisineSeed(you: TasteProfile, partner: TasteProfile): DateCuisineChoic
   const shared = overlap(you.cuisines, partner.cuisines).filter(item => item !== "any");
   if (shared.length === 1) return shared[0];
   if (shared.length > 1) return "any";
-  const any = you.cuisines.includes("any") || partner.cuisines.includes("any");
-  return any ? "any" : you.cuisines[0] === "any" ? "any" : you.cuisines[0];
+  const unrestricted = you.cuisines.includes("any") ? partner.cuisines
+    : partner.cuisines.includes("any") ? you.cuisines : [];
+  const specific = unrestricted.filter(item => item !== "any");
+  return specific.length === 1 ? specific[0] : "any";
 }
 
 function activitySeed(you: TasteProfile, partner: TasteProfile): DateActivityId[] {
   const shared = overlap(you.activities, partner.activities);
   if (shared.length) return shared.slice(0, 3);
-  return [...new Set([...you.activities.slice(0, 2), ...partner.activities.slice(0, 1)])].slice(0, 3);
+  return [...new Set([you.activities[0], partner.activities[0], ...you.activities.slice(1), ...partner.activities.slice(1)])]
+    .filter((item): item is DateActivityId => Boolean(item)).slice(0, 3);
 }
 
 function areaSeed(you: TasteProfile, partner: TasteProfile) {
   const shared = overlap(you.areas, partner.areas);
-  if (shared.length) return shared.slice(0, 2);
-  return [...new Set([you.areas[0], partner.areas[0]].filter(Boolean))].slice(0, 2);
+  if (shared.length) return shared.slice(0, 1);
+  // A catalog region is a candidate grouping, never proof of walking distance.
+  // Keep one anchor even when both people picked far-apart towns in that region.
+  const sameRegion = you.areas.find(area => {
+    const region = findRegionByArea(canonicalizeArea(area));
+    return region && partner.areas.some(other => findRegionByArea(canonicalizeArea(other))?.id === region.id);
+  });
+  return [sameRegion ?? you.areas[0] ?? partner.areas[0]].filter((area): area is string => Boolean(area));
 }
 
 function timeSeed(you: TasteProfile, partner: TasteProfile) {
@@ -77,7 +89,44 @@ function indoorSeed(you: TasteProfile, partner: TasteProfile) {
   if (you.indoorPlay && you.indoorPlay === partner.indoorPlay) return you.indoorPlay;
   if (you.indoorPlay === "상관없음") return partner.indoorPlay || "상관없음";
   if (partner.indoorPlay === "상관없음") return you.indoorPlay || "상관없음";
-  return you.indoorPlay || partner.indoorPlay || "상관없음";
+  if (!you.indoorPlay) return partner.indoorPlay || "상관없음";
+  if (!partner.indoorPlay) return you.indoorPlay;
+  return null;
+}
+
+function sharedSetting(you: TasteProfile, partner: TasteProfile): TasteProfile["setting"] {
+  if (you.setting === partner.setting) return you.setting;
+  if (you.setting === "mix") return partner.setting;
+  if (partner.setting === "mix") return you.setting;
+  return "mix";
+}
+
+function sharedCrowd(you: TasteProfile, partner: TasteProfile): TasteProfile["crowd"] {
+  if (you.crowd === partner.crowd) return you.crowd;
+  if (you.crowd === "mix") return partner.crowd;
+  if (partner.crowd === "mix") return you.crowd;
+  return "quiet";
+}
+
+function areaBridge(you: TasteProfile, partner: TasteProfile, anchor: string | undefined): TasteDifference | null {
+  if (overlap(you.areas, partner.areas).length) return null;
+  return {
+    topic: "동네",
+    you: you.areas.join(", "),
+    partner: partner.areas.join(", "),
+    bridge: anchor ? `기본 후보는 ${anchor}예요. 서로 고른 동네를 한 코스에 합치기 전에 이번에 갈 동네부터 골라 주세요.`
+      : "함께 갈 동네를 먼저 골라 주세요.",
+  };
+}
+
+function cuisineBridge(you: TasteProfile, partner: TasteProfile): TasteDifference | null {
+  if (you.cuisines.includes("any") || partner.cuisines.includes("any") || overlap(you.cuisines, partner.cuisines).length) return null;
+  return {
+    topic: "식사",
+    you: you.cuisines.map(labelForCuisine).join(", "),
+    partner: partner.cuisines.map(labelForCuisine).join(", "),
+    bridge: "음식 종류를 한쪽 기준으로 정하지 않았어요. 각자 먹기 편한 메뉴가 있는 곳부터 고르면 좋아요.",
+  };
 }
 
 function settingBridge(you: TasteProfile, partner: TasteProfile): TasteDifference | null {
@@ -128,7 +177,7 @@ function activityBridge(you: TasteProfile, partner: TasteProfile): TasteDifferen
     topic: "하루의 구성",
     you: youOnly.map(labelForActivity).join(", ") || "유연해요",
     partner: partnerOnly.map(labelForActivity).join(", ") || "유연해요",
-    bridge: `${[...youOnly, ...partnerOnly].slice(0, 2).map(labelForActivity).join(" 다음에 ")} 순서로 이어 보세요.`,
+    bridge: `${[youOnly[0], partnerOnly[0]].filter((activity): activity is DateActivityId => Boolean(activity)).map(labelForActivity).join("과 ")}을 하나씩 담아 보세요.`,
   };
 }
 
@@ -165,17 +214,55 @@ function datePrompt(
   const avoid = seed.avoidFoods.length ? ` ${seed.avoidFoods.join(", ")}는 빼줘.` : "";
   const drinkHint = drink === "none" ? " 술자리는 빼줘." : drink === "light" ? " 가벼운 한잔 정도면 괜찮아요." : "";
   const indoor = seed.indoorPlay && seed.indoorPlay !== "상관없음" ? ` 실내는 ${seed.indoorPlay} 쪽.` : "";
-  const notes = [you.note, partner.note].map(item => item.trim()).filter(Boolean);
+  const setting = sharedSetting(you, partner);
+  const spaceHint = setting === "indoor" ? " 실내에서 즐길 수 있는 장소 위주로 골라줘."
+    : setting === "outdoor" ? " 야외 산책과 풍경을 중심으로, 식사나 휴식 장소를 이어줘."
+      : you.setting !== partner.setting && you.setting !== "mix" && partner.setting !== "mix"
+        ? " 실내와 야외 선호가 다르니 실내에서 쉬고 야외를 짧게 걷는 구성을 제안해줘."
+        : " 실내와 야외 모두 괜찮아요.";
+  const crowd = sharedCrowd(you, partner);
+  const crowdHint = crowd === "quiet" ? " 북적이는 곳과 오래 줄 서는 곳을 피하고 한적한 곳을 우선해줘."
+    : crowd === "lively" ? " 활기 있는 거리 분위기를 좋아해요." : " 거리 분위기는 유연하게 골라줘.";
+  const areaChoices = [...new Set([...you.areas, ...partner.areas])];
+  const areaHint = areaChoices.length > 1
+    ? ` 이번 코스의 기본 동네는 ${area} 한 곳이에요. 다른 동네는 함께 갈 지역을 확인한 뒤 별도 코스로 제안하고, 이 코스에 자동으로 합치지 마세요.` : "";
+  const sharedCuisines = overlap(you.cuisines, partner.cuisines).filter(item => item !== "any");
+  const cuisineChoices = sharedCuisines.length ? sharedCuisines
+    : you.cuisines.includes("any") ? partner.cuisines.filter(item => item !== "any")
+      : partner.cuisines.includes("any") ? you.cuisines.filter(item => item !== "any")
+        : [...new Set([...you.cuisines, ...partner.cuisines].filter(item => item !== "any"))];
+  const cuisineHint = seed.cuisine === "any" && cuisineChoices.length
+    ? sharedCuisines.length || you.cuisines.includes("any") || partner.cuisines.includes("any")
+      ? ` 식사는 ${cuisineChoices.map(labelForCuisine).join(", ")} 중 고를 수 있게 제안해줘.`
+      : ` 식사 취향이 ${cuisineChoices.map(labelForCuisine).join(", ")}으로 다르니 한 종류로 확정하지 말고 각자 먹기 편한 메뉴가 있는 곳을 제안해줘.`
+    : "";
+  const indoorHint = seed.activities.includes("indoor") && !seed.indoorPlay && you.indoorPlay && partner.indoorPlay
+    && you.indoorPlay !== partner.indoorPlay && you.indoorPlay !== "상관없음" && partner.indoorPlay !== "상관없음"
+    ? ` 실내 놀이도 ${you.indoorPlay}, ${partner.indoorPlay} 중 함께 할 것을 먼저 확인해줘.` : "";
+  const notes = [...new Set([you.note, partner.note].map(item => item.trim()).filter(Boolean))];
   const extra = notes.length ? ` ${notes.join(" / ")}` : "";
-  return `${area}에서 ${time}${order}${food}${acts} 데이트.${avoid}${drinkHint}${indoor}${extra}`.replace(/\s+/g, " ").trim();
+  return `${area}에서 ${time}${order}${food}${acts} 데이트. 이동 범위는 ${labelForScope(seed.areaScope)}.${spaceHint}${crowdHint}${areaHint}${cuisineHint}${avoid}${drinkHint}${indoor}${indoorHint}${extra}`.replace(/\s+/g, " ").trim();
+}
+
+function seedDisplayLines(you: TasteProfile, partner: TasteProfile, seed: Omit<TasteDateSeed, "prompt" | "headline" | "lines" | "stayKind">) {
+  return [
+    [seed.areas[0], seed.activities.map(labelForActivity).join(" · "), seed.timeWindow === "any" ? "" : labelForTime(seed.timeWindow)].filter(Boolean).join(" · "),
+    [labelForScope(seed.areaScope), labelForSetting(sharedSetting(you, partner)), labelForCrowd(sharedCrowd(you, partner))].join(" · "),
+    seed.avoidFoods.length ? `피하기: ${seed.avoidFoods.join(", ")}` : "",
+    !overlap(you.areas, partner.areas).length ? "동네가 달라요. 기본 후보를 바꿔도 괜찮아요." : "",
+  ].filter(Boolean);
+}
+
+function initialTastePrompt(context: string, areas: string[]) {
+  return context.length <= 800 ? context
+    : `${areas[0] || "함께 고른 동네"}에서 데이트를 추천해줘. 대화에 전달된 두 사람의 저장된 취향과 제외 조건을 모두 반영하고, 서로 다른 조건은 먼저 확인해줘.`;
 }
 
 export function seedFromProfile(profile: TasteProfile): TasteDateSeed {
-  const picked = profile.cuisines.find(item => item !== "any");
-  const cuisine: DateCuisineChoice = picked ?? "any";
+  const cuisine = cuisineSeed(profile, profile);
   const indoorPlay = profile.indoorPlay && profile.indoorPlay !== "상관없음" ? profile.indoorPlay : null;
   const core: Omit<TasteDateSeed, "stayKind" | "prompt" | "headline" | "lines"> = {
-    areas: profile.areas.slice(0, 2),
+    areas: profile.areas.slice(0, 1),
     activities: profile.activities.slice(0, 3),
     cuisine,
     pace: plannerPace(profile.pace),
@@ -184,13 +271,15 @@ export function seedFromProfile(profile: TasteProfile): TasteDateSeed {
     indoorPlay,
     avoidFoods: profile.avoidFoods,
   };
-  const prompt = datePrompt(profile, profile, core, profile.dateFlow, profile.drink);
+  const context = datePrompt(profile, profile, core, profile.dateFlow, profile.drink);
+  const prompt = initialTastePrompt(context, core.areas);
   return {
     ...core,
     stayKind: "date",
     prompt,
+    context,
     headline: core.areas.length ? `${core.areas.join(" · ")}에서 시작하는 하루` : "내 기준으로 짜는 하루",
-    lines: [prompt, profile.note].filter(Boolean),
+    lines: seedDisplayLines(profile, profile, core),
   };
 }
 
@@ -206,15 +295,14 @@ export function compareTasteProfiles(you: TasteProfile, partner: TasteProfile): 
   const indoorPlayRaw = indoorSeed(you, partner);
   const indoorPlay = indoorPlayRaw && indoorPlayRaw !== "상관없음" ? indoorPlayRaw : null;
   const avoidFoods = [...new Set([...you.avoidFoods, ...partner.avoidFoods])];
-  const differences = [paceBridge(you, partner), activityBridge(you, partner), settingBridge(you, partner), crowdBridge(you, partner)]
+  const differences = [areaBridge(you, partner, areas[0]), cuisineBridge(you, partner), paceBridge(you, partner), activityBridge(you, partner), settingBridge(you, partner), crowdBridge(you, partner)]
     .filter((item): item is TasteDifference => Boolean(item));
   const overlaps = overlapLabels(you, partner);
   const constraints = avoidFoods;
   const core = { areas, activities, cuisine, pace, timeWindow, areaScope, indoorPlay, avoidFoods };
-  const prompt = datePrompt(you, partner, core, dateFlow, drink);
-  const headline = overlaps.length
-    ? `${overlaps.slice(0, 2).join(" · ")}에서 시작하는 하루`
-    : "차이를 한 코스로 잇는 하루";
+  const context = datePrompt(you, partner, core, dateFlow, drink);
+  const prompt = initialTastePrompt(context, areas);
+  const headline = areas.length ? `${areas[0]}에서 시작하는 하루` : "함께 고르는 다음 데이트";
   const summary = differences.length
     ? `${overlaps.length ? `${overlaps.slice(0, 3).join(", ")}는 같고, ` : ""}${differences[0].bridge}`
     : `${overlaps.slice(0, 3).join(", ") || "고른 기준"}을 그대로 다음 데이트에 쓰면 돼요.`;
@@ -222,11 +310,9 @@ export function compareTasteProfiles(you: TasteProfile, partner: TasteProfile): 
     ...core,
     stayKind: "date",
     prompt,
+    context,
     headline,
-    lines: [
-      prompt,
-      constraints.length ? `${constraints.join(", ")}는 빼요.` : "",
-    ].filter(Boolean),
+    lines: seedDisplayLines(you, partner, core),
   };
   return { headline, summary, overlaps, differences, constraints, datePrompt: prompt, seed };
 }
@@ -243,6 +329,8 @@ export function applyTasteFallback(state: AIPlannerState, seed: TasteDateSeed): 
 }
 
 export function plannerStateFromSeed(seed: TasteDateSeed): AIPlannerState {
+  const context = seed.context ?? seed.prompt;
+  const contextLines = Array.from({ length: Math.ceil(context.length / 2000) }, (_, index) => context.slice(index * 2000, (index + 1) * 2000));
   return applyTasteFallback({
     ...emptyDateBrief(),
     activities: seed.activities,
@@ -252,7 +340,7 @@ export function plannerStateFromSeed(seed: TasteDateSeed): AIPlannerState {
     indoorPlay: seed.indoorPlay,
     stayKind: seed.stayKind,
     nights: 0,
-    conversationNotes: seed.avoidFoods.length ? [`피하기: ${seed.avoidFoods.join(", ")}`] : [],
+    conversationNotes: [...contextLines, ...(seed.avoidFoods.length ? [`피하기: ${seed.avoidFoods.join(", ")}`] : [])],
   }, seed);
 }
 

@@ -14,7 +14,7 @@ export function mergeBoardEdits(base: CorkBoardState, local: CorkBoardState, rem
   function indexed<T extends { id: string }>(items: T[]) { return Object.fromEntries(items.map(item => [item.id, item])); }
   return {
     v: 4,
-    camera: local.camera,
+    camera: JSON.stringify(base.camera) === JSON.stringify(local.camera) ? remote.camera : local.camera,
     poses: merge(base.poses, local.poses, remote.poses),
     strokes: Object.values(merge(indexed(base.strokes), indexed(local.strokes), indexed(remote.strokes))),
     texts: Object.values(merge(indexed(base.texts), indexed(local.texts), indexed(remote.texts))),

@@ -1,0 +1,167 @@
+.toolbar {
+  padding: 10px;
+  gap: 8px;
+}
+
+.toolbar :global(.memory-studio-main) {
+  gap: 10px 16px;
+}
+
+.toolbar :global(.memory-studio-tool),
+.toolbar :global(.memory-studio-action) {
+  min-height: 38px;
+  font-size: .78rem;
+}
+
+.toolbar :global(.memory-studio-tool svg) {
+  width: 16px;
+  height: 16px;
+}
+
+.toolbar :global(.memory-studio-swatches) {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.toolbar :global(.memory-studio-swatches button) {
+  width: 25px;
+  height: 25px;
+}
+
+.toolbar :global(.memory-studio-sizes button) {
+  width: 36px;
+  height: 36px;
+}
+
+.toolbar button:focus-visible,
+.canvas :global(.memory-cork-piece):focus-visible,
+.canvas :global(.memory-wall-text):focus-visible {
+  outline: 2px solid var(--sage-deep);
+  outline-offset: 3px;
+}
+
+.canvas :global(.memory-canvas-viewport):focus-visible {
+  outline: 2px solid var(--sage-deep);
+  outline-offset: 2px;
+}
+
+.canvas :global(.memory-canvas-hint) {
+  max-width: calc(100% - 190px);
+  font: 400 .74rem/1.5 var(--sans);
+  border: 1px solid var(--line);
+  background: rgba(255, 252, 247, .92);
+  backdrop-filter: blur(8px);
+}
+
+.canvas :global(.memory-wall-text.is-mine > span) {
+  font-weight: inherit;
+}
+
+.canvas :global(.memory-wall-text.is-partner > span) {
+  opacity: 1;
+}
+
+.canvas :global(.memory-wall-text [contenteditable]) {
+  max-width: 600px;
+  overflow-wrap: anywhere;
+}
+
+.canvas :global(.memory-cork-rotate) {
+  width: 40px;
+  height: 40px;
+  top: -46px;
+  margin-left: -20px;
+}
+
+.canvas :global(.memory-cork-rotate)::before {
+  top: 39px;
+}
+
+.zoomControls {
+  position: absolute;
+  z-index: 4;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 252, 247, .96);
+  box-shadow: 0 4px 16px rgba(50, 44, 35, .08);
+}
+
+.zoomControls button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sage-deep);
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.zoomControls button:hover {
+  background: rgba(83, 111, 99, .08);
+}
+
+.zoomControls button:disabled {
+  opacity: .35;
+}
+
+.zoomControls output {
+  min-width: 42px;
+  text-align: center;
+  font-size: .72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .toolbar :global(.memory-studio-group) {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .toolbar :global(.memory-studio-tool) {
+    flex-direction: column;
+    height: auto;
+    min-height: 50px;
+    padding: 6px 2px;
+    gap: 4px;
+  }
+
+  .toolbar :global(.memory-studio-actions) {
+    width: 100%;
+    margin: 0;
+    display: flex;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: thin;
+  }
+
+  .toolbar :global(.memory-studio-action) {
+    flex-shrink: 0;
+  }
+
+  .canvas :global(.memory-canvas-viewport) {
+    height: min(65dvh, 600px);
+    min-height: 360px;
+  }
+
+  .canvas :global(.memory-canvas-hint) {
+    left: 10px;
+    right: 10px;
+    bottom: 66px;
+    max-width: none;
+    width: fit-content;
+  }
+
+  .canvas :global(.memory-cork-rotate) {
+    opacity: .85;
+  }
+}

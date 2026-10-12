@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/features/auth/session";
@@ -58,8 +59,12 @@ function refreshMemories() {
 }
 
 function validPhotoPaths(input: CreateMemoryInput | UpdateMemoryInput, coupleId: string) {
+  if ((input.photos !== undefined && !Array.isArray(input.photos))
+    || (input.photo !== undefined && (!input.photo || typeof input.photo !== "object" || Array.isArray(input.photo)))
+    || (input.coverUrl !== undefined && typeof input.coverUrl !== "string")) return false;
   const photos = input.photos?.length ? input.photos : input.photo ? [input.photo] : [];
-  return photos.length <= 12 && photos.every(photo => photo && (!photo.storagePath || (typeof photo.storagePath === "string" && photo.storagePath.startsWith(`${coupleId}/`) && !photo.storagePath.split("/").includes(".."))));
+  return photos.length <= 12 && photos.every(photo => photo && typeof photo === "object" && !Array.isArray(photo)
+    && (!photo.storagePath || (typeof photo.storagePath === "string" && photo.storagePath.startsWith(`${coupleId}/`) && !photo.storagePath.split("/").includes(".."))));
 }
 
 async function signPhotos(supabase: NonNullable<Awaited<ReturnType<typeof createClient>>>, photos: Array<{ id: string; storage_path: string | null }>) {
@@ -152,10 +157,16 @@ const loadMemories = cache(async (photoMode: "all" | "cover" | "none"): Promise<
 
   const photoRows = (photos ?? []) as PhotoRow[];
   const mappedPhotos = photoMode === "cover" ? coverPhotos(photoRows) : photoRows;
+  const byMemory = new Map<string, PhotoRow[]>();
+  mappedPhotos.forEach(photo => {
+    const group = byMemory.get(photo.memory_id) ?? [];
+    group.push(photo);
+    byMemory.set(photo.memory_id, group);
+  });
 
   return {
     persist: true,
-    memories: (data as MemoryRow[]).map(row => toMemory(row, mappedPhotos)),
+    memories: (data as MemoryRow[]).map(row => toMemory(row, byMemory.get(row.id) ?? [])),
   };
 });
 
@@ -193,7 +204,7 @@ export async function listMemories(options?: { photos?: "all" | "cover" | "none"
 export async function readMemoryWorkspace() {
   return withWorkspaceRead(async () => {
     const [memories, places] = await Promise.all([listMemories(), listPlaces()]);
-    return { memories: memories.memories, places: places.places };
+    return { memories: memories.memories, places: places.places, persist: memories.persist };
   });
 }
 
@@ -376,6 +387,7 @@ export async function updateMemory(input: UpdateMemoryInput): Promise<{ memory: 
 }
 
 export async function deleteMemory(memoryId: string): Promise<{ ok: true } | { error: string }> {
+  if (typeof memoryId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(memoryId)) return { error: "삭제할 추억을 다시 선택해 주세요." };
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { error: "로그인이 필요해요." };
   const supabase = await createClient();
@@ -390,16 +402,19 @@ export async function deleteMemory(memoryId: string): Promise<{ ok: true } | { e
   const { data: deleted, error } = await supabase.from("memories").delete().eq("id", memoryId).eq("couple_id", session.coupleId).select("id").maybeSingle();
   if (error) return { error: "추억을 삭제하지 못했어요. 다시 시도해 주세요." };
   if (!deleted) { refreshMemories(); return { ok: true }; }
-  if (paths.length) await supabase.storage.from("memory-photos").remove(paths).catch(() => undefined);
-  await recordCoupleActivity({
-    coupleId: session.coupleId,
-    actorUserId: session.userId,
-    entityType: "memory",
-    entityId: memoryId,
-    action: "MEMORY_DELETED",
-    title: "추억을 정리했어요",
-    detail: memory.title,
-  });
   refreshMemories();
+  after(async () => {
+    const cleanup = paths.length ? supabase.storage.from("memory-photos").remove(paths) : Promise.resolve();
+    const activity = recordCoupleActivity({
+      coupleId: session.coupleId,
+      actorUserId: session.userId,
+      entityType: "memory",
+      entityId: memoryId,
+      action: "MEMORY_DELETED",
+      title: "추억을 정리했어요",
+      detail: memory.title,
+    });
+    await Promise.allSettled([cleanup, activity]);
+  });
   return { ok: true };
 }

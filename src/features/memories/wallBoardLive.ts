@@ -1,7 +1,8 @@
 "use client";
 
 import { subscribeWorkspaceChanges } from "@/features/collaboration/realtimeSync";
-import { parseBoardState, type CorkBoardState } from "./corkLayout";
+import type { CorkBoardState } from "./corkLayout";
+import { parseStoredWallBoard } from "./boardValidation";
 
 export function subscribeMemoryWallBoard(
   coupleId: string,
@@ -17,8 +18,7 @@ export function subscribeMemoryWallBoard(
     if (change.table !== "memory_wall_boards") return;
     const row = change.row;
     if (!row.state || typeof row.updated_at !== "string") { onRefresh?.(); return; }
-    const raw = typeof row.state === "string" ? row.state : JSON.stringify(row.state);
-    const parsed = parseBoardState(raw);
+    const parsed = parseStoredWallBoard(row.state, row.updated_by === null);
     if (!parsed) { onRefresh?.(); return; }
     onRemote(parsed, row.updated_at, typeof row.updated_by === "string" ? row.updated_by : null);
   }, { userId });

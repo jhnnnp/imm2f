@@ -90,10 +90,14 @@ export function createInkStroke(input: {
 export function strokeHits(stroke: InkStroke, x: number, y: number, radius: number) {
   const reach = radius + stroke.size * 0.55;
   const reach2 = reach * reach;
-  return stroke.points.some(([px, py]) => {
-    const dx = px - x;
-    const dy = py - y;
-    return dx * dx + dy * dy <= reach2;
+  return stroke.points.some(([px, py], index) => {
+    const previous = stroke.points[index - 1];
+    if (!previous) return (px - x) ** 2 + (py - y) ** 2 <= reach2;
+    const dx = px - previous[0];
+    const dy = py - previous[1];
+    const length2 = dx * dx + dy * dy;
+    const t = length2 ? Math.max(0, Math.min(1, ((x - previous[0]) * dx + (y - previous[1]) * dy) / length2)) : 0;
+    return (previous[0] + t * dx - x) ** 2 + (previous[1] + t * dy - y) ** 2 <= reach2;
   });
 }
 

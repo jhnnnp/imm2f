@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import { RouteSuspense } from "@/components/layout/RouteSuspense";
 import { MemoryTimeline } from "@/features/memories/components/MemoryTimeline";
-import { listMemories } from "@/features/memories/actions";
-import { listPlaces } from "@/features/places/actions";
+import { readMemoryWorkspace } from "@/features/memories/actions";
 
 export const metadata: Metadata = { title: "Memories" };
 
@@ -15,6 +14,6 @@ export default function MemoriesPage() {
 }
 
 async function MemoriesPageContent() {
-  const [{ memories, persist }, { places }] = await Promise.all([listMemories(), listPlaces()]);
+  const { memories, persist, places } = await readMemoryWorkspace();
   return <MemoryTimeline initialMemories={memories} places={places} persist={persist} />;
 }

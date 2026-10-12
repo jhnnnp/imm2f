@@ -51,6 +51,8 @@ export type TasteCompare = {
 };
 
 export type TasteDateSeed = {
+  /** Full saved conditions; the first chat message stays within its input limit. */
+  context?: string;
   areas: string[];
   activities: DateActivityId[];
   cuisine: DateCuisineChoice;
