@@ -12,6 +12,7 @@ import type { SemanticPlanningHints } from "./semanticPlanningHints";
 import { isSessionEvidenceStale, type SessionCandidateContext,
   type SessionCandidateRecord } from "./sessionCandidates";
 import type { DateExecutionMode } from "./dateVenueInspection";
+import { reasonFromDateFacts, type GroundedDateFact } from "@/lib/openai/groundedDateReasoning";
 
 export const PLACE_COMPARISON_CRITERIA = ["distance", "price", "atmosphere", "crowd", "noise",
   "menu", "opening_hours", "parking", "fit_for_course", "general"] as const;
@@ -41,9 +42,21 @@ const fresh = (value: string, now: string, days: number) => {
   return Number.isFinite(age) && age >= 0 && age <= days * 86_400_000;
 };
 const safeUrl = (value: string | null | undefined) => {
-  try { return value && ["http:", "https:"].includes(new URL(value).protocol) ? value : undefined; }
+  try {
+    if (!value) return undefined;
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? value : undefined;
+  }
   catch { return undefined; }
 };
+const criterionLabels: Record<PlaceComparisonCriterion, string> = {
+  distance: "이동거리", price: "가격", atmosphere: "분위기", crowd: "혼잡도", noise: "소음",
+  menu: "메뉴", opening_hours: "영업시간", parking: "주차", fit_for_course: "코스 적합성", general: "일반",
+};
+const criterionEvidenceCue = (criterion: PlaceComparisonCriterion) => criterion === "noise"
+  ? /(조용|시끄러|시끄럽|소음|대화)/
+  : criterion === "crowd" ? /(붐비|혼잡|한적|사람\s*(?:많|적))/
+    : criterion === "atmosphere" ? /(분위기|아늑|로맨틱|감성)/ : /\S/;
 
 export function comparisonCriteria(message: string): PlaceComparisonCriterion[] {
   const cues: Array<[PlaceComparisonCriterion, RegExp]> = [
@@ -99,10 +112,14 @@ function evidenceFor(place: VerifiedPlace, criterion: PlaceComparisonCriterion, 
   const attribute = criterion === "menu" ? "menu"
     : ["noise", "crowd", "atmosphere"].includes(criterion) ? "space" : null;
   if (!attribute) return null;
-  const current = place.record?.evidence.filter(fact => fact.attribute === attribute
-    && fact.verification === "source_checked" && fact.excerpt && fresh(fact.retrievedAt, now, 30)) ?? [];
+  const relevant = (fact: DateEvidenceFact) => fact.venueId === place.candidateId
+    && fact.attribute === attribute && fact.verification === "source_checked"
+    && fact.confidence >= 0.6 && safeUrl(fact.sourceUrl) && fact.excerpt
+    && criterionEvidenceCue(criterion).test(fact.excerpt);
+  const current = place.record?.evidence.filter(fact => relevant(fact)
+    && fresh(fact.retrievedAt, now, 30)) ?? [];
   const previous = place.session?.evidence.filter(fact => fact.attribute === attribute
-    && fact.verification === "source_checked" && fact.excerpt
+    && relevant(fact)
     && !isSessionEvidenceStale(fact, now)) ?? [];
   return [...current, ...previous][0] ?? null;
 }
@@ -138,13 +155,10 @@ function factFor(place: VerifiedPlace, criterion: PlaceComparisonCriterion,
   if (criterion === "parking" || criterion === "general") return null;
   const evidence = evidenceFor(place, criterion, now);
   if (!evidence?.excerpt) return null;
-  const excerpt = evidence.excerpt.slice(0, 160);
-  const cue = criterion === "noise" ? /(조용|시끄러|시끄럽|소음|대화)/
-    : criterion === "crowd" ? /(붐비|혼잡|한적|사람\s*(?:많|적))/
-      : criterion === "atmosphere" ? /(분위기|아늑|로맨틱|감성)/ : /\S/;
-  const match = excerpt.match(cue);
-  if (!match) return null;
-  return { value: criterion === "menu" ? excerpt : `자료에 '${match[0]}' 언급`,
+  // Keep the full statement: extracting only "조용" from "조용하지 않아요"
+  // reverses the source's meaning and destroys useful comparative context.
+  const excerpt = evidence.excerpt.slice(0, 280);
+  return { value: criterion === "menu" ? excerpt : `확인된 자료: ${excerpt}`,
     source: evidence.verification, sourceUrl: safeUrl(evidence.sourceUrl), evidence: true };
 }
 
@@ -169,7 +183,8 @@ export async function executeLimitedComparison(input: { plan: DateExecutionPlan;
   executionMode: DateExecutionMode; currentPlan: AIPlannerReply | null;
   visiblePlaces: AIChatStop[]; sessionCandidates?: SessionCandidateContext | null;
   candidateRecords?: DateCandidateRecord[]; state: AIPlannerState; userMessage: string;
-  semanticHints?: SemanticPlanningHints; now?: string }): Promise<{ result: PlaceComparisonExecutionResult;
+  semanticHints?: SemanticPlanningHints; now?: string },
+  reason: typeof reasonFromDateFacts = reasonFromDateFacts): Promise<{ result: PlaceComparisonExecutionResult;
     observation: DateObservation }> {
   const base: PlaceComparisonExecutionResult = { taskId: input.task.id, taskType: "compare_places",
     status: "skipped", source: "verified_candidate_facts", candidateIds: [],
@@ -215,25 +230,42 @@ export async function executeLimitedComparison(input: { plan: DateExecutionPlan;
     const unknownFactTypes: PlaceComparisonCriterion[] = [];
     const lines: string[] = [];
     const sources: Array<{ label: string; url: string }> = [];
+    const groundedFacts: GroundedDateFact[] = [];
+    const supportById = new Map<string, ComparisonFact>();
     let evidenceCount = 0;
     for (const criterion of considered) {
       const facts = places.map(place => factFor(place, criterion, input.state, now));
-      if (facts.some(fact => !fact)) { unknownFactTypes.push(criterion); continue; }
-      comparedFactTypes.push(criterion);
-      for (const fact of facts) if (fact?.evidence) {
-        evidenceCount += 1;
-        if (fact.sourceUrl) sources.push({ label: "장소 비교 근거", url: fact.sourceUrl });
-      }
-      const label = { distance: "이동거리", price: "가격", atmosphere: "분위기", crowd: "혼잡도",
-        noise: "소음", menu: "메뉴", opening_hours: "영업시간", parking: "주차",
-        fit_for_course: "코스 적합성", general: "일반" }[criterion];
-      lines.push(`${label}: ${places.map((place, index) => `${place.name} ${facts[index]!.value}`).join(" / ")}`);
+      if (facts.some(fact => !fact)) unknownFactTypes.push(criterion);
+      else comparedFactTypes.push(criterion);
+      const label = criterionLabels[criterion];
+      facts.forEach((fact, index) => {
+        if (!fact) return;
+        const id = `${criterion}-${index}`;
+        groundedFacts.push({ id, subject: places[index].name, summary: `${label}: ${fact.value}` });
+        supportById.set(id, fact);
+        if (fact.evidence) {
+          evidenceCount += 1;
+          if (fact.sourceUrl) sources.push({ label: "장소 비교 근거", url: fact.sourceUrl });
+        }
+      });
+      if (facts.some(Boolean)) lines.push(`${label}: ${places.map((place, index) =>
+        `${place.name} ${facts[index]?.value ?? "아직 확인되지 않았어요"}`).join(" / ")}`);
     }
     if (!lines.length) lines.push(`${places.map(place => place.name).join("와 ")}의 요청하신 속성을 비교할 근거가 아직 부족해요.`);
-    if (unknownFactTypes.length) lines.push(`확인되지 않은 항목: ${unknownFactTypes.join(", ")}.`);
+    if (unknownFactTypes.length) lines.push(`확인되지 않은 항목: ${unknownFactTypes.map(type => criterionLabels[type]).join(", ")}.`);
+    const narrative = groundedFacts.length ? await reason({ purpose: "comparison", message: input.userMessage,
+      subjects: places.map(place => place.name), facts: groundedFacts,
+      unknowns: unknownFactTypes.map(type => criterionLabels[type]),
+      preferences: { constraints: request.applicableConstraints, semanticHints: request.semanticHints },
+    }).catch(() => null) : null;
+    const cited = narrative?.usedFactIds.map(id => supportById.get(id)).filter((fact): fact is ComparisonFact =>
+      Boolean(fact?.evidence)) ?? [];
     return finish({ ...base, status: "success", request, candidateIds: request.candidateIds,
-      comparedFactTypes, unknownFactTypes, evidenceCount, lines,
-      sources: [...new Map(sources.map(source => [source.url, source])).values()] });
+      comparedFactTypes, unknownFactTypes, evidenceCount: narrative ? cited.length : evidenceCount,
+      lines: narrative ? [narrative.text] : lines,
+      sources: [...new Map((narrative ? cited.filter(fact => fact.sourceUrl)
+        .map(fact => ({ label: "장소 비교 근거", url: fact.sourceUrl! })) : sources)
+        .map(source => [source.url, source])).values()] });
   } catch {
     return finish({ ...base, status: "failed", request, candidateIds: request.candidateIds,
       failureCode: "comparison_failed" });

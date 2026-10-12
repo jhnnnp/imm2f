@@ -10,6 +10,7 @@ import type { SemanticPlanningHints } from "./semanticPlanningHints";
 import type { SessionCandidateRecord } from "./sessionCandidates";
 import type { DateTurnInterpreterMode } from "@/lib/openai/dateTurnShadowRunner";
 import type { DateExecutionMode } from "./dateVenueInspection";
+import { reasonFromDateFacts, type GroundedDateNarrative } from "@/lib/openai/groundedDateReasoning";
 
 export type ExplanationTargetKind = "entire_plan" | "specific_place" | "specific_plan_item"
   | "ordering" | "timing" | "recommendation_choice";
@@ -48,13 +49,13 @@ type Input = { plan: DateExecutionPlan | null; route: ChatRoute | null; primary:
   executionMode: DateExecutionMode; userMessage: string;
   context?: Pick<DateContext, "hardConstraints" | "candidates" | "sessionCandidates"> | null;
   candidateRecords?: DateCandidateRecord[];
-  semanticHints?: SemanticPlanningHints };
+  semanticHints?: SemanticPlanningHints; now?: string };
 const MIN_CONFIDENCE = 0.75;
 const compact = (value: string) => value.normalize("NFKC").replace(/\s/g, "").toLowerCase();
 const direct = (value: string, cue: RegExp) => cue.test(value);
 const safeHttpUrl = (value: string | null) => {
   if (!value) return false;
-  try { return ["http:", "https:"].includes(new URL(value).protocol); }
+  try { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password; }
   catch { return false; }
 };
 const explanationClause = (message: string) => {
@@ -117,15 +118,21 @@ function coveredByLegacyQuestion(input: Input, target: RecommendationExplanation
 /** Read only the selected plan and verified candidate observations. */
 export function buildRecommendationExplanationContext(input: { plan: AIPlannerReply;
   target: RecommendationExplanationTarget; records?: DateCandidateRecord[];
-  hardConstraints?: DateContext["hardConstraints"]; semanticHints?: SemanticPlanningHints }): RecommendationExplanationContext {
+  hardConstraints?: DateContext["hardConstraints"]; semanticHints?: SemanticPlanningHints;
+  now?: string }): RecommendationExplanationContext {
   const { plan, target } = input;
   const selected = target.venueId ? plan.recommendations.filter(place => place.placeId === target.venueId)
     : plan.recommendations;
   const records = (input.records ?? []).filter(record => !record.rejectedReasons.length
     && selected.some(place => place.id === record.id && place.name === record.venue.name));
+  const now = Date.parse(input.now ?? new Date().toISOString());
   const evidence = records.flatMap(record => record.evidence.filter(fact =>
-    (fact.verification === "source_checked" || fact.verification === "provider")
-    && safeHttpUrl(fact.sourceUrl) && fact.confidence >= 0.6));
+    fact.venueId === record.id
+    && (fact.verification === "source_checked" || fact.verification === "provider")
+    && safeHttpUrl(fact.sourceUrl) && fact.confidence >= 0.6
+    && now - Date.parse(fact.retrievedAt) >= 0
+    && now - Date.parse(fact.retrievedAt) <= (["hours", "price", "event", "reservation"].includes(fact.attribute)
+      ? 86_400_000 : 30 * 86_400_000)));
   const candidateFacts: RecommendationExplanationFact[] = selected.map(place => ({ type: "candidate_fact",
     summary: `${place.name}: ${place.activitySlot === "cafe" ? "카페" : place.activitySlot === "meal" ? "식사" : place.category} 역할`,
     source: `selected:${place.placeId}` }));
@@ -153,11 +160,16 @@ export function buildRecommendationExplanationContext(input: { plan: AIPlannerRe
   const semantic: RecommendationExplanationFact[] = hints.pace === "relaxed" && plan.items.length <= 3
     ? [{ type: "semantic_preference", summary: `현재 턴의 여유로운 구성 요청과 ${plan.items.length}곳 구성`,
       source: "approved_semantic_hint" }] : [];
-  return { target, selectedPlanItems: plan.items.map(({ id, placeId, placeName, startTime,
+  const orderedItems = [...plan.items].sort((a, b) => a.dayIndex - b.dayIndex || a.order - b.order);
+  const ordering: RecommendationExplanationFact[] = orderedItems.length
+    ? [{ type: "schedule", summary: `현재 방문 순서: ${orderedItems.map(item => `${item.placeName}(${item.startTime})`).join(" → ")}`,
+      source: "current_plan_order" }] : [];
+  return { target, selectedPlanItems: orderedItems
+    .map(({ id, placeId, placeName, startTime,
     durationMinutes, dayIndex, order }) => ({ id, placeId, placeName, startTime, durationMinutes, dayIndex, order })),
   relevantCandidateFacts: candidateFacts, relevantEvidence: evidence, applicableHardConstraints: hard,
   applicableSemanticHints: hints, routeFacts: route, scheduleFacts: schedule, evaluationFacts: evaluation,
-  facts: [...hard, ...semantic, ...candidateFacts, ...route, ...schedule, ...evaluation] };
+  facts: [...hard, ...semantic, ...candidateFacts, ...route, ...schedule, ...evaluation, ...ordering] };
 }
 
 const rejectionReason: Record<string, string> = { excluded_place: "제외 요청한 장소예요",
@@ -209,7 +221,7 @@ export function renderRecommendationExplanation(context: RecommendationExplanati
 }
 
 export async function executeLimitedExplanation(input: Input,
-  render: typeof renderRecommendationExplanation = renderRecommendationExplanation): Promise<{
+  render?: (context: RecommendationExplanationContext) => string | Promise<string>): Promise<{
     result: ExplanationTaskExecutionResult | null; observation: DateObservation | null }> {
   const task = input.plan?.tasks.find(row => row.type === "explain_recommendation");
   if (!task) return { result: null, observation: null };
@@ -278,8 +290,16 @@ export async function executeLimitedExplanation(input: Input,
     const context = buildRecommendationExplanationContext({ plan, target,
       records: input.candidateRecords ?? input.context?.candidates.records,
       hardConstraints: input.context?.hardConstraints,
-      semanticHints: input.semanticHints });
-    const explanation = render(context).trim();
+      semanticHints: input.semanticHints, now: input.now });
+    let narrative: GroundedDateNarrative | null = null;
+    if (!render) {
+      narrative = await reasonFromDateFacts({ purpose: "explanation", message: input.userMessage,
+        subjects: context.selectedPlanItems.filter(item => !target.venueId || item.placeId === target.venueId)
+          .map(item => item.placeName),
+        facts: context.facts.map((fact, index) => ({ id: `fact-${index}`, summary: fact.summary })),
+        preferences: context.applicableSemanticHints }).catch(() => null);
+    }
+    const explanation = (narrative?.text ?? await (render ?? renderRecommendationExplanation)(context)).trim();
     if (!explanation) return finish({ ...base, status: "failed", target, failureCode: "explanation_failed" });
     const used: ExplanationFactType[] = [];
     if (target.itemId) used.push("candidate_fact");
@@ -290,10 +310,16 @@ export async function executeLimitedExplanation(input: Input,
       used.push("hard_constraint");
     if (target.kind === "entire_plan" && context.evaluationFacts.length) used.push("course_evaluation");
     if (context.facts.some(fact => fact.type === "semantic_preference")) used.push("semantic_preference");
-    const cited = target.itemId && context.relevantEvidence[0]?.excerpt ? context.relevantEvidence[0] : null;
+    const usedFactIds = new Set(narrative?.usedFactIds);
+    const usedFacts = narrative ? context.facts.filter((_, index) => usedFactIds.has(`fact-${index}`)) : [];
+    const cited = narrative ? context.relevantEvidence.filter(evidence => usedFacts.some(fact =>
+      fact.evidenceId === `${evidence.venueId}:${evidence.attribute}:${evidence.retrievedAt}`))
+      : target.itemId && context.relevantEvidence[0]?.excerpt ? [context.relevantEvidence[0]] : [];
     return finish({ ...base, status: "success", target, explanation,
-      ...(cited?.sourceUrl ? { sources: [{ label: "장소 근거", url: cited.sourceUrl }] } : {}),
-      factTypesUsed: used, evidenceCount: cited ? 1 : 0 });
+      ...(cited.length ? { sources: [...new Map(cited.filter(fact => fact.sourceUrl)
+        .map(fact => [fact.sourceUrl!, { label: "장소 근거", url: fact.sourceUrl! }])).values()] } : {}),
+      factTypesUsed: narrative ? [...new Set(usedFacts.map(fact => fact.type))] : used,
+      evidenceCount: cited.length });
   } catch {
     return finish({ ...base, status: "failed", target, failureCode: "explanation_failed" });
   }

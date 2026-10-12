@@ -475,7 +475,7 @@ export function MemoryTimeline({
       pendingRef.current = false;
       setPending(false);
       setAwaitingEdit(Boolean(result.keepUploadedPhotos));
-      setEditConflict(Boolean(result.conflict));
+      setEditConflict("conflict" in result && Boolean(result.conflict));
       if (!result.keepUploadedPhotos) editAttemptRef.current = null;
       setError(result.error);
       retrySync();

@@ -3,6 +3,13 @@ import { getOpenAiModel, getOpenAiSearchModel, normalizeOpenAiModel } from "./en
 
 afterEach(() => vi.unstubAllEnvs());
 
+it("keeps bounded public-fact lookup on its separate default when the reasoning model changes", () => {
+  vi.stubEnv("OPENAI_MODEL", "gpt-6.1-sol");
+  vi.stubEnv("OPENAI_SEARCH_MODEL", "");
+  expect(getOpenAiModel()).toBe("gpt-6.1-sol");
+  expect(getOpenAiSearchModel()).toBe("gpt-4.1-mini");
+});
+
 it("converts display labels to API IDs while preserving model choice", () => {
   expect(normalizeOpenAiModel(" gpt-5.6 Luna ")).toBe("gpt-5.6-luna");
   expect(normalizeOpenAiModel("GPT-6 Sol")).toBe("gpt-6-sol");

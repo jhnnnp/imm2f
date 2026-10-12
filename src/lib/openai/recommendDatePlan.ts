@@ -29,6 +29,7 @@ import { itineraryOrderMatchesItems } from "@/features/trip/components/dayRoute"
 import type { ExperiencePlan } from "@/features/ai/experiencePlan";
 import type { ResearchPlan } from "@/features/ai/researchPlan";
 import type { CandidateExplorationPreferences } from "@/features/ai/candidateExploration";
+import { groundedRecommendationReason, recommendationEvidence, recommendationIntro } from "./recommendationReason";
 export { routeLegsFitSchedule } from "@/features/ai/dateVerifier";
 
 function hopBands(candidate: DiscoverCandidate, pool: DiscoverCandidate[]) {
@@ -154,7 +155,12 @@ function buildReply(
         && extractCuisine((state.userRequests ?? []).join(" ")) === state.cuisine
         && matchesCuisine(candidate, state.cuisine)
         ? `원하신 ${state.cuisine} 식사에 맞는 곳이에요. ` : "";
+    const reasonFacts = recommendationEvidence(candidate, { saved: prefers, bothWant });
+    const modelReason = source === "openai" ? groundedRecommendationReason(row.reasons?.[0], row.reasonEvidenceIds, reasonFacts, 180,
+      candidates.map(place => place.name)) : "";
+    const reasonSource = modelReason ? reasonFacts.find(fact => row.reasonEvidenceIds?.includes(fact.id) && fact.url)?.url : undefined;
     const reason = event ? `KOPIS에는 ${event.dateYmd.slice(4, 6)}월 ${event.dateYmd.slice(6, 8)}일 ${event.showtimes.join("·")}에 ‘${event.title}’ 공연이 등록돼 있어요. 휴연·좌석·예매 가능 여부는 다시 확인해 주세요.`
+      : modelReason ? modelReason
       : evidence ? `${fit}${evidence.verification === "search_report" ? "온라인 자료 참고: " : ""}${conciseVenueReason(evidence.text)}`
       : (bothWant ? "두 분이 가고 싶다고 저장한 장소예요."
         : prefers ? "저장해 둔 장소예요."
@@ -179,7 +185,7 @@ function buildReply(
       rating: candidate.rating,
       ratingCount: candidate.ratingCount,
       dishes: candidate.dishes,
-      factSourceUrl: event?.sourceUrl || evidence?.url || candidate.factSourceUrl,
+      factSourceUrl: event?.sourceUrl || reasonSource || evidence?.url || candidate.factSourceUrl,
     });
     items.push({
       id: `ai-recommend-${candidate.externalSource}-${candidate.externalPlaceId}`,
@@ -266,7 +272,9 @@ const DESIGN_PROMPT = [
   "If experiencePlan, researchNeeds or explorationPreferences are supplied, use them to design the trip's day rhythm, search-supported experiences and pace. Their interests and research priorities are soft planning context; only dateIntent.hardConstraints, selectedAnchorIds and explicit keepPlaces are mandatory. Do not claim an unsupported venue quality merely because it appears in a preference.",
   "Design the course yourself from candidates and return exact provider IDs. The validator checks venue identity, day coverage, schedule, route and user anchors after your proposal. Search-linked observations have not been independently fact-checked.",
   "planningPlaybook is curated advice on how to compare experiences. It is not evidence that any named venue is open, beautiful, tasty, or holding an event. User constraints and provider-verified facts always take precedence.",
-  'Schema: {"courses":[{"theme":"short Korean course concept","selected":[{"id":"candidate ID","day_index":0,"duration_minutes":60}]}]}. No prose outside JSON.',
+  "Write reason for each stop as a concise useful Korean explanation of WHY you selected it for this particular couple and the experience it contributes, in at most 170 characters. Infer roles from provider category/location and user context; do not merely repeat category or copy evidence. Cite 1-4 evidenceIds from that exact candidate's recommendationEvidence. Only cited branch-specific evidence can support factual claims about atmosphere, menus, crowds or facilities. Attribute search_report observations as 자료/소개/후기; they are not independently verified. Avoid exact travel-time, reservation, allergy-safety or guaranteed-open claims. Keep reasons about selection and experience, so validated time assignments do not invalidate them.",
+  "Write intro as a natural Korean reply to the latest request in at most 240 characters: explain the course concept and why its experience flow suits this user. Talk about your planning choice; keep specific venue factual claims in their cited reason fields. Do not claim exact times or route lengths, since the app validates and schedules them after selection.",
+  'Schema: {"courses":[{"theme":"short Korean course concept explaining the overall experience","intro":"natural Korean reply explaining the course choices","selected":[{"id":"candidate ID","day_index":0,"duration_minutes":60,"reason":"Korean selection judgment grounded in this candidate and user context","evidenceIds":["provider:category"]}]}]}. No prose outside JSON.',
 ].join(" ");
 
 const SEMANTIC_COURSE_PROMPT = [
@@ -341,6 +349,9 @@ export async function recommendDatePlanWithOpenAi(input: {
     defaultDurationMinutes: defaultDuration(candidate, input.state.pace),
     knownMenu: candidate.factSourceUrl ? candidate.dishes : undefined,
     sourceUrl: candidate.factSourceUrl,
+    recommendationEvidence: recommendationEvidence(candidate, {
+      saved: saved.has(candidate.name), bothWant: bothWantNames(input.saved).has(candidate.name),
+    }),
     neighbors: hopBands(candidate, pool),
   }));
   const payload = {
@@ -410,10 +421,10 @@ export async function recommendDatePlanWithOpenAi(input: {
         messages: courseProposalMessages({ ...payload, candidates: serializeCatalog(researchedPool),
           planningPlaybook: [...selection, ...editing, ...response] }, input.semanticPlanningHints),
         jsonSchema: courseProposalSchema(researchedPool.map(dateCandidateKey), days, anchorIds.length),
-        reasoningEffort: "low", temperature: 0.2,
+        reasoningEffort: "medium", temperature: 0.2,
         maxTokens: proposalTokens,
         signal: runtime.signal, retryOnTruncation: false,
-        timeoutMs: Math.min(runtime.remainingMs(), isTravelPlan(input.state) ? 22000 + Math.max(0, days - 3) * 2500 : 16000),
+        timeoutMs: Math.min(runtime.remainingMs(), isTravelPlan(input.state) ? 35000 : 30000),
       });
     })().then(value => { modelDoneAt = performance.now(); return value; })
     : Promise.resolve(null);
@@ -469,8 +480,8 @@ export async function recommendDatePlanWithOpenAi(input: {
           structureProblems: evaluated.length ? [] : [...rejectionReasons],
           instruction: "Repair hard failures only. Every returned courses entry must contain the entire trip, every requiredDayIndex and every selectedAnchorId exactly once. Never distribute days or selected IDs across separate alternatives. If affectedDays is nonempty, preserve lockedDayRows exactly, including order and duration; change only affected days. Group stops in the same named complex on one day. Return up to proposalCount complete itineraries." }, input.semanticPlanningHints),
         jsonSchema: courseProposalSchema(grounded.map(dateCandidateKey), days, anchorIds.length),
-        reasoningEffort: "low", temperature: 0.2, maxTokens: proposalTokens,
-        signal: runtime.signal, retryOnTruncation: false, timeoutMs: Math.min(15000, runtime.remainingMs()),
+        reasoningEffort: "medium", temperature: 0.2, maxTokens: proposalTokens,
+        signal: runtime.signal, retryOnTruncation: false, timeoutMs: Math.min(25000, runtime.remainingMs()),
       });
       evaluated = rank(repaired?.courses).filter(course => !base || !affectedDays.size
         || preservesUnchangedDays(base.rows, course.rows, affectedDays));
@@ -533,8 +544,8 @@ export async function recommendDatePlanWithOpenAi(input: {
           lockedDayRows: base.course.rows.filter(row => !affectedDays.has(row.day_index ?? 0)),
           instruction: "The route verifier rejected the checked course. Repair only affectedDays; keep lockedDayRows exactly unchanged and keep every selectedAnchorId. Return up to proposalCount complete courses covering every requiredDayIndex." }, input.semanticPlanningHints),
         jsonSchema: courseProposalSchema(grounded.map(dateCandidateKey), days, anchorIds.length),
-        reasoningEffort: "low", temperature: 0.2, maxTokens: proposalTokens,
-        signal: runtime.signal, retryOnTruncation: false, timeoutMs: Math.min(15000, runtime.remainingMs()),
+        reasoningEffort: "medium", temperature: 0.2, maxTokens: proposalTokens,
+        signal: runtime.signal, retryOnTruncation: false, timeoutMs: Math.min(25000, runtime.remainingMs()),
       });
       const repairedOptions = rank(repaired?.courses).filter(course => !blocksCourse(course.issues, "model_proposal")
         && (!affectedDays.size || preservesUnchangedDays(base.course.rows, course.rows, affectedDays)))
@@ -579,10 +590,13 @@ export async function recommendDatePlanWithOpenAi(input: {
     if (isTravelPlan(input.state) && candidate?.category === "nature") return "자연·산책";
     return activityNames[place.activitySlot ?? ""] ?? place.category;
   });
+  const modelIntro = !degraded && winner?.intro ? recommendationIntro(winner.intro,
+    grounded.filter(candidate => rows.some(row => row.id === dateCandidateKey(candidate))), 260, `${days} ${days - 1}`) : "";
   const opening = !reply.items.length
     ? observedIssueCodes.has("performance_time_unverified")
       ? "공연의 방문 날짜와 회차를 확인해야 일정을 정할 수 있어요. 방문 날짜를 알려주시거나 공연 장소를 바꿔 주세요."
       : "조건과 장소 근거를 함께 만족하는 코스를 아직 찾지 못했어요."
+    : modelIntro ? modelIntro
     : days > 1
     ? `${input.condition.region} ${days - 1}박 ${days}일에 맞춰 ${reply.items.length}곳을 날짜별로 묶었어요.`
     : actualRoles.length > 1

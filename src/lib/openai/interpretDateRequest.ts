@@ -36,6 +36,10 @@ export type IntentPayload = {
   objective?: string;
   preferences?: Partial<NonNullable<AIPlannerState["preferences"]>>;
   inferredPreferences?: NonNullable<AIPlannerState["inferredPreferences"]>;
+  /** Previously recorded soft cues explicitly superseded by this turn. */
+  removeInferredPreferences?: string[];
+  /** Exact active mood labels explicitly rejected by this turn. */
+  removePreferenceVibes?: string[];
   intent?: AIPlannerState["intent"];
   addActivities?: string[];
   removeActivities?: string[];
@@ -76,6 +80,8 @@ export const dateIntentPayloadSchema = strictObject({
     foodImportance: preferenceScore, walkingTolerance: preferenceScore }),
   inferredPreferences: { type: "array", items: strictObject({ value: { type: "string" },
     evidence: { type: "string" }, confidence: { type: "number", minimum: 0, maximum: 1 } }) },
+  removeInferredPreferences: strings,
+  removePreferenceVibes: strings,
   addActivities: strings, removeActivities: strings, addAreas: strings, removeAreas: strings,
   addPlaces: strings, removePlaces: strings,
   addStop: { type: "boolean" },
@@ -108,9 +114,13 @@ export function validateIntentPayload(value: unknown): IntentPayload | null {
   }
   if (raw.inferredPreferences != null) {
     if (!Array.isArray(raw.inferredPreferences)) return null;
+    if (!raw.inferredPreferences.every(item => item && typeof item === "object" && !Array.isArray(item)
+      && typeof item.value === "string" && typeof item.evidence === "string"
+      && typeof item.confidence === "number" && Number.isFinite(item.confidence)
+      && item.confidence >= 0 && item.confidence <= 1)) return null;
     result.inferredPreferences = raw.inferredPreferences;
   }
-  for (const key of ["addActivities", "removeActivities", "addAreas", "removeAreas", "addPlaces", "removePlaces"]) {
+  for (const key of ["addActivities", "removeActivities", "addAreas", "removeAreas", "addPlaces", "removePlaces", "removeInferredPreferences", "removePreferenceVibes"]) {
     if (raw[key] == null) continue;
     if (!Array.isArray(raw[key]) || !raw[key].every(item => typeof item === "string")) return null;
     result[key] = raw[key].map(item => item.trim()).filter(Boolean);
@@ -219,6 +229,9 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
     : 0;
   const areaScope = asAreaScope(patch.areaScope) ?? (reset ? null : base.areaScope);
   const located = withAreas({ ...base, areaScope }, areas);
+  const existingVibes = base.preferences?.vibe ?? [];
+  const removedVibes = new Set((patch.removePreferenceVibes ?? []).filter(vibe => existingVibes.includes(vibe)));
+  const nextVibes = patch.preferences?.vibe?.length ? patch.preferences.vibe : (reset ? [] : existingVibes);
   return {
     objective: patch.objective?.trim() || (reset ? undefined : base.objective),
     preferences: {
@@ -226,9 +239,15 @@ export function mergeDateState(previous: AIPlannerState | undefined, patch: Inte
       ...patch.preferences,
       // Structured output uses [] to say this turn contains no new mood.
       // A short follow-up must not erase the earlier conversation's mood.
-      vibe: patch.preferences?.vibe?.length ? patch.preferences.vibe : (reset ? [] : base.preferences?.vibe ?? []),
+      // A semantic correction can remove even the final mood, while [] alone
+      // still means this follow-up introduced no new mood information.
+      vibe: nextVibes.filter(vibe => !removedVibes.has(vibe)),
     },
-    inferredPreferences: patch.inferredPreferences ?? (reset ? [] : base.inferredPreferences ?? []),
+    // An empty structured extraction means this turn adds no preference; it
+    // must not erase grounded cues collected in earlier turns.
+    inferredPreferences: [...(reset ? [] : (base.inferredPreferences ?? [])
+      .filter(item => !patch.removeInferredPreferences?.includes(item.value))), ...(patch.inferredPreferences ?? [])]
+      .filter((item, index, all) => all.findLastIndex(other => other.value === item.value) === index).slice(-12),
     memorySuggestions: base.memorySuggestions,
     explicitPlanningSelections: reset ? undefined : base.explicitPlanningSelections,
     // Rebuilding the course is not permission to forget a food restriction.
@@ -282,6 +301,26 @@ function usableReply(value: unknown) {
   return text.slice(0, 500);
 }
 
+/** Local fallback cues must not override semantic negation in the model turn. */
+function affirmativeFallbackUnderstanding(message: string) {
+  const first = deriveDateUnderstanding(message);
+  let positiveText = message;
+  const rejectedVibePatterns: RegExp[] = [];
+  for (const cue of first.inferredPreferences) {
+    const at = message.indexOf(cue.evidence);
+    const tail = message.slice(at + cue.evidence.length)
+      .split(/[,.;!?。\n]|는데|지만|(?<!말)고|그리고|하지만|그러나|그래서/, 1)[0];
+    if (/^.{0,20}(?:않|아니|말고|싫|별로|보다|원하지|필요\s*없|재미\s*없|지루|심심)/.test(tail)) {
+      positiveText = positiveText.replaceAll(cue.evidence, "");
+      if (/사진/.test(cue.value)) rejectedVibePatterns.push(/사진|포토|인생샷/);
+      if (/붐비지/.test(cue.value) && /^.{0,20}(?:말고|싫|원하지|필요\s*없)/.test(tail)) {
+        rejectedVibePatterns.push(/조용|한적|차분|붐비지/);
+      }
+    }
+  }
+  return { ...deriveDateUnderstanding(positiveText), rejectedVibePatterns };
+}
+
 export function applyInterpretPatch(input: {
   message: string;
   previousState?: AIPlannerState;
@@ -292,9 +331,9 @@ export function applyInterpretPatch(input: {
   const compact = (value: string) => value.normalize("NFKC").replace(/\s/g, "").toLowerCase();
   const written = compact(input.message);
   const groundedPlace = (place: string) => place.length >= 2 && written.includes(compact(place));
-  const current = new Set((input.currentPlaces ?? []).map(compact));
+  const current = new Set([...(input.currentPlaces ?? []), ...(input.previousState?.requiredPlaces ?? [])].map(compact));
   const explicitStay = extractStay(input.message);
-  const understanding = deriveDateUnderstanding(input.message);
+  const understanding = affirmativeFallbackUnderstanding(input.message);
   const unspecifiedTrip = /여행|놀러\s*가|휴가/.test(input.message) && !explicitStay
     && !input.previousState?.stayKind;
   const inferred = [...understanding.inferredPreferences,
@@ -309,6 +348,11 @@ export function applyInterpretPatch(input: {
     objective: input.patch.objective || understanding.objective,
     preferences: { ...input.patch.preferences, ...understanding.preferences,
       vibe: [...new Set([...(input.patch.preferences?.vibe ?? []), ...(understanding.preferences.vibe ?? [])])] },
+    removePreferenceVibes: uniqueStrings([...(input.patch.removePreferenceVibes ?? []),
+      ...(input.previousState?.preferences?.vibe ?? []).filter(vibe => understanding.rejectedVibePatterns.some(pattern => pattern.test(vibe)))], Infinity),
+    removeInferredPreferences: uniqueStrings([...(input.patch.removeInferredPreferences ?? []),
+      ...(input.previousState?.inferredPreferences ?? []).filter(item => understanding.rejectedVibePatterns.some(pattern => pattern.test(item.value)))
+        .map(item => item.value)], Infinity),
     // A trip aspiration does not establish whether it lasts a day or a night.
     // Keep the model's semantic intent, but require explicit evidence for duration.
     stayKind: explicitStay?.stayKind ?? (unspecifiedTrip ? null : input.previousState?.stayKind ?? null),
@@ -326,7 +370,7 @@ export function applyInterpretPatch(input: {
     // an open dinner request into an unrequested Korean/Japanese/etc. meal.
     cuisine: extractCuisine(input.message) ?? input.previousState?.cuisine ?? null,
     addPlaces: input.patch.addPlaces?.filter(groundedPlace),
-    removePlaces: input.patch.removePlaces?.filter(place => groundedPlace(place) || !input.currentPlaces || current.has(compact(place))),
+    removePlaces: input.patch.removePlaces?.filter(place => groundedPlace(place) || current.has(compact(place))),
     conversationNote: input.message,
     inferredPreferences: inferred.length ? inferred : undefined,
   };
@@ -381,7 +425,8 @@ export async function interpretDateRequest(input: {
       jsonSchema: { name: "date_intent_patch_v1", strict: true, schema: dateIntentPayloadSchema },
       temperature: 0,
       maxTokens: 1200,
-      reasoningEffort: "low",
+      reasoningEffort: "medium",
+      timeoutMs: 30000,
       messages: [
         {
           role: "system",
@@ -395,6 +440,9 @@ export async function interpretDateRequest(input: {
             "When the user names a place but not activities, addActivities must be []. Do not guess cafe+walk+exhibit. Do not guess meal+walk+tourism. The course judge chooses the mix from real shops.",
             "Only explicitly requested activities become hard requirements. A destination alone does not imply a cafe, walk, meal, or attraction.",
             "Infer a date objective and soft preferences from the whole utterance. For example, 오랜만에 만나 조용히 대화 implies a conversational reunion, high intimacy and low crowd tolerance. These are ranking hints, NEVER hard activity or venue requirements. Cite an exact latestMessage phrase for each inferred preference and express confidence 0..1. An explicit food restriction is a hard constraint, not a preference.",
+            "Track corrections and negation semantically: '조용한 곳 말고 활기찬 곳' prefers an energetic setting; '사진 찍기 싫어' does not prefer photogenic venues; '예약 없이 갈 만한 곳' is a venue constraint rather than a booking instruction. Reuse compatible preferences from currentBrief without asking again. Non-empty preferences.vibe must describe the complete still-active mood list after this turn, including earlier compatible moods. Numeric preference fields are null when unchanged. Never overwrite an established objective with a generic goal on a short follow-up.",
+            "removeInferredPreferences contains exact value strings from currentBrief.inferredPreferences that the latest turn clearly corrects or contradicts. Keep unrelated earlier cues. Return [] when none were superseded. This only updates soft interpretation, never dietary restrictions or explicit venue/activity constraints.",
+            "removePreferenceVibes contains exact labels from currentBrief.preferences.vibe that the user now clearly rejects. For example, after '사진 찍기 싫어', remove the old photo-related label and use preferences.vibe:[] if no desired mood remains. Never turn a rejected mood into a positive vibe label such as '사진 안 찍는'. Empty vibe arrays alone preserve the earlier context; removePreferenceVibes explicitly releases it. Keep unrelated earlier moods and return [] without a correction.",
             "Use stayKind date for a date, daytrip for a specified one-day trip, overnight with nights for an explicitly specified overnight trip. An unspecified trip length stays null so the app can ask.",
             "Set journeyType to trip when the user means a trip, even if its length is unknown. Set date for a local date. Judge the meaning of the whole message and recent turns, not a keyword alone. Do not infer a trip length from journeyType.",
             "If the user names a destination, never askSlot area. Time only if they mentioned when, not because they said 저녁 먹고 싶어.",
@@ -422,7 +470,7 @@ export async function interpretDateRequest(input: {
           content: JSON.stringify({
             currentBrief: input.previousState ?? emptyDateBrief(),
             currentPlaces: input.previousPlaceNames,
-            recentTurns: (input.conversation ?? []).slice(-8),
+            recentTurns: (input.conversation ?? []).slice(-12),
             latestMessage: input.message,
             interpretationRules,
           }),

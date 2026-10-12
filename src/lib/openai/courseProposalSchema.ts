@@ -7,21 +7,24 @@ export function courseProposalSchema(candidateIds: string[], days: number, selec
       ({ type: "string", enum: candidateIds.slice(index * 250, (index + 1) * 250) })) }
     : { type: "string", enum: candidateIds };
   return {
-    name: "date_course_proposals_v2", strict: true as const,
+    name: "date_course_proposals_v3", strict: true as const,
     schema: {
       type: "object", additionalProperties: false, required: ["courses"],
       properties: {
         courses: { type: "array", minItems: 1, maxItems: selectedCount ? 1 : 3, items: {
-          type: "object", additionalProperties: false, required: ["theme", "selected"],
+          type: "object", additionalProperties: false, required: ["theme", "intro", "selected"],
           properties: {
             theme: { type: "string" },
+            intro: { type: "string" },
             selected: { type: "array", minItems: Math.max(1, selectedCount), maxItems: candidateIds.length, items: {
               type: "object", additionalProperties: false,
-              required: ["id", "day_index", "duration_minutes"],
+              required: ["id", "day_index", "duration_minutes", "reason", "evidenceIds"],
               properties: {
                 id: idSchema,
                 day_index: { type: "integer", minimum: 0, maximum: days - 1 },
                 duration_minutes: { type: "integer", minimum: 30, maximum: 180 },
+                reason: { type: "string" },
+                evidenceIds: { type: "array", minItems: 1, maxItems: 4, items: { type: "string" } },
               },
             } },
           },

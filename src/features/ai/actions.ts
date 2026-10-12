@@ -788,18 +788,6 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       return null;
     }
   };
-  const immediateSituation = message ? chatSituationFromMessage(message) : null;
-  if (immediateSituation) {
-    const state = previousState ?? emptyDateBrief();
-    await observeTurn(state, null);
-    const card = await composeDateChat({
-      situation: immediateSituation,
-      userMessage: message,
-      state,
-      extras: { currentCourse: previousStops.map(stop => stop.name), conversation: input.conversation },
-    });
-    return chatResult(card, noteTurn(state, message));
-  }
   const currentCourse = previousStops.map(stop => stop.name);
   const [tasteBoard, routed] = await Promise.all([
     loadTasteBoard(),
@@ -894,7 +882,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   let courseEdit: ChatRoute["edit"];
   if (message) {
     const route = routed!;
-    const state = filledPrevious ?? emptyDateBrief();
+    let state = filledPrevious ?? emptyDateBrief();
     if (route.mode === "chat") {
       await observeTurn(state, route);
       return withLimitedTasks(async () => {
@@ -921,6 +909,13 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       }, state);
     }
     if (route.mode === "places" && route.placeAsk) {
+      // Standalone recommendations need the same contextual understanding as
+      // courses. Otherwise new exclusions and preferences never reach filters.
+      const understood = await interpretDateRequest({ message, previousState: state,
+        previousPlaceNames: previousStops.map(stop => stop.name), dateLabel: input.dateLabel,
+        conversation: input.conversation });
+      state = { ...understood.state, shownPlaces: state.shownPlaces,
+        seenPlaces: state.seenPlaces, placeAsk: route.placeAsk };
       await observeTurn(state, route);
       const placeAsk = route.placeAsk;
       const primaryResearchPlan = tryBuildResearchPlan(observedContextSnapshot.current?.experiencePlan);
@@ -946,7 +941,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
         seedCandidates: sessionReuse?.reusable,
         skipSearch: sessionReuse ? !sessionReuse.search : undefined,
         excludedCandidateIds: sessionReuse?.excludedCandidateIds,
-        requireHardEligibility: Boolean(sessionReuse) || getResearchPlanMode() === "active" && Boolean(primaryResearchPlan),
+        requireHardEligibility: true,
         sessionFeedbackSignals: useSessionCandidates
           ? placeSessionFeedbackSignals(sessionCapture?.previous?.feedback, "") : undefined,
         researchPlan: primaryResearchPlan,

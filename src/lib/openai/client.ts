@@ -64,8 +64,8 @@ function usesReasoning(model: string) {
 const DEFAULT_JSON_TIMEOUT_MS = 25000;
 
 // The limit includes hidden reasoning, not just the requested JSON text.
-function completionBudget(model: string, outputTokens: number) {
-  return usesReasoning(model) ? outputTokens + 2048 : outputTokens;
+function completionBudget(model: string, outputTokens: number, effort = "low") {
+  return usesReasoning(model) ? outputTokens + (effort === "high" ? 8192 : effort === "medium" ? 4096 : 2048) : outputTokens;
 }
 
 async function requestJson<T>(input: {
@@ -94,7 +94,7 @@ async function requestJson<T>(input: {
       : { type: "json_object" },
     messages: input.messages,
     ...(reasoning ? {
-      max_completion_tokens: completionBudget(model, input.maxTokens ?? 2000),
+      max_completion_tokens: completionBudget(model, input.maxTokens ?? 2000, input.reasoningEffort),
       reasoning_effort: input.reasoningEffort ?? "low",
     } : { temperature: input.temperature ?? 0.2, max_tokens: input.maxTokens ?? 2000 }),
   };
@@ -177,14 +177,19 @@ export async function completeFunctionCalls(input: {
   tools: FunctionTool[];
   maxTokens?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<Array<{ name: string; arguments: unknown }> | null> {
   const key = getOpenAiApiKey();
   if (!key) return null;
   if (!input.tools.length) return [];
   const model = getOpenAiModel();
   const reasoning = usesReasoning(model);
-  const signal = createDeadline(input.timeoutMs, 7500);
-  if (!signal) return null;
+  const deadline = createDeadline(input.timeoutMs, 15000);
+  if (!deadline) return null;
+  const signal = input.signal ? AbortSignal.any([deadline, input.signal]) : deadline;
+  // Reasoning with tools requires Responses for current GPT models. Removing
+  // reasoning_effort from a rejected Chat request silently disables reasoning.
+  if (reasoning) return requestReasoningFunctionCalls(input, key, model, signal);
   const body: Record<string, unknown> = {
     model, store: false, messages: input.messages, tools: input.tools,
     tool_choice: "auto", parallel_tool_calls: true,
@@ -224,6 +229,45 @@ export async function completeFunctionCalls(input: {
       reason: signal.aborted ? "timeout" : "request_or_response_error" });
   }
   return null;
+}
+
+async function requestReasoningFunctionCalls(input: {
+  messages: ChatMessage[]; tools: FunctionTool[]; maxTokens?: number;
+}, key: string, model: string, signal: AbortSignal): Promise<Array<{ name: string; arguments: unknown }> | null> {
+  try {
+    const { response, payload } = await fetchPayload("responses", key, {
+      model, store: false, input: input.messages,
+      tools: input.tools.map(tool => ({ type: "function", ...tool.function })),
+      tool_choice: "auto", parallel_tool_calls: true,
+      reasoning: { effort: "low" },
+      max_output_tokens: completionBudget(model, input.maxTokens ?? 700),
+    }, signal);
+    if (!response.ok) {
+      console.error("OpenAI function calling failed", { model, status: response.status });
+      return null;
+    }
+    if (!isRecord(payload) || payload.error != null || payload.status !== "completed"
+      || !Array.isArray(payload.output)) return null;
+    const output = payload.output.filter(isRecord);
+    const messages = outputMessages(output);
+    if (output.some(item => item.status != null && item.status !== "completed")
+      || outputContent(messages).some(part => part.type === "refusal")) return null;
+    const calls = output.filter(item => item.type === "function_call");
+    if (!calls.length) return messages.length ? [] : null;
+    const allowedNames = new Set(input.tools.map(tool => tool.function.name));
+    return calls.slice(0, 6).flatMap(call => {
+      if (typeof call.name !== "string" || !allowedNames.has(call.name)
+        || typeof call.arguments !== "string") return [];
+      try {
+        const argumentsObject: unknown = JSON.parse(call.arguments);
+        return isRecord(argumentsObject) ? [{ name: call.name, arguments: argumentsObject }] : [];
+      } catch { return []; }
+    });
+  } catch {
+    console.error("OpenAI function calling unavailable", { model,
+      reason: signal.aborted ? "timeout" : "request_or_response_error" });
+    return null;
+  }
 }
 
 function outputMessages(output: Record<string, unknown>[]) {

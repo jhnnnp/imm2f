@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emptyDateBrief } from "@/features/ai/dateBrief";
 import { pickedShownPlaces, routeDateChatLocally } from "@/features/ai/chatRoute";
 import { completeJson } from "./client";
-import { routeDateChat } from "./routeDateChat";
+import { dateChatRouteSchema, routeDateChat } from "./routeDateChat";
 
 vi.mock("./client", () => ({ completeJson: vi.fn() }));
 const input = { hasCourse: true, currentCourse: ["식당 A", "카페 B", "공원 C"], state: emptyDateBrief() };
@@ -67,4 +67,43 @@ it("supports the fourth and last candidates but does not wrap a large number", (
   expect(pickedShownPlaces("마지막으로 코스", shown)).toEqual(["카페 D"]);
   expect(pickedShownPlaces("101번으로 코스", shown)).toEqual([]);
   expect(routeDateChatLocally({ message: "101번으로 코스 짜줘", hasCourse: false, state: { ...input.state, shownPlaces: shown }, chatSituation: null }).mode).toBe("question");
+});
+
+it("lets semantic reasoning interpret a confident local place request and its constraints", async () => {
+  vi.mocked(completeJson).mockResolvedValue({ mode: "places", placeKind: "cafe", area: "성수",
+    query: "예약 없이 대화하기 좋은 카페", pickedPlaces: [], edit: null });
+  const result = await routeDateChat({ ...input, message: "성수에서 예약 없이 들어가서 둘이 이야기 나누기 좋은 카페 찾아줘" });
+  expect(result).toMatchObject({ mode: "places", placeAsk: { kind: "cafe", query: "예약 없이 대화하기 좋은 카페", area: "성수" } });
+  const request = vi.mocked(completeJson).mock.calls[0][0];
+  expect(request.jsonSchema?.schema).toEqual(dateChatRouteSchema);
+  expect(request.reasoningEffort).toBe("medium");
+});
+
+it("uses conversation meaning for a follow-up without requiring a canned course keyword", async () => {
+  vi.mocked(completeJson).mockResolvedValue({ mode: "course", edit: null, pickedPlaces: [] });
+  const conversation = [{ role: "user" as const, text: "성수에서 저녁 먹고 이야기 나누고 싶어" },
+    { role: "assistant" as const, text: "식사 뒤 카페에 들르는 흐름으로 준비해 볼까요?" }];
+  expect(await routeDateChat({ ...input, message: "말한 방식으로 준비해줘", conversation })).toMatchObject({ mode: "course" });
+  const payload = JSON.parse(vi.mocked(completeJson).mock.calls[0][0].messages[1].content);
+  expect(payload.recentTurns).toEqual(conversation);
+});
+
+it("does not generate an itinerary from an empty message", async () => {
+  expect(await routeDateChat({ ...input, message: "  " })).toMatchObject({ mode: "chat" });
+  expect(completeJson).not.toHaveBeenCalled();
+});
+
+it("rejects an absent shown candidate before an AI-selected venue can substitute for it", async () => {
+  vi.mocked(completeJson).mockResolvedValue({ mode: "course", pickedPlaces: ["카페 A"] });
+  expect(await routeDateChat({ message: "101번으로 코스 짜줘", state: { ...input.state, shownPlaces: ["카페 A"] },
+    hasCourse: false, currentCourse: [] })).toMatchObject({ mode: "question" });
+  expect(completeJson).not.toHaveBeenCalled();
+});
+
+it("preserves all five explicitly chosen displayed venues rather than silently dropping the fifth", async () => {
+  const shownPlaces = ["카페 A", "식당 B", "전시 C", "공원 D", "바 E"];
+  vi.mocked(completeJson).mockResolvedValue({ mode: "course", pickedPlaces: shownPlaces, edit: null });
+  const result = await routeDateChat({ message: "1번 2번 3번 4번 5번 모두 넣어서 코스 짜줘",
+    hasCourse: false, currentCourse: [], state: { ...input.state, shownPlaces } });
+  expect(result.pickedPlaces).toEqual(shownPlaces);
 });

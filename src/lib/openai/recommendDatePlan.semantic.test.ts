@@ -47,6 +47,34 @@ beforeEach(() => vi.mocked(completeJson).mockReset().mockResolvedValue(modelCour
 afterEach(() => vi.restoreAllMocks());
 
 describe("course proposal semantic boundary", () => {
+  it("preserves the model's grounded selection judgment, intro and cited source through validation and scheduling", async () => {
+    const intro = "걷는 시간 사이에 앉아서 대화할 여유를 두고, 식사와 휴식을 자연스럽게 이어봤어요. 영업시간과 예약 여부는 방문 전에 확인해 주세요.";
+    const reason = "자료에 소개된 정원 좌석을 참고해, 둘이 쉬어가는 경험을 이곳에 담았어요.";
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ ...modelCourse.courses[0], intro,
+      selected: modelCourse.courses[0].selected.map(row => ({ ...row, reason: row.id === "kakao:quiet" ? reason
+        : "식사와 바깥 활동을 번갈아 경험할 수 있게 이 장소를 골랐어요.",
+        evidenceIds: row.id === "kakao:quiet" ? ["observation:fact-quiet"] : ["provider:category"] })) }] });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수에서 대화하면서 여유 있게 데이트", condition,
+      candidates, saved: [], state: state(), researchPlanActive: true });
+    expect(result.source).toBe("openai");
+    expect(result.card.lines[0]).toBe(intro);
+    expect(result.recommendations.find(place => place.id === "kakao:quiet")?.reasons).toEqual([reason]);
+    expect(result.items.find(item => item.placeName === "정원 카페")?.memo).toBe(reason);
+    expect(result.card.stops?.find(stop => stop.name === "정원 카페")?.factSourceUrl).toBe("https://example.com/quiet");
+    expect(vi.mocked(completeJson).mock.calls[0][0].reasoningEffort).toBe("medium");
+  });
+
+  it("discards unsupported generated venue claims while preserving the valid itinerary", async () => {
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ ...modelCourse.courses[0],
+      selected: modelCourse.courses[0].selected.map(row => ({ ...row,
+        reason: "예약 없이 바로 들어가고 평점 4.9점인 조용한 맛집이에요.", evidenceIds: ["provider:category"] })) }] });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+      candidates, saved: [], state: state(), researchPlanActive: true });
+    expect(result.source).toBe("openai");
+    expect(result.recommendations).toHaveLength(3);
+    expect(result.recommendations.map(place => place.reasons.join(" ")).join(" ")).not.toMatch(/예약\s*없이|4\.9점/);
+  });
+
   it("supports a single chosen cafe rather than requiring a filler second stop", async () => {
     vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ theme: "카페에서 쉬기", selected: [
       { id: "kakao:quiet", day_index: 0, duration_minutes: 60 },
@@ -142,7 +170,7 @@ describe("course proposal semantic boundary", () => {
     const payload = JSON.parse(call.messages[1].content);
     expect(payload.candidates.every((candidate: { observations: Array<{ id: string }> }) => candidate.observations[0].id === "fresh")).toBe(true);
     expect(payload.schedule).toMatchObject({ transport: "walk", localDayWindows: {} });
-    expect(call.jsonSchema).toMatchObject({ name: "date_course_proposals_v2", strict: true });
+    expect(call.jsonSchema).toMatchObject({ name: "date_course_proposals_v3", strict: true });
     expect(JSON.stringify(call.jsonSchema)).toContain("kakao:quiet");
   });
 

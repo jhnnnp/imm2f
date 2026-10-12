@@ -131,16 +131,23 @@ export function fallbackDateChat(input: {
 }
 
 const CHAT_PROMPT = [
-  "You are the couple's date planner inside the ONLY US app. Reply in polite Korean 해요체 only (~해요, ~드릴게요, ~볼까요). Never 반말 such as 안녕!, ~할게, ~어때. 1-3 sentences, no emoji, no bullet lists, no markdown.",
+  "You are the couple's date planner inside the ONLY US app. Reply naturally in polite Korean 해요체 only (~해요, ~드릴게요, ~볼까요). Never 반말 such as 안녕!, ~할게, ~어때. Match the detail to the request: a greeting or thanks can be one sentence; an explanation may need several short paragraphs. No emoji, headings or markdown.",
   "You can: build a date or trip course for a neighborhood, recommend restaurants/cafes/bars/exhibits in an area, answer questions about the places you suggested, and edit a course by chat (카페 변경 해줘, 한 곳 더 추가해줘, 한 곳 빼줘).",
   "If the user greets or asks what you do, answer briefly and invite them with one example request they could type (e.g. 성수 파스타 맛집 추천해줘) that fits their context (areas, currentCourse). If they thank you, acknowledge and offer the natural next step.",
   "You have not searched anything yet: never name a specific shop, cafe, restaurant, or exhibition unless it appears in currentCourse or shownPlaces.",
   "Read recentTurns and brief before replying. Answer the latest meaning, not a canned greeting. Do not ask for an area or preference already known. For feedback, acknowledge the specific problem they named; ask at most one focused question only if needed. For ambiguous replies, explain what needs clarifying in the existing conversation. Never claim a course was changed, a booking made, or a search completed: this turn does none of those actions. A thank-you may simply close the conversation with no follow-up question or chips.",
+  "situation is a fallback hint, not a script. Respond to the user's actual meaning, including negation and emotion. If an area is genuinely missing, ask just for it and connect the question to their request. If no matching venues were found, explain that limitation without claiming all venues in the neighborhood are unsuitable; propose one useful way to broaden their request. Do not repeat an intake question the user has already answered.",
   "Then give up to 3 chips, each under 16 Korean characters, written as the user would type them (e.g. 성수 카페 추천해줘).",
   "Return JSON only: {\"reply\":string,\"suggestions\":[string]}",
 ].join(" ");
 
-const LLM_CHAT_SITUATIONS = new Set<DateChatSituation>(["greeting", "thanks", "capability", "small_talk", "feedback", "unclear"]);
+export const dateChatReplySchema = {
+  type: "object", additionalProperties: false, required: ["reply", "suggestions"],
+  properties: {
+    reply: { type: "string" },
+    suggestions: { type: "array", items: { type: "string" }, maxItems: 3 },
+  },
+};
 
 /** Small models drift into 반말; a reply that does not end politely falls back to the card. */
 export function looksPolite(text: string) {
@@ -157,35 +164,40 @@ export async function composeDateChat(input: {
   slot?: DateIntakeSlot | null;
 }): Promise<AIChatCard> {
   const card = dateChatCard(input);
-  if (!LLM_CHAT_SITUATIONS.has(input.situation) || !isOpenAiConfigured()) return card;
+  if (!isOpenAiConfigured()) return card;
   try {
     const parsed = await completeJson<{ reply?: unknown; suggestions?: unknown }>({
       temperature: 0.6,
-      maxTokens: 400,
-      reasoningEffort: "low",
-      timeoutMs: 15000,
+      jsonSchema: { name: "date_chat_reply_v2", strict: true, schema: dateChatReplySchema },
+      maxTokens: 1000,
+      reasoningEffort: "medium",
+      timeoutMs: 25000,
       messages: [
         { role: "system", content: CHAT_PROMPT },
         {
           role: "user",
           content: JSON.stringify({
-            latestMessage: input.userMessage.slice(0, 300),
+            latestMessage: input.userMessage.slice(0, 2000),
             situation: input.situation,
-            recentTurns: (input.extras?.conversation ?? []).slice(-6),
+            recentTurns: (input.extras?.conversation ?? []).slice(-12),
             areas: selectedAreas(input.state),
-            brief: { activities: input.state.activities, cuisine: input.state.cuisine, walkingPreference: input.state.walkingPreference, notes: input.state.conversationNotes.slice(-4) },
+            brief: { objective: input.state.objective, preferences: input.state.preferences,
+              activities: input.state.activities, cuisine: input.state.cuisine,
+              excludedFoods: input.state.excludedFoods, walkingPreference: input.state.walkingPreference,
+              notes: input.state.conversationNotes.slice(-8) },
             currentCourse: input.extras?.currentCourse ?? [],
             shownPlaces: input.state.shownPlaces ?? [],
+            searchArea: input.extras?.region,
+            pendingSlot: input.slot ?? input.state.pendingSlot,
           }),
         },
       ],
     });
-    const reply = typeof parsed?.reply === "string" ? parsed.reply.replace(/[*_`#]/g, "").trim().slice(0, 400) : "";
-    if (!reply || !looksPolite(reply) || claimsUnperformedAction(reply)) return card;
-    const suggestions = cleanChatSuggestions(parsed?.suggestions, card.suggestions);
-    const safeSuggestions = input.situation === "feedback" || input.situation === "unclear" || input.situation === "thanks"
-      ? card.suggestions : Array.isArray(parsed?.suggestions) ? suggestions : card.suggestions;
-    return { headline: "", lines: reply.split(/\n\s*\n/).filter(Boolean), suggestions: safeSuggestions };
+    const reply = typeof parsed?.reply === "string" ? parsed.reply.replace(/[*_`#]/g, "").trim() : "";
+    if (!reply || reply.length > 2400 || !looksPolite(reply) || claimsUnperformedAction(reply)) return card;
+    const suggestions = Array.isArray(parsed?.suggestions) && parsed.suggestions.length === 0
+      ? [] : cleanChatSuggestions(parsed?.suggestions, card.suggestions);
+    return { headline: "", lines: reply.split(/\n\s*\n/).filter(Boolean), suggestions };
   } catch {
     return card;
   }

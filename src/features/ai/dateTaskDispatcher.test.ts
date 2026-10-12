@@ -377,6 +377,28 @@ describe("limited task dispatcher", () => {
     expect(output.taskResults.filter(row => row.failureCode === "limit_reached")).toHaveLength(2);
   });
 
+  it("forwards only the remaining execution budget before the inspection batch starts", async () => {
+    const mock = executors();
+    await dispatchLimitedDateTasks(context(task("modify_itinerary", "modify_itinerary", [], 1),
+      task("record_feedback", "record_feedback", [], 2),
+      task("explain_recommendation", "explain_recommendation", [], 3),
+      task("compare_places", "compare_places", [], 4),
+      task("inspect_venue", "inspect_venue", [], 5)), mock.adapters);
+    expect(mock.inspect).toHaveBeenCalledWith(expect.objectContaining({ maxExecutions: 1 }));
+  });
+
+  it("preserves the granted lookup budget if an inspection batch throws after starting", async () => {
+    const mock = executors();
+    mock.inspect.mockRejectedValueOnce(new Error("batch failed after launch"));
+    const output = await dispatchLimitedDateTasks(context(task("modify_itinerary", "modify_itinerary", [], 1),
+      task("record_feedback", "record_feedback", [], 2),
+      ...Array.from({ length: 3 }, (_, index) => task("inspect_venue", `inspect-${index}`, [], index + 3)),
+      task("compare_places", "compare_places", [], 6)), mock.adapters);
+    expect(mock.compare).not.toHaveBeenCalled();
+    expect(output.taskResults.find(row => row.taskType === "compare_places"))
+      .toMatchObject({ status: "skipped", failureCode: "execution_limit" });
+  });
+
   it("isolates an unexpected executor throw", async () => {
     const mock = executors();
     mock.modify.mockRejectedValueOnce(new Error("unexpected"));

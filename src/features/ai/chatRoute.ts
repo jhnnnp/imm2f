@@ -12,7 +12,7 @@ export type ChatMode = "course" | "places" | "question" | "chat";
 export type ChatRoute = {
   edit?: { kind: "retime" | "remove" | "reorder"; indices: number[] };
   mode: ChatMode;
-  /** True when the local rules alone are sure; the LLM router is skipped. */
+  /** Confidence of the local hint; semantic routing can still refine it. */
   confident: boolean;
   placeAsk?: PlaceAsk | null;
   /** Shown places the user picked for a course ("1번이랑 3번으로 코스 짜줘"). */
@@ -134,13 +134,15 @@ export function pickedShownPlaces(message: string, shownPlaces: string[]) {
   const second = /두\s*(?:번째|째)/.test(message) ? [shownPlaces[1]] : [];
   const third = /세\s*(?:번째|째)/.test(message) ? [shownPlaces[2]] : [];
   const fourth = /네\s*(?:번째|째)/.test(message) ? [shownPlaces[3]] : [];
+  const fifth = /다섯\s*(?:번째|째)/.test(message) ? [shownPlaces[4]] : [];
   const last = /마지막/.test(message) ? [shownPlaces.at(-1)] : [];
-  return uniqueStrings([...byName, ...numbers, ...first, ...second, ...third, ...fourth, ...last].filter((name): name is string => Boolean(name)), 4);
+  return uniqueStrings([...byName, ...numbers, ...first, ...second, ...third, ...fourth, ...fifth, ...last].filter((name): name is string => Boolean(name)), shownPlaces.length);
 }
 
 /**
  * Local routing. Pure so the UI can reuse it for the typing indicator, and so
- * tests do not need the LLM. The LLM router only runs on `confident: false`.
+ * tests do not need the LLM. These hints also validate explicit references before
+ * semantic routing.
  */
 export function routeDateChatLocally(input: {
   message: string;

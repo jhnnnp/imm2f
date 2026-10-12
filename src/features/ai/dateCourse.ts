@@ -32,6 +32,8 @@ export type DateCourseRow = {
   duration_minutes?: number;
   expected_cost?: number;
   reasons?: string[];
+  /** References to this venue's evidence for AI-written selection rationale. */
+  reasonEvidenceIds?: string[];
   day_index?: number;
 };
 

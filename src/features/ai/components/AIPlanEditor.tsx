@@ -28,6 +28,7 @@ import {
 } from "../dateBrief";
 import { isCourseQuickAction } from "../dateCourse";
 import { pendingLabelFor } from "../chatRoute";
+import { isExplorationConversationAside, requestsCandidateExploration, requestsDirectPlanning } from "../chatEntry";
 import type { AIChatCard, AIChatStop, AIPlannerReply, AIPlannerState, DateIntakeSlot, PlanChange, PlanItem, PlanKind } from "@/features/planning/types/plan";
 import type { Place } from "@/features/places/types/place";
 import { plannerStateFromSeed } from "@/features/taste/compare";
@@ -63,7 +64,7 @@ const GENERATE_PLACEHOLDER = "동네와 하고 싶은 일을 말해 주세요";
 const COURSE_PLACEHOLDER = "예: 식당 변경 해줘 · 1번 주차 돼?";
 const WELCOME_CARD: AIChatCard = {
   headline: "어떤 데이트를 계획할까요?",
-  lines: ["지역과 원하는 경험을 말해 주세요. 장소 후보를 먼저 고른 뒤 일정을 만들 수 있어요."],
+  lines: ["원하는 데이트를 편하게 말해 주세요. 장소 추천, 코스 만들기, 추천 이유와 예약 질문까지 함께 도와드려요."],
   suggestions: ["왕십리 데이트 코스", "성수 영화·카페 코스", "을지로 공연·저녁 코스"],
 };
 const TRIP_WELCOME_CARD: AIChatCard = {
@@ -958,8 +959,9 @@ export function AIPlanEditor({
     if (keepingRef.current || phase === "loading" || keeping || ((requestBusyRef.current || explorationBusy) && !planningInput)) return;
     const request = message.trim();
     if (!request && !displayText && !planningInput) return;
-    const explorationIntent = candidateExplorationActive && exploration && !planningInput && request
-      ? explorationFollowUpIntent(request, nextState) : null;
+    const directPlanning = Boolean(exploration && requestsDirectPlanning(request));
+    const explorationIntent = candidateExplorationActive && exploration && !planningInput && request && !directPlanning
+      ? isExplorationConversationAside(request) ? "question" : explorationFollowUpIntent(request, nextState) : null;
     if (explorationIntent === "conditions") {
       await changeExplorationConditions(request, nextState);
       return;
@@ -989,7 +991,8 @@ export function AIPlanEditor({
       }
       return;
     }
-    if (candidateExplorationActive && !planningInput && !recommendation && explorationIntent !== "question") {
+    if (candidateExplorationActive && !planningInput && !recommendation && !directPlanning && explorationIntent !== "question"
+      && (exploration || requestsCandidateExploration(request))) {
       if (exploration?.groups && request) {
         const groupId = refinementGroupForMessage(exploration.groups, request, activeExplorationGroup);
         if (groupId) {
@@ -1091,6 +1094,12 @@ export function AIPlanEditor({
         setPlannerState(plannerState);
         setGeneratePrompt(request || displayText || "");
         return;
+      }
+      if (directPlanning) {
+        setExploration(null);
+        setExplorationSelectedCards([]);
+        setExplorationSelectedIds([]);
+        explorationSelectionRef.current = [];
       }
       setPlannerState(result.state);
       if (result.status === "clarification") {
@@ -1463,7 +1472,7 @@ export function AIPlanEditor({
             ? "확인된 도보 경로로 이동 시간을 계산했어요. 현장 상황에 따라 달라질 수 있어요."
             : recommendation
               ? "이동 시간은 추정이에요. 영업시간과 현장 상황을 확인한 뒤 일정에 담아 주세요."
-              : "장소 후보를 고른 뒤 일정을 만들어요. 데이트와 여행 일정에 담을 수 있어요."
+              : "원하는 장소나 경험을 말하면 함께 계획해요. ‘장소 후보부터 찾아줘’로 먼저 골라볼 수도 있어요."
           : "이미 담긴 일정만 삭제하거나 체류 시간을 조정합니다."}
       </p>
     </div>

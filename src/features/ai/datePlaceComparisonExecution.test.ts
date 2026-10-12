@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import type { AIPlannerResult } from "@/features/planning/types/plan";
 import { emptyDateBrief, withAreas } from "./dateBrief";
@@ -34,7 +34,7 @@ const run = (overrides: Partial<Parameters<typeof executeLimitedComparison>[0]> 
     ...overrides });
 
 describe("limited evidence-grounded place comparison", () => {
-  it("compares two verified session places without a search or LLM call", async () => {
+  it("compares two verified session places when model reasoning is unavailable", async () => {
     const current = session();
     current.records[0].evidence.push({ venueId: "kakao:a", attribute: "space", sourceType: "web",
       sourceUrl: "https://example.com/a", retrievedAt: now, observedAt: now, observedTurnId: "s:1",
@@ -48,6 +48,69 @@ describe("limited evidence-grounded place comparison", () => {
     expect(outcome.result).toMatchObject({ status: "success", candidateIds: ["kakao:a", "kakao:b"],
       comparedFactTypes: ["noise"], evidenceCount: 2 });
     expect(appendPlaceComparison(primary, outcome.result).card.lines.at(-1)).toContain("장소 비교:");
+  });
+
+  it("preserves negation and finds the evidence that actually addresses the requested criterion", async () => {
+    const current = session();
+    for (const row of current.records) {
+      const base = { venueId: row.candidateId, attribute: "space" as const, sourceType: "web" as const,
+        sourceUrl: `https://example.com/${row.candidateId}`, retrievedAt: now, observedAt: now,
+        observedTurnId: "s:1", freshnessCategory: "stable" as const, confidence: 0.8,
+        verification: "source_checked" as const };
+      row.evidence.push({ ...base, excerpt: "감성적인 분위기의 인테리어" },
+        { ...base, excerpt: "조용하지 않고 음악 소리가 커요." });
+    }
+    const outcome = await run({ sessionCandidates: current });
+    expect(outcome.result.comparedFactTypes).toEqual(["noise"]);
+    expect(outcome.result.lines.join(" ")).toContain("조용하지 않고 음악 소리가 커요");
+    expect(outcome.result.lines.join(" ")).not.toContain("자료에 '조용' 언급");
+  });
+
+  it("keeps an available venue fact even when the other venue's fact is unknown", async () => {
+    const current = session();
+    current.records[0].evidence.push({ venueId: "kakao:a", attribute: "space", sourceType: "web",
+      sourceUrl: "https://example.com/a", retrievedAt: now, observedAt: now, observedTurnId: "s:1",
+      freshnessCategory: "stable", confidence: 0.8, verification: "source_checked",
+      excerpt: "대화하기 조용한 실내" });
+    const outcome = await run({ sessionCandidates: current });
+    expect(outcome.result).toMatchObject({ comparedFactTypes: [], unknownFactTypes: ["noise"], evidenceCount: 1 });
+    expect(outcome.result.lines.join(" ")).toContain("a 카페 확인된 자료: 대화하기 조용한 실내");
+    expect(outcome.result.lines.join(" ")).toContain("b 카페 아직 확인되지 않았어요");
+    expect(outcome.result.sources).toEqual([{ label: "장소 비교 근거", url: "https://example.com/a" }]);
+  });
+
+  it("uses model reasoning over verified facts to answer the user's choice rather than concatenating fields", async () => {
+    const current = session();
+    current.records.forEach((row, index) => row.evidence.push({ venueId: row.candidateId,
+      attribute: "space", sourceType: "web", sourceUrl: `https://example.com/${index}`,
+      retrievedAt: now, observedAt: now, observedTurnId: "s:1", freshnessCategory: "stable",
+      confidence: 0.8, verification: "source_checked",
+      excerpt: index === 0 ? "조용하지 않고 음악 소리가 커요." : "조용하게 대화할 수 있어요." }));
+    const reason = vi.fn(async () => ({ text: "대화가 목적이면 b 카페를 먼저 고려할 수 있어요.",
+      usedFactIds: ["noise-0", "noise-1"] }));
+    const outcome = await executeLimitedComparison({ plan, task, route: { mode: "course", confident: true }, primary,
+      interpreterMode: "assist", executionMode: "limited", currentPlan: null, visiblePlaces: [],
+      sessionCandidates: current, state, userMessage: "A랑 B 중 어디가 더 조용해?", now }, reason);
+    expect(reason).toHaveBeenCalledWith(expect.objectContaining({ purpose: "comparison",
+      message: "A랑 B 중 어디가 더 조용해?", facts: expect.arrayContaining([
+        expect.objectContaining({ id: "noise-0", summary: expect.stringContaining("조용하지 않고") }),
+      ]) }));
+    expect(outcome.result.lines).toEqual(["대화가 목적이면 b 카페를 먼저 고려할 수 있어요."]);
+    expect(outcome.result.evidenceCount).toBe(2);
+  });
+
+  it("rejects evidence for another venue, unsafe sources and low confidence", async () => {
+    const current = session();
+    for (const row of current.records) {
+      const base = { venueId: row.candidateId, attribute: "space" as const, sourceType: "web" as const,
+        sourceUrl: "https://example.com/a", retrievedAt: now, observedAt: now,
+        observedTurnId: "s:1", freshnessCategory: "stable" as const, confidence: 0.8,
+        verification: "source_checked" as const, excerpt: "조용한 실내" };
+      row.evidence.push({ ...base, venueId: "kakao:other" },
+        { ...base, sourceUrl: "javascript:alert(1)" }, { ...base, confidence: 0.4 });
+    }
+    expect((await run({ sessionCandidates: current })).result).toMatchObject({ comparedFactTypes: [],
+      unknownFactTypes: ["noise"], evidenceCount: 0, sources: [] });
   });
 
   it("keeps unevidenced noise unknown instead of claiming one place is quieter", async () => {

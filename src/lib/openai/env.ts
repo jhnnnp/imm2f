@@ -5,7 +5,7 @@ export function getOpenAiApiKey() {
 }
 
 export function getOpenAiModel() {
-  return normalizeOpenAiModel(process.env.OPENAI_MODEL) || "gpt-5.6-terra";
+  return normalizeOpenAiModel(process.env.OPENAI_MODEL) || "gpt-6.1-sol";
 }
 
 /** Accept the display labels used in local settings without changing model family. */
@@ -20,7 +20,9 @@ export function isOpenAiConfigured() {
 }
 
 export function getOpenAiSearchModel() {
-  const configured = normalizeOpenAiModel(process.env.OPENAI_SEARCH_MODEL) || getOpenAiModel();
+  // Fact lookup has a short budget and no curation role. Keep the reasoning
+  // model for judgments instead of inheriting its latency for every search.
+  const configured = normalizeOpenAiModel(process.env.OPENAI_SEARCH_MODEL) || "gpt-4.1-mini";
   // These chat models support JSON/function calls, but not the hosted
   // Responses web_search tool. Keep the user's chat model and use a
   // documented search-capable model for this separate operation.

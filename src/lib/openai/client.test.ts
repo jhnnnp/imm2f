@@ -214,14 +214,67 @@ describe("OpenAI function transport", () => {
     fetchMock.mockResolvedValueOnce(Response.json({ choices: [] }));
     expect(await completeFunctionCalls({ messages, tools: [searchTool] })).toBeNull();
   });
-  it("removes an unsupported reasoning parameter once under the same deadline", async () => {
+  it("uses Responses so a reasoning model can actually reason with its tools", async () => {
     vi.stubEnv("OPENAI_MODEL", "gpt-5.6-terra");
-    fetchMock.mockResolvedValueOnce(Response.json({ error: { param: "reasoning_effort" } }, { status: 400 }))
-      .mockResolvedValueOnce(toolCompletion());
+    fetchMock.mockResolvedValue(Response.json({ status: "completed", output: [
+      { type: "reasoning", summary: [] },
+      { type: "function_call", status: "completed", name: "search_places", arguments: '{"query":"서울 카페"}' },
+    ] }));
     expect(await completeFunctionCalls({ messages, tools: [searchTool] }))
       .toEqual([{ name: "search_places", arguments: { query: "서울 카페" } }]);
-    expect(requestBody(1)).not.toHaveProperty("reasoning_effort");
-    expect(fetchMock.mock.calls[1][1].signal).toBe(fetchMock.mock.calls[0][1].signal);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.openai.com/v1/responses");
+    expect(requestBody()).toMatchObject({ input: messages, reasoning: { effort: "low" }, store: false });
+    expect(requestBody().tools).toEqual([{ type: "function", ...searchTool.function }]);
+    expect(requestBody()).not.toHaveProperty("messages");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it.each(["incomplete", "failed", "in_progress"])("rejects unfinished Responses tools (%s)", async status => {
+    vi.stubEnv("OPENAI_MODEL", "gpt-6.1-sol");
+    fetchMock.mockResolvedValue(Response.json({ status, output: [
+      { type: "function_call", name: "search_places", arguments: '{"query":"서울 카페"}' },
+    ] }));
+    expect(await completeFunctionCalls({ messages, tools: [searchTool] })).toBeNull();
+  });
+  it("ignores undeclared Responses calls and rejects a partial individual call", async () => {
+    vi.stubEnv("OPENAI_MODEL", "gpt-5.6-terra");
+    fetchMock.mockResolvedValueOnce(Response.json({ status: "completed", output: [
+      { type: "function_call", name: "unknown_tool", arguments: "{}" },
+      { type: "function_call", name: "search_places", arguments: "[]" },
+      { type: "function_call", name: "search_places", arguments: '{"query":"서울 카페"}' },
+    ] }));
+    expect(await completeFunctionCalls({ messages, tools: [searchTool] }))
+      .toEqual([{ name: "search_places", arguments: { query: "서울 카페" } }]);
+    fetchMock.mockResolvedValueOnce(Response.json({ status: "completed", output: [
+      { type: "function_call", status: "incomplete", name: "search_places", arguments: "{}" },
+    ] }));
+    expect(await completeFunctionCalls({ messages, tools: [searchTool] })).toBeNull();
+  });
+  it("distinguishes a completed no-tool Responses answer from missing output", async () => {
+    vi.stubEnv("OPENAI_MODEL", "gpt-5.6-terra");
+    fetchMock.mockResolvedValueOnce(Response.json({ status: "completed", output: [
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "충분해요." }] },
+    ] }));
+    expect(await completeFunctionCalls({ messages, tools: [searchTool] })).toEqual([]);
+    fetchMock.mockResolvedValueOnce(Response.json({ status: "completed", output: [] }));
+    expect(await completeFunctionCalls({ messages, tools: [searchTool] })).toBeNull();
+  });
+  it("does not execute Responses calls beside a refusal", async () => {
+    vi.stubEnv("OPENAI_MODEL", "gpt-5.6-terra");
+    fetchMock.mockResolvedValue(Response.json({ status: "completed", output: [
+      { type: "message", content: [{ type: "refusal", refusal: "Refused" }] },
+      { type: "function_call", name: "search_places", arguments: "{}" },
+    ] }));
+    expect(await completeFunctionCalls({ messages, tools: [searchTool] })).toBeNull();
+  });
+  it("reserves enough hidden tokens for substantive recommendation reasoning", async () => {
+    vi.stubEnv("OPENAI_MODEL", "gpt-5.6-terra");
+    fetchMock.mockResolvedValue(completion('{"ok":true}'));
+    expect(await completeJson({ messages, maxTokens: 1200, reasoningEffort: "medium" })).toEqual({ ok: true });
+    expect(requestBody().max_completion_tokens).toBe(5296);
+  });
+  it("honors cancellation before starting a tool request", async () => {
+    expect(await completeFunctionCalls({ messages, tools: [searchTool], signal: AbortSignal.abort() })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
   it("does not call the provider when no functions are available", async () => {
     expect(await completeFunctionCalls({ messages, tools: [] })).toEqual([]);

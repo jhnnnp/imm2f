@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyDateBrief } from "@/features/ai/dateBrief";
-import { chatSituationFromMessage, dateChatCard, looksPolite } from "./composeDateChat";
+import { chatSituationFromMessage, composeDateChat, dateChatCard, looksPolite } from "./composeDateChat";
+import { completeJson } from "./client";
+
+vi.mock("./client", () => ({ completeJson: vi.fn() }));
+afterEach(() => { vi.resetAllMocks(); vi.unstubAllEnvs(); });
 
 describe("composeDateChat", () => {
   it("does not treat plan requests as capability talk", () => {
@@ -54,5 +58,24 @@ describe("composeDateChat", () => {
     expect(looksPolite("어디로 갈까요?")).toBe(true);
     expect(looksPolite("안녕! 성수에서 멋진 데이트 코스를 만들어줄게.")).toBe(false);
     expect(looksPolite("시작해보는 건 어때")).toBe(false);
+  });
+
+  it("keeps a focused model follow-up for specific feedback instead of generic correction chips", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test");
+    vi.mocked(completeJson).mockResolvedValue({ reply: "두 분이 대화하려는 데이트인데 이동이 길게 느껴지셨군요. 어느 구간이 가장 부담스러웠는지 알려 주시면 다음 변경에 반영할 수 있어요.",
+      suggestions: ["도보 이동 줄여줘"] });
+    const card = await composeDateChat({ situation: "feedback", userMessage: "대화할 시간보다 이동이 너무 길어",
+      state: { ...emptyDateBrief(), areas: ["성수"] }, extras: { currentCourse: ["식당 A", "카페 B"] } });
+    expect(card.lines.join(" ")).toContain("대화하려는 데이트");
+    expect(card.suggestions).toEqual(["도보 이동 줄여줘"]);
+  });
+
+  it("does not truncate a contextual answer at 400 characters or discard a deliberate no-chip reply", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test");
+    const reply = `${"요청하신 상황을 이해하고 두 분의 이동과 대화 시간을 함께 생각해 볼 수 있어요. ".repeat(12)}필요하실 때 이어서 도와드릴게요.`;
+    vi.mocked(completeJson).mockResolvedValue({ reply, suggestions: [] });
+    const card = await composeDateChat({ situation: "unclear", userMessage: "아까 얘기한 조건을 어떻게 해석한 거야", state: emptyDateBrief() });
+    expect(card.lines).toEqual([reply]);
+    expect(card.suggestions).toEqual([]);
   });
 });

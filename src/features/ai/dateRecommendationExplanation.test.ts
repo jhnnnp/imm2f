@@ -13,6 +13,7 @@ import { appendRecommendationExplanation, buildRecommendationExplanationContext,
 import { buildDateTurnUnderstanding } from "./dateTurnUnderstanding";
 import { buildDateContext } from "./dateContext";
 import { mergeSessionCandidates } from "./sessionCandidates";
+import * as groundedDateReasoning from "@/lib/openai/groundedDateReasoning";
 
 const state: AIPlannerState = { ...emptyDateBrief(), region: "성수", regions: ["성수"], areas: ["성수"] };
 const candidate = (id: string, name: string, category: "restaurant" | "cafe"): DiscoverCandidate => ({
@@ -52,7 +53,7 @@ const input = (entry: DateExecutionTask, message: string, overrides: Record<stri
   primary: { status: "chat" as const, message: "기존 응답", card: { headline: "", lines: ["기존 응답"] }, state },
   currentPlan: currentPlan(), resultAfterMutation: currentPlan(),
   interpreterMode: "assist" as const, executionMode: "limited" as const,
-  userMessage: message, ...overrides,
+  userMessage: message, now: "2026-09-26T10:00:00Z", ...overrides,
 });
 const cafe = { kind: "plan_item" as const, placeId: "discover:kakao:cafe", name: "성수 카페" };
 
@@ -111,6 +112,44 @@ describe("verified recommendation explanation", () => {
     expect(result.observation?.data).not.toHaveProperty("explanation");
   });
 
+  it("uses model reasoning over actual roles and schedule to explain the recommendation", async () => {
+    const reason = vi.spyOn(groundedDateReasoning, "reasonFromDateFacts").mockResolvedValueOnce({
+      text: "식사 뒤에 카페에서 잠시 쉬도록 구성했어요. 현재 일정에는 17:00에 방문하도록 잡혀 있어요.",
+      usedFactIds: ["fact-0", "fact-1"],
+    });
+    const result = await executeLimitedExplanation(input(task(cafe), "왜 이 카페 넣었어?"));
+    expect(reason).toHaveBeenCalledWith(expect.objectContaining({ purpose: "explanation",
+      message: "왜 이 카페 넣었어?", subjects: ["성수 카페"] }));
+    expect(result.result).toMatchObject({ status: "success", factTypesUsed: ["candidate_fact", "schedule"],
+      explanation: "식사 뒤에 카페에서 잠시 쉬도록 구성했어요. 현재 일정에는 17:00에 방문하도록 잡혀 있어요." });
+    reason.mockRestore();
+  });
+
+  it("keeps a grounded fallback when model reasoning is unavailable", async () => {
+    const reason = vi.spyOn(groundedDateReasoning, "reasonFromDateFacts").mockRejectedValueOnce(new Error("provider unavailable"));
+    const result = await executeLimitedExplanation(input(task(cafe), "왜 이 카페 넣었어?"));
+    expect(result.result?.status).toBe("success");
+    expect(result.result?.explanation).toContain("카페 역할");
+    reason.mockRestore();
+  });
+
+  it("does not narrate expired or mismatched venue evidence and sorts the displayed schedule", () => {
+    const venue = { ...candidate("cafe", "성수 카페", "cafe"), evidence: [
+      { id: "space-fact", text: "정원 좌석을 소개한다", url: "https://example.com/fact",
+        checkedAt: "2026-09-26T00:00:00Z", attribute: "space" as const, verification: "source_checked" as const },
+    ] };
+    const records = buildDateCandidatePool([venue], state).records;
+    const reordered = currentPlan();
+    reordered.items.reverse();
+    const old = buildRecommendationExplanationContext({ plan: reordered,
+      target: { kind: "entire_plan" }, records, now: "2026-11-01T00:00:00Z" });
+    expect(old.relevantEvidence).toHaveLength(0);
+    expect(old.selectedPlanItems.map(item => item.placeName)).toEqual(["성수 식당", "성수 카페"]);
+    records[0].evidence[0].venueId = "kakao:other";
+    expect(buildRecommendationExplanationContext({ plan: currentPlan(),
+      target: { kind: "entire_plan" }, records, now: "2026-09-26T10:00:00Z" }).relevantEvidence).toHaveLength(0);
+  });
+
   it("explains only a verified cafe and never repeats an unsupported quiet claim", async () => {
     const result = await executeLimitedExplanation(input(task(cafe), "왜 이 카페 넣었어?"));
     expect(result.result).toMatchObject({ status: "success", target: { kind: "specific_place",
@@ -144,7 +183,7 @@ describe("verified recommendation explanation", () => {
     ] };
     const context = buildRecommendationExplanationContext({ plan: currentPlan(),
       target: { kind: "specific_place", venueId: cafe.placeId, name: cafe.name, itemId: "cafe-item" },
-      records: buildDateCandidatePool([venue], state).records });
+      records: buildDateCandidatePool([venue], state).records, now: "2026-09-26T10:00:00Z" });
     expect(context.relevantEvidence).toHaveLength(1);
     expect(renderRecommendationExplanation(context)).toContain("정원 좌석");
     expect(renderRecommendationExplanation(context)).not.toContain("조용하다고 추측");

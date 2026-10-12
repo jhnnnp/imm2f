@@ -90,6 +90,25 @@ describe("dateBrief", () => {
     expect(extractAreasFromText("서울 강남구에서 데이트")).toContain("강남구");
   });
 
+  it("keeps the actual neighborhood when an itinerary connects activity nouns", () => {
+    const message = "로우키커피 헤이그라운드점을 포함해서 성수에서 식사, 카페, 산책으로 이어지는 여유로운 데이트 코스를 만들어줘";
+    expect(extractAreasFromText(message)).toEqual(["성수"]);
+    expect(extractRequestedAreasFromText(message)).toEqual(["성수"]);
+    expect(groundedAreas(message, undefined, ["성수", "산책"])).toEqual(["성수"]);
+  });
+
+  it.each(["산책으로", "카페에서", "전시에서", "실내 활동으로", "보드게임으로", "식사는 양식으로", "체험으로", "쇼핑으로"])
+  ("does not interpret an experience as an additional area: %s", experience => {
+    expect(extractAreasFromText(`성수에서 ${experience} 이어지는 코스를 만들어줘`)).toEqual(["성수"]);
+  });
+
+  it("preserves unknown localities whose names include an activity word", () => {
+    expect(extractRequestedAreasFromText("식사동에서 카페와 산책으로 이어지는 코스")).toEqual(["식사동"]);
+    expect(extractRequestedAreasFromText("영화동에서 전시와 실내 활동으로 이어지는 코스")).toEqual(["영화동"]);
+    expect(extractRequestedAreasFromText("증평에서 식사와 산책으로 이어지는 코스")).toEqual(["증평"]);
+    expect(extractAreasFromText("산책카페에서 시작하고 증평으로 이동해줘")).toEqual(["산책카페", "증평"]);
+  });
+
   it("keeps a theater distinct from a cafe named after the theater", () => {
     const theater = candidate({ name: "소월아트홀", category: "photo", categoryLabel: "공연장", detailedCategory: "문화시설 > 공연장" });
     const cafe = candidate({ name: "할리스 소월아트홀", category: "cafe", categoryLabel: "카페", kakaoCategoryGroupCode: "CE7", detailedCategory: "카페 > 커피전문점" });

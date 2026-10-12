@@ -283,7 +283,7 @@ export function MemoryCanvas({
     }, 420);
   }, [boardSnapshot, coupleId, setPoses, userId]);
 
-  const persist = useCallback((next?: { poses?: Record<string, CorkPose>; strokes?: InkStroke[]; texts?: WallText[]; camera?: Camera }) => {
+  const persist = useCallback((next?: { poses?: Record<string, CorkPose>; strokes?: InkStroke[]; texts?: WallText[]; camera?: Camera | null }) => {
     dirtyRef.current = true;
     setSyncStatus("pending");
     if (next?.poses) posesRef.current = next.poses;

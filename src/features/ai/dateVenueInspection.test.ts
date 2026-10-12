@@ -162,4 +162,23 @@ describe("limited venue inspection", () => {
     expect(result.results[3].failureCode).toBe("limit_reached");
     expect(answer).toHaveBeenCalledTimes(3);
   });
+
+  it("applies the remaining dispatcher budget before starting any external lookup", async () => {
+    const visible = [1, 2, 3].map(index => ({ ...cafe, name: `카페 ${index}` }));
+    const tasks = visible.map((stop, index) => inspect({ id: `task-${index + 1}`,
+      executionOrder: index + 1, target: { kind: "place", name: stop.name } }));
+    answer.mockClear();
+    const result = await executeSupplementaryInspections(input({ plan: plan(tasks),
+      visiblePlaces: visible, courseStops: [], maxExecutions: 1 }), answer);
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(result.results.map(row => row.status)).toEqual(["success", "skipped", "skipped"]);
+    expect(result.observations.map(row => row.data.status)).toEqual(["success", "skipped", "skipped"]);
+  });
+
+  it.each([0, -1, Number.NaN, 1.5])("does not launch lookups for an exhausted or invalid execution budget: %s", async maxExecutions => {
+    answer.mockClear();
+    const result = await executeSupplementaryInspections(input({ maxExecutions }), answer);
+    expect(answer).not.toHaveBeenCalled();
+    expect(result.results[0]).toMatchObject({ status: "skipped", failureCode: "limit_reached" });
+  });
 });

@@ -256,9 +256,9 @@ it("keeps all days of a multi-day recommendation by directing it to a trip desti
 it("restores the initial request when exploration preparation fails", async () => {
   mocks.prepare.mockRejectedValueOnce(new Error("network"));
   render(createElement(AIPlanEditor, editorProps({ candidateExplorationActive: true })));
-  const composer = send("부산 1박2일 카페");
+  const composer = send("부산 1박2일 카페 후보부터 찾아줘");
   await waitFor(() => expect(composer).toHaveProperty("disabled", false));
-  expect(composer.value).toBe("부산 1박2일 카페");
+  expect(composer.value).toBe("부산 1박2일 카페 후보부터 찾아줘");
   expect(mocks.prepare).toHaveBeenCalledTimes(1);
   expect(mocks.recommend).not.toHaveBeenCalled();
 });
@@ -266,9 +266,9 @@ it("restores the initial request when exploration preparation fails", async () =
 it("passes the trip UI context to exploration intake without inventing a duration", async () => {
   mocks.prepare.mockResolvedValueOnce({ state: completeState(), needsArea: false, needsSpan: true });
   render(createElement(AIPlanEditor, editorProps({ kind: "trip", candidateExplorationActive: true })));
-  send("성수 카페");
+  send("성수 카페 후보부터 찾아줘");
   await screen.findByText("여행 기간을 알려 주세요", { exact: true });
-  expect(mocks.prepare.mock.calls[0][0]).toMatchObject({ message: "성수 카페", planKind: "trip" });
+  expect(mocks.prepare.mock.calls[0][0]).toMatchObject({ message: "성수 카페 후보부터 찾아줘", planKind: "trip" });
   expect(mocks.explore).not.toHaveBeenCalled();
 });
 
@@ -286,10 +286,42 @@ function mockExploration(cardCount = 1) {
 async function openExploration(cardCount = 1) {
   mockExploration(cardCount);
   render(createElement(AIPlanEditor, editorProps({ candidateExplorationActive: true })));
-  send("성수 카페");
+  send("성수 카페 후보부터 찾아줘");
   fireEvent.click(await screen.findByRole("button", { name: "선택 완료 · 장소 찾기" }));
   return await screen.findAllByRole("button", { name: "장소 선택", exact: true });
 }
+
+it.each(["안녕", "성수 조용한 카페 추천해줘", "성수에서 오후 데이트 코스 짜줘", "왜 그 카페를 추천해?"])
+("uses the conversational engine without opening a shortlist form: %s", async message => {
+  mocks.recommend.mockResolvedValueOnce(chat("문맥을 보고 답했어요"));
+  render(createElement(AIPlanEditor, editorProps({ candidateExplorationActive: true })));
+  send(message);
+  await screen.findByText("문맥을 보고 답했어요", { exact: true });
+  expect(mocks.recommend).toHaveBeenCalledTimes(1);
+  expect(mocks.recommend.mock.calls[0][0].message).toBe(message);
+  expect(mocks.prepare).not.toHaveBeenCalled();
+});
+
+it("allows ordinary conversation during explicit exploration and keeps the selected candidates", async () => {
+  const buttons = await openExploration(2);
+  fireEvent.click(buttons[0]);
+  mocks.recommend.mockResolvedValueOnce(chat("편하게 이야기해 주세요"));
+  send("고마워, 잠깐 그냥 대화하자");
+  await screen.findByText("편하게 이야기해 주세요", { exact: true });
+  expect(mocks.recommend).toHaveBeenCalledTimes(1);
+  expect(screen.getAllByRole("button", { name: "선택 취소", exact: true })).toHaveLength(1);
+  expect(mocks.explore).toHaveBeenCalledTimes(1);
+});
+
+it("lets AI plan directly after exploration without forcing the user to select candidates", async () => {
+  await openExploration(2);
+  mocks.recommend.mockResolvedValueOnce({ result: plan(), sessionCandidates: null });
+  send("후보 선택 없이 네가 알아서 코스 짜줘");
+  await screen.findByText("확인한 장소로 만들었어요.", { exact: true });
+  expect(mocks.recommend).toHaveBeenCalledTimes(1);
+  expect(mocks.recommend.mock.calls[0][0].planningInput).toBeUndefined();
+  expect(screen.queryByRole("button", { name: "장소 선택", exact: true })).toBeNull();
+});
 
 it("keeps every selection when eleven places are chosen in one render and sends all of them to planning", async () => {
   const buttons = await openExploration(11);

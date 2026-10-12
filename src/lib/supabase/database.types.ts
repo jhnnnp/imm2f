@@ -262,6 +262,9 @@ export type Database = {
           budget?: string;
           time_window?: string;
           area_scope?: string;
+          date_flow?: string;
+          drink?: string;
+          indoor_play?: string;
           note?: string;
           updated_at?: string;
         };

@@ -94,6 +94,14 @@ describe("chatRoute", () => {
     expect(route("카페도 추천해줘", { state })).toMatchObject({ mode: "places", placeAsk: { kind: "cafe", area: "성수" } });
   });
 
+  it("retains all five displayed selections and recognizes the fifth ordinal", () => {
+    const shownPlaces = ["식당 A", "카페 B", "전시 C", "공원 D", "술집 E"];
+    const state = { ...withAreas(emptyDateBrief(), ["성수"]), shownPlaces };
+    expect(route("1번 2번 3번 4번 5번 모두 넣어서 코스 짜줘", { state }))
+      .toMatchObject({ mode: "course", pickedPlaces: shownPlaces });
+    expect(pickedShownPlaces("다섯 번째도 넣어줘", shownPlaces)).toEqual(["술집 E"]);
+  });
+
   it("greets and small talk go to chat mode", () => {
     expect(route("안녕", { chatSituation: "greeting" })).toEqual({ mode: "chat", confident: true });
   });

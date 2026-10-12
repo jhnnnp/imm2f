@@ -124,9 +124,11 @@ export async function saveTasteProfile(input: TasteInput, options?: {
     note: parsed.note,
     updated_at: new Date(Math.max(Date.now(), (Date.parse(current.data?.updated_at ?? "") || 0) + 1)).toISOString(),
   };
+  // Identity columns belong to the insert; updates stay scoped by the query.
+  const { couple_id: coupleId, user_id: userId, ...updates } = payload;
   const { data, error } = current.data
-    ? await supabase.from("taste_profiles").update(payload).eq("couple_id", session.coupleId)
-      .eq("user_id", session.userId).eq("updated_at", current.data.updated_at).select("user_id").maybeSingle()
+    ? await supabase.from("taste_profiles").update(updates).eq("couple_id", coupleId)
+      .eq("user_id", userId).eq("updated_at", current.data.updated_at).select("user_id").maybeSingle()
     : await supabase.from("taste_profiles").insert(payload).select("user_id").maybeSingle();
   if (error?.code === "23505" || (!error && !data)) return {
     error: "다른 화면에서 내 취향을 먼저 저장했어요. 최신 기준을 확인해 주세요.", conflict: true,

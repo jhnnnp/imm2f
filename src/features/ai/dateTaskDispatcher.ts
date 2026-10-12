@@ -197,7 +197,10 @@ export async function dispatchLimitedDateTasks(context: DateTaskExecutionContext
         if (outcome.observation) observations.push(outcome.observation);
       } else if (task.type === "inspect_venue") {
         inspected = true;
-        const outcome = await executors.inspect.execute({ ...context.inspection, plan });
+        const outcome = await executors.inspect.execute({ ...context.inspection, plan,
+          currentPlan: mutationResult?.status === "plan" ? mutationResult : context.inspection.currentPlan,
+          state: mutationResult?.state ?? context.inspection.state,
+          maxExecutions: Math.min(MAX_INSPECTIONS_PER_TURN, MAX_LIMITED_TASK_EXECUTIONS - attempted) });
         let available = Math.min(MAX_INSPECTIONS_PER_TURN, MAX_LIMITED_TASK_EXECUTIONS - attempted);
         let inspectionAttempts = 0;
         inspections = outcome.results.filter(result => !byId.has(result.taskId)).map(result => {
@@ -257,6 +260,10 @@ export async function dispatchLimitedDateTasks(context: DateTaskExecutionContext
         observations.push(outcome.observation);
       }
     } catch {
+      // A batch can fail after starting its lookups. Reserve its granted budget
+      // so later independent tasks cannot exceed the external-call ceiling.
+      if (task.type === "inspect_venue") attempted += Math.min(MAX_INSPECTIONS_PER_TURN,
+        MAX_LIMITED_TASK_EXECUTIONS - attempted);
       const failedTasks = task.type === "inspect_venue"
         ? plan.tasks.filter(row => row.type === "inspect_venue" && !byId.has(row.id)) : [task];
       for (const failedTask of failedTasks) {

@@ -165,12 +165,17 @@ export async function executeSupplementaryInspections(input: { plan: DateExecuti
   route: ChatRoute | null; interpreterMode: DateTurnInterpreterMode; executionMode: DateExecutionMode;
   currentPlan: AIPlannerReply | null; visiblePlaces: AIChatStop[]; courseStops: AIChatStop[];
   userMessage: string; state: AIPlannerState; sessionCandidates?: SessionCandidateContext | null;
+  /** Remaining dispatcher budget; applied before starting any lookup. */
+  maxExecutions?: number;
   coupleTaste: { summary: string; commonTastes: string[]; avoidFoods: string[] } },
   answer: AnswerVenue = answerDateQuestion): Promise<{ results: VenueInspectionTaskExecutionResult[];
     observations: DateObservation[] }> {
   if (!input.plan) return { results: [], observations: [] };
   const pending: Array<Promise<VenueInspectionTaskExecutionResult>> = [];
   const dedupe = new Set<string>();
+  const executionLimit = input.maxExecutions === undefined ? MAX_INSPECTIONS_PER_TURN
+    : Number.isSafeInteger(input.maxExecutions)
+      ? Math.max(0, Math.min(MAX_INSPECTIONS_PER_TURN, input.maxExecutions)) : 0;
   let scheduled = 0;
   for (const task of input.plan.tasks.filter(item => item.type === "inspect_venue")) {
     const base = { taskId: task.id, taskType: "inspect_venue" as const,
@@ -189,7 +194,7 @@ export async function executeSupplementaryInspections(input: { plan: DateExecuti
       continue;
     }
     dedupe.add(key);
-    if (scheduled >= MAX_INSPECTIONS_PER_TURN) {
+    if (scheduled >= executionLimit) {
       pending.push(Promise.resolve({ ...base, status: "skipped", evidenceFound: false, failureCode: "limit_reached" }));
       continue;
     }

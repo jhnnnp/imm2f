@@ -257,6 +257,72 @@ describe("interpretDateRequest local merge", () => {
     expect(next.preferences?.crowdTolerance).toBe(0.2);
   });
 
+  it("retains prior grounded soft cues when a follow-up has no new inferred preference", () => {
+    const previous = { ...emptyDateBrief(), inferredPreferences: [
+      { value: "사진을 남길 만한 공간 선호", evidence: "사진 찍", confidence: 0.8 },
+    ] };
+    const next = mergeDateState(previous, { inferredPreferences: [], intent: "modify" });
+    expect(next.inferredPreferences).toEqual(previous.inferredPreferences);
+  });
+
+  it("removes the final active photo mood when the user rejects it, including on local fallback", () => {
+    const photo = { value: "사진을 남길 만한 공간 선호", evidence: "사진 찍", confidence: 0.8 };
+    const previous = { ...emptyDateBrief(), preferences: { vibe: ["사진 찍기 좋은"] }, inferredPreferences: [photo] };
+    const message = "사진찍기 이제 싫어";
+    const result = applyInterpretPatch({ message, previousState: previous,
+      patch: { intent: "modify", preferences: { vibe: [] }, removeInferredPreferences: [photo.value],
+        removePreferenceVibes: ["사진 찍기 좋은"] } });
+    expect(result.state.preferences?.vibe).toEqual([]);
+    expect(result.state.inferredPreferences).toEqual([]);
+    const fallback = applyInterpretPatch({ message, previousState: previous, patch: fallbackPatch(message) });
+    expect(fallback.state.preferences?.vibe).toEqual([]);
+    expect(fallback.state.inferredPreferences).toEqual([]);
+  });
+
+  it("keeps unrelated moods while explicitly clearing just one prior mood", () => {
+    const previous = { ...emptyDateBrief(), preferences: { vibe: ["사진 찍기 좋은", "조용한"] } };
+    const next = mergeDateState(previous, { preferences: { vibe: [] }, removePreferenceVibes: ["사진 찍기 좋은"] });
+    expect(next.preferences?.vibe).toEqual(["조용한"]);
+    expect(mergeDateState(previous, { preferences: { vibe: [] }, removePreferenceVibes: [] }).preferences?.vibe)
+      .toEqual(previous.preferences.vibe);
+  });
+
+  it("allows a semantic correction to clear the last mood without clearing new unrelated moods", () => {
+    const previous = { ...emptyDateBrief(), preferences: { vibe: ["고급스러운"] } };
+    const cleared = mergeDateState(previous, { preferences: { vibe: [] }, removePreferenceVibes: ["고급스러운"] });
+    expect(cleared.preferences?.vibe).toEqual([]);
+    const changed = mergeDateState(previous, { preferences: { vibe: ["고급스러운", "편안한"] }, removePreferenceVibes: ["고급스러운"] });
+    expect(changed.preferences?.vibe).toEqual(["편안한"]);
+  });
+
+  it("replaces only an explicitly superseded soft cue while keeping unrelated conversation preferences", () => {
+    const oldQuiet = { value: "붐비지 않고 대화하기 좋은 장소 선호", evidence: "조용한", confidence: 0.8 };
+    const oldPhoto = { value: "사진을 남길 만한 공간 선호", evidence: "사진 찍", confidence: 0.8 };
+    const next = applyInterpretPatch({ message: "조용한 곳 말고 활기찬 곳으로 해줘",
+      previousState: { ...emptyDateBrief(), inferredPreferences: [oldQuiet, oldPhoto], preferences: { vibe: ["조용한", "사진 찍기 좋은"], crowdTolerance: 0.2 } },
+      patch: { intent: "modify", preferences: { vibe: ["활기찬", "사진 찍기 좋은"], crowdTolerance: 0.8 },
+        removeInferredPreferences: [oldQuiet.value],
+        inferredPreferences: [{ value: "활기찬 분위기 선호", evidence: "활기찬", confidence: 0.9 }] } });
+    expect(next.state.preferences?.crowdTolerance).toBe(0.8);
+    expect(next.state.preferences?.vibe).not.toContain("조용한");
+    expect(next.state.inferredPreferences).toContainEqual(oldPhoto);
+    expect(next.state.inferredPreferences).not.toContainEqual(oldQuiet);
+  });
+
+  it.each(["성수에서 조용한 곳 말고 활기찬 곳으로 해줘", "성수에서 조용하지 않아도 괜찮아",
+    "성수에서 사진 찍기 싫어", "시끄러운 건 싫지만 조용하기만 한 곳은 재미없어"])
+  ("does not promote a negated local cue into a positive preference: %s", message => {
+    const result = applyInterpretPatch({ message, patch: { intent: "create", preferences: { vibe: ["활기찬"], crowdTolerance: 0.8 } } });
+    expect(result.state.preferences?.crowdTolerance).toBe(0.8);
+    expect(result.state.preferences?.vibe).not.toContain("조용한");
+    expect(result.state.preferences?.vibe).not.toContain("사진 찍기 좋은");
+  });
+
+  it("rejects malformed inferred preference rows before merging model data", () => {
+    expect(validateIntentPayload({ inferredPreferences: [{ value: "quiet", evidence: "조용한", confidence: "high" }] })).toBeNull();
+    expect(validateIntentPayload({ inferredPreferences: [null] })).toBeNull();
+  });
+
   it("keeps an explicit quiet preference despite contradictory inferred model fields", () => {
     const result = applyInterpretPatch({ message: "성수에서 조용히 대화하고 싶어",
       patch: { addAreas: ["성수"], preferences: { vibe: [], crowdTolerance: 0.9 }, intent: "create" } });

@@ -70,6 +70,10 @@ export const KNOWN_AREAS = [
 const AREA_STOPWORDS = new Set([
   "오늘", "우리", "그냥", "조금", "같이", "데이트", "일정", "코스", "추천", "생각",
   "이번", "거기", "어디", "여기", "여행", "하루", "저녁", "점심", "오전", "오후",
+  ...DATE_ACTIVITY_OPTIONS.map(option => option.label),
+  ...DATE_INDOOR_OPTIONS,
+  ...DATE_CUISINE_OPTIONS.map(option => option.label),
+  "활동", "이동", "체험", "쇼핑", "관광",
 ]);
 
 const AREA_CANON: Record<string, string> = {
@@ -672,6 +676,9 @@ export function extractAreasFromText(message: string) {
     .filter(name => !AREA_STOPWORDS.has(name));
   const suffixed = [...message.matchAll(/(?:^|\s)([가-힣]{2,12}?(?:역|동|시))(?=\s|에서|근처|주변|으로|가서|$)/g),
     ...message.matchAll(/(?:^|\s)([가-힣]{1,4}구)(?=\s|에서|근처|주변|으로|가서|$)/g)]
+    // Check the original noun before stripping geographic suffixes: "전시"
+    // and "활동" are experiences, not the localities "전" and "활동".
+    .filter(match => !AREA_STOPWORDS.has(match[1]))
     .map(match => match[1].replace(/(?:역|시)$/, ""))
     .filter(name => !/(?:가려|갈라|하려|할라|먹|하|했|됐)구$/.test(name));
   const going = known.length || travel.length || suffixed.length ? []

@@ -16,7 +16,7 @@ import { buildCandidateGraph, repeatedComplexDays, type CandidateGraph } from ".
 
 export type CourseConstraints = { anchorIds?: readonly string[]; candidateGraph?: CandidateGraph };
 
-export type CourseProposal = { theme: string; rows: DateCourseRow[] };
+export type CourseProposal = { theme: string; intro?: string; rows: DateCourseRow[] };
 export type CourseEvaluation = CourseProposal & { score: number; meters: number; longestHop: number; evidenceCount: number; problems: string[]; issues: PlanningIssue[];
   hardIssues: PlanningIssue[]; softIssues: PlanningIssue[]; qualitySignals: PlanningQualitySignal[]; transformations: PlanningTransformation[];
   scoreBreakdown?: { venues: number; evidence: number; diversity: number; route: number; flow: number; pacing: number; schedule: number; violations: number } };
@@ -228,10 +228,15 @@ export function parseCourseProposals(value: unknown, days: number, candidateCoun
         || !Number.isInteger(row.day_index) || Number(row.day_index) < 0 || Number(row.day_index) >= days
         || !Number.isInteger(row.duration_minutes) || Number(row.duration_minutes) < 30
         || Number(row.duration_minutes) > 180) return null;
-      return { id: row.id, day_index: Number(row.day_index), duration_minutes: Number(row.duration_minutes) };
+      const reason = typeof row.reason === "string" ? row.reason.replace(/[\n\r*_#`]/g, " ").trim().slice(0, 180) : "";
+      const evidenceIds = Array.isArray(row.evidenceIds) && row.evidenceIds.length <= 8
+        && row.evidenceIds.every(id => typeof id === "string") ? row.evidenceIds as string[] : [];
+      return { id: row.id, day_index: Number(row.day_index), duration_minutes: Number(row.duration_minutes),
+        ...(reason ? { reasons: [reason], reasonEvidenceIds: evidenceIds } : {}) };
     });
     return rows.some(row => row === null) ? []
       : [{ theme: typeof object.theme === "string" ? object.theme.replace(/[\n*_#]/g, " ").trim().slice(0, 90) : "",
+        ...(typeof object.intro === "string" ? { intro: object.intro.replace(/[\n\r*_#`]/g, " ").trim().slice(0, 260) } : {}),
         rows: rows as DateCourseRow[] }];
   });
 }
