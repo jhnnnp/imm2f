@@ -27,7 +27,7 @@ import type { TasteInput } from "./taste/types";
 import type { UpdateMemoryInput } from "./memories/types";
 
 function query(result: { data?: unknown; error?: unknown } = { data: [], error: null }) {
-  const methods = ["select", "eq", "neq", "in", "not", "is", "order", "limit", "maybeSingle", "single", "insert", "upsert", "update", "delete"] as const;
+  const methods = ["select", "returns", "eq", "neq", "in", "not", "is", "order", "limit", "maybeSingle", "single", "insert", "upsert", "update", "delete"] as const;
   const chain = Object.fromEntries(methods.map(method => [method, vi.fn(() => chain)])) as Record<typeof methods[number], ReturnType<typeof vi.fn>> & PromiseLike<typeof result>;
   chain.then = (resolve, reject) => Promise.resolve(result).then(resolve, reject);
   return chain;

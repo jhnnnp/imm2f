@@ -6,30 +6,20 @@ import { AppLink } from "./AppLink";
 import { NAVIGATION } from "./navigation";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { signOut } from "@/features/auth/session";
-import { appSessionIdentity, initialFromName } from "@/features/auth/types";
+import { initialFromName } from "@/features/auth/types";
 import { pairLabel } from "@/features/auth/koreanName";
 import { BrandMark, SidebarIcon } from "./SidebarIcon";
 import { useDialogFocus } from "@/components/shared/useDialogFocus";
-import { subscribeWorkspaceChanges } from "@/features/collaboration/realtimeSync";
-import { markNavigationDataChanged, releaseNavigationIdentity, setNavigationIdentity } from "./navigationIntent";
 
 export function Sidebar() {
   const pathname = usePathname();
   const query = useSearchParams().toString();
   const session = useAppSession();
-  const identity = appSessionIdentity(session);
-  const coupleId = session.mode === "authenticated" ? session.coupleId : "";
-  const userId = session.mode === "authenticated" ? session.userId : "";
   const [ready, setReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useDialogFocus<HTMLDivElement>({ open: menuOpen, onClose: () => setMenuOpen(false) });
   useEffect(() => setReady(true), []);
   useEffect(() => setMenuOpen(false), [pathname, query]);
-  useEffect(() => {
-    setNavigationIdentity(identity);
-    const live = coupleId ? subscribeWorkspaceChanges(coupleId, markNavigationDataChanged, { userId }) : null;
-    return () => { live?.unsubscribe(); releaseNavigationIdentity(identity); };
-  }, [identity, coupleId, userId]);
   const hasIdentity = session.mode === "authenticated" || session.mode === "setup_error";
   const youName = hasIdentity ? session.displayName : "나";
   const partnerName = session.mode === "authenticated" ? session.partner?.displayName ?? null : null;
@@ -38,7 +28,7 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar" aria-label="주요 메뉴">
-      <AppLink className="brand" href="/" prefetchMode="hover" aria-label="홈으로 이동">
+      <AppLink className="brand" href="/" aria-label="홈으로 이동">
         <span className="brand-mark"><BrandMark /></span>
         <span className="brand-copy"><strong>ONLY US</strong><small>PRIVATE SPACE FOR TWO</small></span>
       </AppLink>
@@ -47,7 +37,7 @@ export function Sidebar() {
           if ("section" in item) return <p key={`${item.section}-${index}`}>{item.section}</p>;
           const active = ready && (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href));
           return (
-            <AppLink className={`nav-item ${active ? "is-active" : ""}`} href={item.href} prefetchMode="hover" key={item.href} suppressHydrationWarning>
+            <AppLink className={`nav-item ${active ? "is-active" : ""}`} href={item.href} key={item.href} suppressHydrationWarning>
               <span className="nav-icon-wrap"><SidebarIcon name={item.iconName} /></span>{item.label}
             </AppLink>
           );
@@ -88,14 +78,14 @@ export function Sidebar() {
           </div>
         </div>
         {session.mode === "authenticated" && session.partner
-          ? <AppLink className="couple-card-action" href="/invite" prefetchMode="hover">
+          ? <AppLink className="couple-card-action" href="/invite">
             <span>파트너 관리</span><b aria-hidden="true">→</b>
           </AppLink>
           : session.mode === "setup_error"
             ? <button className="couple-card-action" type="button" onClick={() => void signOut()}>
               <span>다시 로그인</span><b aria-hidden="true">→</b>
             </button>
-            : <AppLink className="couple-card-action" prefetchMode="hover" href={session.mode === "authenticated" ? "/invite" : "/login"}>
+            : <AppLink className="couple-card-action" href={session.mode === "authenticated" ? "/invite" : "/login"}>
               <span>{session.mode === "authenticated" ? "파트너 초대" : "로그인"}</span><b aria-hidden="true">→</b>
             </AppLink>}
       </div>

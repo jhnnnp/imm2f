@@ -51,6 +51,11 @@ type PlanItemRow = {
   lat?: number | null;
 };
 
+const PLAN_ITEM_FIELDS = "client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index, lng, lat";
+const PLAN_FIELDS = "id, kind, title, subtitle, start_date, day_count, revision_id";
+const TRIP_DRAFT_FIELDS = "scheduled_on,title,notes,day_count,items,updated_at";
+type TripDraftRow = { scheduled_on: string | null; title: string; notes: string; day_count: number; items: unknown; updated_at: string };
+
 function normalizeDay(value: unknown) {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n < 0) return 0;
@@ -94,6 +99,20 @@ function toItem(row: PlanItemRow): PlanItem {
 
 function emptyPlan(persist: boolean): CouplePlan {
   return { persist, revision: 0, items: [], title: "", notes: "", startDate: null, dayCount: 1 };
+}
+
+function toCouplePlan(plan: PlanRow, rows: readonly PlanItemRow[]) {
+  const items = [...rows].sort((a, b) => normalizeDay(a.day_index) - normalizeDay(b.day_index) || a.sort_order - b.sort_order).map(toItem);
+  const subtitle = plan.subtitle ?? "";
+  return stripLegacyDemoPlan({
+    persist: true,
+    revision: plan.revision_id ?? 0,
+    items,
+    title: plan.title ?? "",
+    notes: /^\d+곳$/.test(subtitle.trim()) ? "" : subtitle,
+    startDate: plan.start_date ?? null,
+    dayCount: Math.max(1, plan.day_count ?? 1, items.reduce((max, item) => Math.max(max, item.dayIndex + 1), 1)),
+  });
 }
 
 function isMissingSchemaObject(error: { code?: string; message?: string } | null | undefined) {
@@ -187,10 +206,23 @@ export const loadCouplePlan = cache(async (kind: PlanKind): Promise<CouplePlan> 
 
   let planQuery = await supabase
     .from("plans")
-    .select("id, kind, title, subtitle, start_date, day_count, revision_id")
+    // Read the itinerary and its version in the same database snapshot. Besides
+    // removing a network waterfall, this prevents an edit between the plan and
+    // item reads from pairing a new itinerary with an older revision.
+    .select(`${PLAN_FIELDS}, plan_items(${PLAN_ITEM_FIELDS})`)
     .eq("couple_id", session.coupleId)
     .eq("kind", kind)
-    .maybeSingle();
+    .maybeSingle<PlanRow & { plan_items?: PlanItemRow[] }>();
+  if (planQuery.error && (isMissingSchemaObject(planQuery.error) || planQuery.error.code === "PGRST200")) {
+    // Keep the old-schema path for installations whose columns or PostgREST
+    // relationship cache have not caught up with the current schema.
+    planQuery = await supabase
+      .from("plans")
+      .select("id, kind, title, subtitle, start_date, day_count, revision_id")
+      .eq("couple_id", session.coupleId)
+      .eq("kind", kind)
+      .maybeSingle();
+  }
   if (planQuery.error && isMissingSchemaObject(planQuery.error)) {
     planQuery = await supabase
       .from("plans")
@@ -208,51 +240,45 @@ export const loadCouplePlan = cache(async (kind: PlanKind): Promise<CouplePlan> 
       .maybeSingle();
   }
   if (planQuery.error) throw new Error("일정을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
-  const plan = planQuery.data as PlanRow | null;
+  const plan = planQuery.data;
   if (!plan) return emptyPlan(true);
 
-  let itemRows: Array<Partial<PlanItemRow> & { client_id: string; place_id: string; place_name: string; category: string; start_time: string; duration_minutes: number; expected_cost: number; sort_order: number; memo: string }> | null = null;
-  const withCoords = await supabase
-    .from("plan_items")
-    .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index, lng, lat")
-    .eq("plan_id", plan.id)
-    .order("day_index", { ascending: true })
-    .order("sort_order", { ascending: true });
-  if (!withCoords.error) {
-    itemRows = withCoords.data;
-  } else {
-    if (!isMissingSchemaObject(withCoords.error)) throw new Error("일정의 장소를 불러오지 못했어요.");
-    const withDay = await supabase
+  let itemRows: Array<Partial<PlanItemRow> & { client_id: string; place_id: string; place_name: string; category: string; start_time: string; duration_minutes: number; expected_cost: number; sort_order: number; memo: string }> | null = Array.isArray(plan.plan_items)
+    ? [...plan.plan_items].sort((a, b) => normalizeDay(a.day_index) - normalizeDay(b.day_index) || a.sort_order - b.sort_order)
+    : null;
+  if (itemRows === null) {
+    const withCoords = await supabase
       .from("plan_items")
-      .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index")
+      .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index, lng, lat")
       .eq("plan_id", plan.id)
       .order("day_index", { ascending: true })
       .order("sort_order", { ascending: true });
-    if (!withDay.error) {
-      itemRows = withDay.data;
+    if (!withCoords.error) {
+      itemRows = withCoords.data;
     } else {
-      if (!isMissingSchemaObject(withDay.error)) throw new Error("일정의 장소를 불러오지 못했어요.");
-      const withoutDay = await supabase
+      if (!isMissingSchemaObject(withCoords.error)) throw new Error("일정의 장소를 불러오지 못했어요.");
+      const withDay = await supabase
         .from("plan_items")
-        .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo")
+        .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo, day_index")
         .eq("plan_id", plan.id)
+        .order("day_index", { ascending: true })
         .order("sort_order", { ascending: true });
-      if (withoutDay.error) throw new Error("일정의 장소를 불러오지 못했어요.");
-      itemRows = withoutDay.data;
+      if (!withDay.error) {
+        itemRows = withDay.data;
+      } else {
+        if (!isMissingSchemaObject(withDay.error)) throw new Error("일정의 장소를 불러오지 못했어요.");
+        const withoutDay = await supabase
+          .from("plan_items")
+          .select("client_id, place_id, place_name, category, start_time, duration_minutes, expected_cost, sort_order, memo")
+          .eq("plan_id", plan.id)
+          .order("sort_order", { ascending: true });
+        if (withoutDay.error) throw new Error("일정의 장소를 불러오지 못했어요.");
+        itemRows = withoutDay.data;
+      }
     }
   }
 
-  let items = (itemRows ?? []).map(item => toItem(item as PlanItemRow));
-  const subtitle = plan.subtitle ?? "";
-  const stripped = stripLegacyDemoPlan({
-    persist: true,
-    revision: plan.revision_id ?? 0,
-    items,
-    title: plan.title ?? "",
-    notes: /^\d+곳$/.test(subtitle.trim()) ? "" : subtitle,
-    startDate: plan.start_date ?? null,
-    dayCount: Math.max(1, plan.day_count ?? 1, items.reduce((max, item) => Math.max(max, item.dayIndex + 1), 1)),
-  });
+  const stripped = toCouplePlan(plan, (itemRows ?? []) as PlanItemRow[]);
   const liveItems = await attachStoredPlanCoordinates(supabase, session.coupleId, stripped.items);
   return { ...stripped, items: liveItems };
 });
@@ -454,15 +480,19 @@ export const listTripDrafts = cache(async (): Promise<TripDateSnapshot[]> => {
   if (session.mode !== "authenticated") return [];
   const supabase = await createClient();
   if (!supabase) return [];
-  const rows: Array<{ scheduled_on: string | null; title: string; notes: string; day_count: number; items: unknown; updated_at: string }> = [];
+  const rows: TripDraftRow[] = [];
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await supabase.from("trip_drafts")
-      .select("scheduled_on,title,notes,day_count,items,updated_at").eq("couple_id", session.coupleId)
+      .select(TRIP_DRAFT_FIELDS).eq("couple_id", session.coupleId)
       .order("scheduled_on", { ascending: true }).range(offset, offset + 999);
     if (error) throw new Error("날짜별 여행을 불러오지 못했어요. 현재 여행은 그대로 있어요.");
     rows.push(...(data ?? []));
     if ((data?.length ?? 0) < 1000) break;
   }
+  return toTripDrafts(rows);
+});
+
+function toTripDrafts(rows: TripDraftRow[]): TripDateSnapshot[] {
   return rows.flatMap(row => {
     if (row.scheduled_on !== null && !isIsoDate(row.scheduled_on)) return [];
     const items = parseDraftItems(row.items);
@@ -470,12 +500,58 @@ export const listTripDrafts = cache(async (): Promise<TripDateSnapshot[]> => {
       dayCount: Math.max(1, Math.min(7, row.day_count || 1), ...items.map(item => item.dayIndex + 1)), items, updatedAt: row.updated_at };
     return hasTripContent(snapshot) ? [snapshot] : [];
   });
-});
+}
+
+async function readAtomicTripSnapshot(client: PlanningClient, coupleId: string) {
+  // Both relations are read by one PostgREST SQL statement. An atomic save can
+  // no longer fall between separate plan/draft reads, so no revision probes
+  // are needed on this path. Keep the parent scoped even when no plan exists.
+  const result = await client.from("couples")
+    .select(`id, plans(${PLAN_FIELDS}, plan_items(${PLAN_ITEM_FIELDS})), trip_drafts(${TRIP_DRAFT_FIELDS})`)
+    .eq("id", coupleId).eq("plans.kind", "trip")
+    .order("scheduled_on", { referencedTable: "trip_drafts", ascending: true })
+    .limit(1001, { referencedTable: "trip_drafts" })
+    .maybeSingle<{ id: string; plans: Array<PlanRow & { plan_items: PlanItemRow[] }>; trip_drafts: TripDraftRow[] }>();
+  if (result.error) {
+    if (result.error.code === "PGRST200" || isMissingSchemaObject(result.error)) return null;
+    throw new Error("여행의 최신 상태를 확인하지 못했어요. 다시 조회해 주세요.");
+  }
+  const row = result.data;
+  if (!row || row.id !== coupleId || !Array.isArray(row.plans) || row.plans.length > 1 || !Array.isArray(row.trip_drafts)) {
+    throw new Error("여행의 최신 상태를 확인하지 못했어요. 다시 조회해 주세요.");
+  }
+  // Some providers enforce max_rows=1000 even when 1001 is requested. Treat
+  // either boundary as possibly incomplete and use the paginated legacy read.
+  if (row.trip_drafts.length >= 1000) return null;
+  const plan = row.plans[0];
+  if (plan && (typeof plan.id !== "string" || plan.kind !== "trip" || typeof plan.title !== "string" || typeof plan.subtitle !== "string"
+    || (plan.start_date !== null && !isIsoDate(plan.start_date)) || !Number.isInteger(plan.day_count) || (plan.day_count ?? 0) < 1
+    || !Number.isSafeInteger(plan.revision_id) || (plan.revision_id ?? -1) < 0 || !Array.isArray(plan.plan_items))) {
+    throw new Error("여행의 최신 상태를 확인하지 못했어요. 다시 조회해 주세요.");
+  }
+  if (plan?.plan_items.some(item => !item || typeof item !== "object" || !Number.isFinite(item.sort_order) || !validPlanItems([toItem(item)]))) {
+    throw new Error("여행의 장소를 확인하지 못했어요. 다시 조회해 주세요.");
+  }
+  if (row.trip_drafts.some(draft => !draft || (draft.scheduled_on !== null && typeof draft.scheduled_on !== "string")
+    || typeof draft.title !== "string" || typeof draft.notes !== "string" || !Number.isFinite(draft.day_count)
+    || !Array.isArray(draft.items) || typeof draft.updated_at !== "string")) {
+    throw new Error("날짜별 여행을 불러오지 못했어요. 현재 여행은 그대로 있어요.");
+  }
+  const active = plan ? toCouplePlan(plan, plan.plan_items) : emptyPlan(true);
+  return { active: { ...active, items: await attachStoredPlanCoordinates(client, coupleId, active.items) }, drafts: toTripDrafts(row.trip_drafts) };
+}
 
 export async function readTripDate(startDate?: string | null) {
   if (startDate !== undefined && startDate !== null && startDate !== "" && !isIsoDate(startDate)) throw new Error("열려는 여행 날짜를 확인해 주세요.");
   const session = await getAppSession();
   const client = session.mode === "authenticated" ? await createClient() : null;
+  if (client && session.mode === "authenticated") {
+    const atomic = await readAtomicTripSnapshot(client, session.coupleId);
+    if (atomic) {
+      const drafts = tripDraftsWithActive(atomic.drafts, atomic.active);
+      return { plan: startDate === undefined ? atomic.active : tripForDate(atomic.active, drafts, startDate ?? ""), drafts };
+    }
+  }
   const revision = async () => {
     if (!client || session.mode !== "authenticated") return 0;
     // These reads deliberately bypass React.cache: an older cached plan must

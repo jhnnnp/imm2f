@@ -10,16 +10,18 @@ import { addItemToCouplePlan, archiveTripPlan, listArchivedTripPlans, listTripDr
 function query(data: unknown, error: unknown = null) {
   const result = { data, error };
   const chain: Record<string, ReturnType<typeof vi.fn>> & PromiseLike<typeof result> = { then: (resolve, reject) => Promise.resolve(result).then(resolve, reject) } as never;
-  for (const method of ["select", "eq", "in", "order", "range", "maybeSingle", "single", "insert", "delete"]) chain[method] = vi.fn(() => chain);
+  for (const method of ["select", "eq", "in", "order", "range", "limit", "maybeSingle", "single", "insert", "delete"]) chain[method] = vi.fn(() => chain);
   return chain;
 }
 const item: PlanItem = { id: "cafe", placeId: "cafe", placeName: "부산 카페", category: "카페", memo: "", dayIndex: 0, order: 0, startTime: "13:00", durationMinutes: 60, expectedCost: 0, coordinates: [129, 35] };
 const active = { id: "active", kind: "trip", start_date: "2026-10-11", title: "부산 여행", subtitle: "체크인 16시", day_count: 3, revision_id: 8 };
 const activeItem = { client_id: item.id, place_id: item.placeId, place_name: item.placeName, category: item.category, memo: item.memo, day_index: 0, sort_order: 0, start_time: item.startTime, duration_minutes: 60, expected_cost: 0, lng: 129, lat: 35 };
 const draft = { scheduled_on: "2026-11-01", title: "제주 여행", notes: "바다", day_count: 2, items: [{ ...item, id: "sea", placeName: "제주 바다" }], updated_at: "2026-10-11T01:00:00Z" };
+const legacySchema = { code: "PGRST200", message: "Relationship missing in schema cache" };
 function clientFor(rows: unknown[] = [draft], plan: typeof active | null = active) {
   const queries: Array<{ table: string; query: ReturnType<typeof query> }> = [];
   const client = { from: vi.fn((table: string) => {
+    if (table === "couples") return query(null, legacySchema);
     const next = query(table === "plans" ? plan : table === "plan_items" ? [activeItem] : table === "trip_drafts" ? rows : []);
     queries.push({ table, query: next }); return next;
   }), rpc: vi.fn().mockResolvedValue({ data: { plan_id: "active", version: 9, revision: 9 }, error: null }) };
@@ -74,14 +76,14 @@ describe("trip draft reads", () => {
   });
   it("discards a mixed draft snapshot when a partner saves between the raw revision reads", async () => {
     const { client } = clientFor(); let planReads = 0;
-    client.from.mockImplementation((table: string) => query(table === "plans"
+    client.from.mockImplementation((table: string) => table === "couples" ? query(null, legacySchema) : query(table === "plans"
       ? { ...active, revision_id: ++planReads === 3 ? 9 : 8 } : table === "trip_drafts" ? [draft] : [activeItem]));
     await expect(readTripDate(draft.scheduled_on)).rejects.toThrow("조회하는 동안 파트너가 여행을 변경");
     expect(planReads).toBe(3); expect(client.rpc).not.toHaveBeenCalled(); expect(mocks.activity).not.toHaveBeenCalled();
   });
   it("rejects a cached active plan older than the stable raw revision without retrying the same cache", async () => {
     const { client } = clientFor(); let planReads = 0;
-    client.from.mockImplementation((table: string) => query(table === "plans"
+    client.from.mockImplementation((table: string) => table === "couples" ? query(null, legacySchema) : query(table === "plans"
       ? { ...active, revision_id: ++planReads === 2 ? 8 : 9 } : table === "trip_drafts" ? [draft] : [activeItem]));
     await expect(readTripDate()).rejects.toThrow("다시 조회해 주세요");
     expect(planReads).toBe(3); expect(client.rpc).not.toHaveBeenCalled();
@@ -97,9 +99,9 @@ describe("trip draft reads", () => {
     expect(client.rpc).not.toHaveBeenCalled();
   });
   it("rejects an initial raw revision read failure before returning a misleading empty travel", async () => {
-    const { client } = clientFor(); client.from.mockReturnValueOnce(query(null, { message: "private provider detail" }));
+    const { client } = clientFor(); client.from.mockReturnValueOnce(query(null, legacySchema)).mockReturnValueOnce(query(null, { message: "private provider detail" }));
     await expect(readTripDate(null)).rejects.toThrow("최신 상태를 확인하지 못했어요");
-    expect(client.from).toHaveBeenCalledTimes(1); expect(client.rpc).not.toHaveBeenCalled();
+    expect(client.from).toHaveBeenCalledTimes(2); expect(client.rpc).not.toHaveBeenCalled();
   });
   it("infers supported trip days from stored items and ignores malformed JSON places", async () => {
     clientFor([{ ...draft, day_count: 1, items: [{ ...item, dayIndex: 2 }, { ...item, id: "invalid", placeName: "", dayIndex: 99 }] }]);
