@@ -4,6 +4,28 @@ import { signPhotoBatches } from "./signPhotoBatches";
 import type { Memory } from "./types";
 import { isDisplayableUrl } from "./wallPieces";
 
+const RENEW_AFTER_MS = 50 * 60 * 1000;
+const EXPIRY_MARGIN_MS = 10 * 60 * 1000;
+type RenewedPhotoUrl = { url: string; renewAt: number };
+
+function signedPhotoExpiry(url: string) {
+  try {
+    const token = new URL(url).searchParams.get("token");
+    const payload = token?.split(".")[1];
+    if (!payload) return null;
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const claims: unknown = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "=")));
+    const exp = claims && typeof claims === "object" && "exp" in claims ? claims.exp : null;
+    return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1000 : null;
+  } catch { return null; }
+}
+
+function preferredPhotoUrl(initialUrl: string, renewed?: RenewedPhotoUrl) {
+  if (!renewed) return initialUrl;
+  // A newer server snapshot can already contain a fresher signature.
+  return (signedPhotoExpiry(initialUrl) ?? 0) > (signedPhotoExpiry(renewed.url) ?? 0) ? initialUrl : renewed.url;
+}
+
 export function memoryPhotoIdsNeedingSign(memories: Memory[]) {
   const ids: string[] = [];
   for (const memory of memories) {
@@ -33,41 +55,84 @@ export function applyMemoryPhotoUrls(memories: Memory[], urls: Record<string, st
 }
 
 export function useResolvedMemories(memories: Memory[], retryKey = 0, onFailure?: (failed: boolean) => void) {
-  const [urls, setUrls] = useState<Record<string, string>>({});
+  const [renewedUrls, setRenewedUrls] = useState<Record<string, RenewedPhotoUrl>>({});
+  const renewedRef = useRef(renewedUrls);
+  renewedRef.current = renewedUrls;
   const failureCallback = useRef(onFailure);
   failureCallback.current = onFailure;
-  const pendingKey = useMemo(() => memoryPhotoIdsNeedingSign(memories).join(","), [memories]);
+  const previousRetry = useRef(retryKey);
+  const photosKey = useMemo(() => JSON.stringify(memories.flatMap(memory => memory.photos
+    .filter(photo => photo.storagePath)
+    .map(photo => ({ id: photo.id, url: photo.storageUrl })))), [memories]);
 
   useEffect(() => {
-    const ids = pendingKey ? pendingKey.split(",") : [];
-    if (!ids.length) {
-      setUrls({});
+    const photos = [...new Map((JSON.parse(photosKey) as Array<{ id: string; url: string }>).map(photo => [photo.id, photo])).values()];
+    const forceRetry = previousRetry.current !== retryKey;
+    previousRetry.current = retryKey;
+    if (!photos.length) {
+      renewedRef.current = {};
+      setRenewedUrls({});
       failureCallback.current?.(false);
       return;
     }
     let cancelled = false;
-    let lastSigned = 0;
-    const refresh = () => {
-      lastSigned = Date.now();
-      void signPhotoBatches(ids, signMemoryPhotoUrls, () => !cancelled).then(({ urls: next, failed }) => {
-        if (!cancelled) {
-          setUrls(current => ({ ...current, ...next }));
-          failureCallback.current?.(failed);
-        }
-      });
+    let running = false;
+    let timer = 0;
+    const nextRenewal = new Map(photos.map(photo => {
+      const cached = renewedRef.current[photo.id];
+      const url = preferredPhotoUrl(photo.url, cached);
+      // Decode expiry only as a scheduling hint. The server still authorizes
+      // every renewal; missing or unreadable signatures are renewed at once.
+      const renewAt = cached?.url === url ? cached.renewAt : (signedPhotoExpiry(url) ?? 0) - EXPIRY_MARGIN_MS;
+      return [photo.id, Math.min(renewAt, Date.now() + RENEW_AFTER_MS)];
+    }));
+    const schedule = () => {
+      window.clearTimeout(timer);
+      const dueAt = Math.min(...nextRenewal.values());
+      timer = window.setTimeout(() => {
+        if (document.visibilityState === "visible") void refresh();
+      }, Math.max(1, dueAt - Date.now()));
     };
-    refresh();
-    // Signed URLs expire in an hour; long-open albums must renew them too.
-    const renewAfter = 50 * 60 * 1000;
-    const renew = () => { if (document.visibilityState === "visible" && Date.now() - lastSigned >= renewAfter) refresh(); };
-    const timer = window.setInterval(renew, renewAfter);
+    const refresh = async (force = false) => {
+      if (cancelled || running) return;
+      const ids = photos.filter(photo => force || (nextRenewal.get(photo.id) ?? 0) <= Date.now()).map(photo => photo.id);
+      if (!ids.length) { schedule(); return; }
+      running = true;
+      // A failed renewal remains retryable without a rapid automatic loop.
+      ids.forEach(id => nextRenewal.set(id, Date.now() + RENEW_AFTER_MS));
+      const { urls: next, failed } = await signPhotoBatches(ids, signMemoryPhotoUrls, () => !cancelled);
+      if (cancelled) return;
+      const updates: Record<string, RenewedPhotoUrl> = {};
+      Object.entries(next).forEach(([id, url]) => {
+        const renewAt = Math.max(Date.now() + 60_000, Math.min(
+          (signedPhotoExpiry(url) ?? Date.now() + RENEW_AFTER_MS + EXPIRY_MARGIN_MS) - EXPIRY_MARGIN_MS,
+          Date.now() + RENEW_AFTER_MS,
+        ));
+        updates[id] = { url, renewAt };
+        nextRenewal.set(id, renewAt);
+      });
+      renewedRef.current = { ...renewedRef.current, ...updates };
+      setRenewedUrls(renewedRef.current);
+      failureCallback.current?.(failed);
+      running = false;
+      schedule();
+    };
+    failureCallback.current?.(false);
+    void refresh(forceRetry);
+    const renew = () => { if (document.visibilityState === "visible") void refresh(); };
     document.addEventListener("visibilitychange", renew);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", renew);
     };
-  }, [pendingKey, retryKey]);
+  }, [photosKey, retryKey]);
 
-  return useMemo(() => applyMemoryPhotoUrls(memories, urls), [memories, urls]);
+  return useMemo(() => {
+    const urls: Record<string, string> = {};
+    memories.forEach(memory => memory.photos.forEach(photo => {
+      if (renewedUrls[photo.id]) urls[photo.id] = preferredPhotoUrl(photo.storageUrl, renewedUrls[photo.id]);
+    }));
+    return applyMemoryPhotoUrls(memories, urls);
+  }, [memories, renewedUrls]);
 }

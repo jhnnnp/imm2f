@@ -48,6 +48,8 @@ type PhotoRow = {
 };
 
 const PHOTO_FIELDS = "id, memory_id, storage_url, caption, sort_order, latitude, longitude, captured_at, storage_path, original_filename, mime_type, file_size, width, height, camera_make, camera_model, location_source";
+const INITIAL_PHOTO_SIGN_LIMIT = 48;
+const INITIAL_PHOTO_SIGN_BUDGET_MS = 1_000;
 
 function refreshMemories() {
   revalidatePath("/");
@@ -135,28 +137,75 @@ function coverPhotos(photoRows: PhotoRow[]) {
   return [...first.values()];
 }
 
+async function initialPhotoUrls(
+  supabase: NonNullable<Awaited<ReturnType<typeof createClient>>>,
+  photos: PhotoRow[],
+) {
+  if (!photos.length) return new Map<string, string>();
+  // A large album must not create an unbounded Storage payload or hold the page
+  // behind slow signing. Missing URLs remain eligible for the client retry flow.
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      signPhotos(supabase, photos).catch(() => new Map<string, string>()),
+      new Promise<Map<string, string>>(resolve => {
+        timeout = setTimeout(() => resolve(new Map()), INITIAL_PHOTO_SIGN_BUDGET_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 const loadMemories = cache(async (photoMode: "all" | "cover" | "none"): Promise<{ persist: boolean; memories: Memory[] }> => {
   const session = await getAppSession();
   if (session.mode !== "authenticated") return { persist: false, memories: [] };
   const supabase = await createClient();
   if (!supabase) return { persist: false, memories: [] };
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("memories")
-    .select("*")
+    .select(photoMode === "none" ? "*" : `*, memory_photos(${PHOTO_FIELDS})`)
     .eq("couple_id", session.coupleId)
     .order("happened_on", { ascending: false });
-  if (error) throw new Error("추억을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
-  if (!data) return { persist: true, memories: [] };
+  if (photoMode === "cover") {
+    // PostgREST applies this limit to each memory's photos. Dashboard/map
+    // previews need one cover per memory, not every full-resolution photo row.
+    query = query.order("sort_order", { referencedTable: "memory_photos", ascending: true })
+      .limit(1, { referencedTable: "memory_photos" });
+  }
+  let result = await query.returns<Array<MemoryRow & { memory_photos?: PhotoRow[] }>>();
+  if (result.error?.code === "PGRST200") {
+    // A stale PostgREST relationship cache can temporarily lack the existing FK.
+    result = await supabase.from("memories").select("*").eq("couple_id", session.coupleId)
+      .order("happened_on", { ascending: false });
+  }
+  if (result.error) throw new Error("추억을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
+  const data = result.data;
+  if (!data?.length) return { persist: true, memories: [] };
 
   const ids = data.map(row => row.id);
-  const { data: photos, error: photoError } = ids.length && photoMode !== "none"
-    ? await supabase.from("memory_photos").select(PHOTO_FIELDS).in("memory_id", ids)
-    : { data: [] as PhotoRow[], error: null };
+  const embedded = photoMode !== "none" && data.every(row => Array.isArray(row.memory_photos));
+  const { data: photos, error: photoError } = photoMode === "none"
+    ? { data: [] as PhotoRow[], error: null }
+    : embedded
+      ? { data: data.flatMap(row => row.memory_photos ?? []), error: null }
+      : await supabase.from("memory_photos").select(PHOTO_FIELDS).in("memory_id", ids);
   if (photoError) throw new Error("추억 사진을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
 
   const photoRows = (photos ?? []) as PhotoRow[];
   const mappedPhotos = photoMode === "cover" ? coverPhotos(photoRows) : photoRows;
+  const allowedMemories = new Set(ids);
+  const privatePhotos = mappedPhotos.filter(photo => allowedMemories.has(photo.memory_id)
+    && photo.storage_path?.startsWith(`${session.coupleId}/`)
+    && !photo.storage_path.split("/").includes(".."));
+  // Cover-first ordering makes each visible memory useful before signing album
+  // extras. Reuse the authorization already established by the scoped read.
+  const firstPhotos = coverPhotos(privatePhotos);
+  const coverIds = new Set(firstPhotos.map(photo => photo.id));
+  const initialPhotos = [...firstPhotos, ...privatePhotos.filter(photo => !coverIds.has(photo.id))]
+    .slice(0, INITIAL_PHOTO_SIGN_LIMIT);
+  const signedUrls = await initialPhotoUrls(supabase, initialPhotos);
   const byMemory = new Map<string, PhotoRow[]>();
   mappedPhotos.forEach(photo => {
     const group = byMemory.get(photo.memory_id) ?? [];
@@ -166,7 +215,7 @@ const loadMemories = cache(async (photoMode: "all" | "cover" | "none"): Promise<
 
   return {
     persist: true,
-    memories: (data as MemoryRow[]).map(row => toMemory(row, byMemory.get(row.id) ?? [])),
+    memories: (data as MemoryRow[]).map(row => toMemory(row, byMemory.get(row.id) ?? [], signedUrls)),
   };
 });
 
