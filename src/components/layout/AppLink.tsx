@@ -5,7 +5,7 @@ import { NavigationProgress } from "./NavigationProgress";
 import { useState, type ComponentProps, type FocusEvent, type MouseEvent, type TouchEvent } from "react";
 import styles from "./NavigationProgress.module.css";
 
-type PrefetchMode = "auto" | "never" | "hover";
+type PrefetchMode = "auto" | "never" | "hover" | "full";
 
 export function AppLink({
   prefetchMode = "auto",
@@ -19,14 +19,16 @@ export function AppLink({
   ...props
 }: ComponentProps<typeof Link> & { prefetchMode?: PrefetchMode }) {
   const [intentHref, setIntentHref] = useState<typeof href>();
-  // Auto prefetch prepares the shared loading shell for dynamic routes. The
-  // destination still reads fresh data on navigation instead of retaining a
-  // full workspace snapshot that would need a blocking refresh before a click.
+  // Main menus prepare the complete RSC payload and client code before a click.
+  // Other links retain native shell/intent prefetch to bound background work.
+  // Cache invalidation is asynchronous and never holds navigation open.
   const nativePrefetch = prefetchMode === "never"
     ? false
     : prefetch !== undefined
       ? prefetch
-      : prefetchMode === "hover" && intentHref !== href ? false : null;
+      : prefetchMode === "full"
+        ? true
+        : prefetchMode === "hover" && intentHref !== href ? false : null;
   const warm = () => {
     if (prefetchMode === "hover") setIntentHref(href);
   };

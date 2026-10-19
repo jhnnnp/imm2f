@@ -28,7 +28,7 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar" aria-label="주요 메뉴">
-      <AppLink className="brand" href="/" aria-label="홈으로 이동">
+      <AppLink className="brand" href="/" prefetchMode="full" aria-label="홈으로 이동">
         <span className="brand-mark"><BrandMark /></span>
         <span className="brand-copy"><strong>ONLY US</strong><small>PRIVATE SPACE FOR TWO</small></span>
       </AppLink>
@@ -37,7 +37,7 @@ export function Sidebar() {
           if ("section" in item) return <p key={`${item.section}-${index}`}>{item.section}</p>;
           const active = ready && (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href));
           return (
-            <AppLink className={`nav-item ${active ? "is-active" : ""}`} href={item.href} key={item.href} suppressHydrationWarning>
+            <AppLink className={`nav-item ${active ? "is-active" : ""}`} href={item.href} prefetchMode="full" key={item.href} suppressHydrationWarning>
               <span className="nav-icon-wrap"><SidebarIcon name={item.iconName} /></span>{item.label}
             </AppLink>
           );
@@ -45,7 +45,7 @@ export function Sidebar() {
       </nav>
       <nav className="mobile-bottom-nav" aria-label="빠른 메뉴">
         {NAVIGATION.filter((item): item is Extract<(typeof NAVIGATION)[number], { href: string }> => "href" in item && ["/", "/date", "/trip", "/places"].includes(item.href)).map(item => (
-          <AppLink className={`mobile-nav-item ${pathname === item.href ? "is-active" : ""}`} href={item.href} key={item.href}>
+          <AppLink className={`mobile-nav-item ${pathname === item.href ? "is-active" : ""}`} href={item.href} prefetchMode="full" key={item.href}>
             <SidebarIcon name={item.iconName} /><span>{item.label}</span>
           </AppLink>
         ))}
@@ -58,7 +58,7 @@ export function Sidebar() {
         <div ref={menuRef} tabIndex={-1} className="mobile-menu-sheet" id="mobile-all-menu" role="dialog" aria-modal="true" aria-label="전체 메뉴">
           <div className="mobile-menu-head"><strong>전체 메뉴</strong><button type="button" onClick={() => setMenuOpen(false)} aria-label="닫기">×</button></div>
           <div className="mobile-menu-grid">
-            {NAVIGATION.filter((item): item is Extract<(typeof NAVIGATION)[number], { href: string }> => "href" in item).map(item => <AppLink href={item.href} key={item.href} className={pathname === item.href ? "is-active" : ""} onClick={() => { if (pathname === item.href && !query) setMenuOpen(false); }}>
+            {NAVIGATION.filter((item): item is Extract<(typeof NAVIGATION)[number], { href: string }> => "href" in item).map(item => <AppLink href={item.href} prefetchMode="full" key={item.href} className={pathname === item.href ? "is-active" : ""} onClick={() => { if (pathname === item.href && !query) setMenuOpen(false); }}>
               <SidebarIcon name={item.iconName} /><span>{item.label}</span>
             </AppLink>)}
           </div>
@@ -78,14 +78,14 @@ export function Sidebar() {
           </div>
         </div>
         {session.mode === "authenticated" && session.partner
-          ? <AppLink className="couple-card-action" href="/invite">
+          ? <AppLink className="couple-card-action" href="/invite" prefetchMode="full">
             <span>파트너 관리</span><b aria-hidden="true">→</b>
           </AppLink>
           : session.mode === "setup_error"
             ? <button className="couple-card-action" type="button" onClick={() => void signOut()}>
               <span>다시 로그인</span><b aria-hidden="true">→</b>
             </button>
-            : <AppLink className="couple-card-action" href={session.mode === "authenticated" ? "/invite" : "/login"}>
+            : <AppLink className="couple-card-action" href={session.mode === "authenticated" ? "/invite" : "/login"} prefetchMode="full">
               <span>{session.mode === "authenticated" ? "파트너 초대" : "로그인"}</span><b aria-hidden="true">→</b>
             </AppLink>}
       </div>
