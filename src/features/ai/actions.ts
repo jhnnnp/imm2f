@@ -90,7 +90,7 @@ import { compareResearchSearches, evaluateResearchCoverage, executeResearchInten
   primarySearchIntents, providerCategoryForResearchIntent,
   researchCoverageFallbackReason, researchSearchAuthority, researchSearchIntents, validateResearchPlan,
   type ResearchCoverage, type ResearchPlan } from "./researchPlan";
-import { enrichResearchNeedEvidence } from "@/lib/openai/enrichDateVenues";
+import { enrichDateVenues, enrichResearchNeedEvidence } from "@/lib/openai/enrichDateVenues";
 import { emptySessionCandidates, mergeSessionCandidates, sealSessionCandidates, sessionShownPlaces,
   verifiedSessionCandidates, type SessionCandidateContext } from "./sessionCandidates";
 import { candidateSessionObservation } from "./dateObservation";
@@ -1516,14 +1516,20 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   const catalog = [...evidencePool.filter(candidate => selectedAnchorIds.includes(dateCandidateKey(candidate))),
     ...discoveryCatalog(evidencePool, state, rankContext.savedPositive, 72)
       .filter(candidate => !selectedAnchorIds.includes(dateCandidateKey(candidate)))];
-  const [hydrated, withPerformances] = await Promise.all([
+  const earlyResearchCandidates = catalog.filter(candidate => candidate.externalSource === "kakao");
+  const [hydrated, withPerformances, researched] = await Promise.all([
     hydrateDateCandidates(catalog, saved),
     attachKopisPerformances(catalog, state.dateLabel, courseSize(state).days),
+    researchActive ? Promise.resolve([] as DiscoverCandidate[])
+      : enrichDateVenues(earlyResearchCandidates, state, undefined, "interactive", AbortSignal.timeout(8000)),
   ]);
+  const evidenceById = new Map(researched.map(candidate => [dateCandidateKey(candidate), candidate.evidence ?? []]));
   const performanceById = new Map(withPerformances.filter(candidate => candidate.performanceEvent)
     .map(candidate => [`${candidate.externalSource}:${candidate.externalPlaceId}`, candidate.performanceEvent]));
   const candidates = hydrated.map(candidate => ({ ...candidate,
     performanceEvent: performanceById.get(`${candidate.externalSource}:${candidate.externalPlaceId}`) ?? candidate.performanceEvent,
+    evidence: [...new Map([...(candidate.evidence ?? []), ...(evidenceById.get(dateCandidateKey(candidate)) ?? [])]
+      .map(fact => [`${fact.url}:${fact.text}`, fact])).values()],
   }));
   const dateContext = buildDateContext({
     state, conversation: input.conversation, tasteBoard, archives: archives.dates, memory,
@@ -1608,6 +1614,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     prompt: message || `${condition.region}에서 ${state.activities.join(", ") || "하루"} 데이트`,
     condition,
     candidates: courseCandidates,
+    // Only these exact IDs were researched concurrently with provider details.
+    // TourAPI overviews arrive through hydration; new repair venues still get research.
+    venueResearchPreparedIds: researched.map(dateCandidateKey),
     anchorCandidateIds: selectedAnchorIds,
     saved,
     state,

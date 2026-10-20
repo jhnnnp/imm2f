@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DiscoverCandidate } from "@/features/places/types/place";
 import { emptyDateBrief } from "@/features/ai/dateBrief";
-import { acceptVenueObservation, matchesResearchIdentity, conciseVenueObservation, venueResearchTargets } from "./enrichDateVenues";
+import { acceptVenueObservation, matchesResearchIdentity, conciseVenueObservation, venueResearchTargets, interactiveVenueResearchTargets } from "./enrichDateVenues";
 
 function candidate(id: string, category: "cafe" | "restaurant"): DiscoverCandidate {
   return { externalSource: "kakao", externalPlaceId: id, name: `${category}${id}`, category,
@@ -68,6 +68,20 @@ describe("venue research allocation", () => {
     expect(targets.filter(item => item.category === "cafe")).toHaveLength(4);
     expect(targets.some(item => item.category === "restaurant")).toBe(true);
     expect(targets.some(item => item.category === "photo")).toBe(true);
+  });
+
+  it("compares two strongest candidates per requested role in one interactive wave", () => {
+    const meals = Array.from({ length: 10 }, (_, index) => candidate(`m${index}`, "restaurant"));
+    const cafes = Array.from({ length: 10 }, (_, index) => candidate(`c${index}`, "cafe"));
+    const state = { ...emptyDateBrief(), activities: ["meal", "cafe"] as Array<"meal" | "cafe"> };
+    const targets = interactiveVenueResearchTargets([...meals, ...cafes], state);
+    expect(targets.map(item => item.externalPlaceId)).toEqual(["m0", "c0", "m1", "c1"]);
+  });
+
+  it("compares at most four candidates for a single requested role", () => {
+    const cafes = Array.from({ length: 20 }, (_, index) => candidate(`c${index}`, "cafe"));
+    const targets = interactiveVenueResearchTargets(cafes, { ...emptyDateBrief(), activities: ["cafe"], userRequests: ["예쁜 카페"] });
+    expect(targets).toEqual(cafes.slice(0, 4));
   });
 
   it("researches destination experiences before filling an overnight trip with cafes", () => {

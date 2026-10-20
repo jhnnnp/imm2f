@@ -49,6 +49,21 @@ beforeEach(() => vi.mocked(completeJson).mockReset().mockResolvedValue(modelCour
 afterEach(() => vi.restoreAllMocks());
 
 describe("course proposal semantic boundary", () => {
+  it("does not repeat evidence research for prepared venues but still researches a newly added repair venue", async () => {
+    vi.mocked(enrichDateVenues).mockClear();
+    await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+      candidates, saved: [], state: state(), venueResearchPreparedIds: candidates.map(candidate => `kakao:${candidate.externalPlaceId}`) });
+    expect(enrichDateVenues).not.toHaveBeenCalled();
+    const added = venue("new", "새로운 공원", "tourist", 127.0419);
+    await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+      candidates: [...candidates, added], saved: [], state: state(),
+      venueResearchPreparedIds: candidates.map(candidate => `kakao:${candidate.externalPlaceId}`) });
+    expect(enrichDateVenues).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enrichDateVenues).mock.calls[0][0]).toEqual([added]);
+    const payload = JSON.parse(vi.mocked(completeJson).mock.calls.at(-1)![0].messages[1].content);
+    expect(payload.candidates).toHaveLength(candidates.length + 1);
+  });
+
   it("requests one complete curated itinerary and uses bundled guidance without a semantic retrieval round trip", async () => {
     vi.mocked(retrieveDatePlaybook).mockClear();
     const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,

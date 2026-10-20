@@ -34,6 +34,8 @@ describe("AI place curation", () => {
     expect(result.card.stops?.[0].reason).toBe(why);
     const call = vi.mocked(completeJson).mock.calls[0][0];
     expect(call.jsonSchema).toMatchObject({ name: "grounded_place_recommendations", strict: true });
+    expect(call).toMatchObject({ maxTokens: 1100, reasoningEffort: "low", retryOnTruncation: false });
+    expect(call.timeoutMs).toBeLessThanOrEqual(12000);
     expect(JSON.parse(call.messages[1].content).candidates[1].recommendationEvidence).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "observation:garden-b", text: "정원과 테라스 좌석이 있습니다." }),
     ]));
@@ -77,5 +79,61 @@ describe("AI place curation", () => {
     expect(after).toHaveBeenCalledOnce();
     expect(result.source).toBe("openai");
     expect(result.card.stops?.[0].dishes).toBe("수제 티라미수");
+  });
+
+  it("reuses relevant exact-venue source evidence without another web lookup", async () => {
+    const place = cafe("a");
+    place.evidence![0].text = "조용한 좌석에서 차를 마실 수 있는 공간입니다.";
+    vi.mocked(completeJson).mockResolvedValueOnce({ intro: "차를 마시면서 쉬어갈 한 곳을 골랐어요.",
+      picks: [{ id: "kakao:a", why: "소개 자료에 조용한 좌석이 있다고 안내되어 있어 골랐어요.", evidenceIds: ["observation:garden-a"] }] });
+    const result = await recommendPlacesWithOpenAi({ ...input(), message: "성수 조용한 카페 한 곳 추천해줘",
+      candidates: [place], skipFactLookup: false });
+    expect(completeJsonWithWebSearch).not.toHaveBeenCalled();
+    expect(result.card.stops?.[0].reason).toContain("조용한 좌석");
+    expect(result.card.stops?.[0].factSourceUrl).toBe("https://example.com/a");
+  });
+
+  it("keeps completed sourced facts when another optional lookup reaches its deadline", async () => {
+    const factDeadline = new AbortController();
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => ms === 5500 ? factDeadline.signal : originalTimeout(ms));
+    vi.mocked(completeJsonWithWebSearch).mockImplementation(async request => {
+      const id = (request.payload as { id: string }).id;
+      if (id !== "kakao:a") return new Promise(() => {});
+      request.onSources?.(["https://example.com/menu"]);
+      return { id, sourceVenueName: "카페 a", sourceAddress: "성수로 1", food: "수제 티라미수",
+        sourceExcerpt: "카페 a 성수로 1 수제 티라미수를 판매합니다.", sourceUrl: "https://example.com/menu" };
+    });
+    vi.mocked(completeJson).mockResolvedValueOnce({ intro: "확인된 디저트를 곁들이면서 쉬어갈 곳을 골랐어요.",
+      picks: [{ id: "kakao:a", why: "자료에 소개된 수제 티라미수를 곁들이도록 골랐어요.", evidenceIds: ["public:menu"] }] });
+    const pending = recommendPlacesWithOpenAi({ ...input(), candidates: [cafe("a"), cafe("b")], skipFactLookup: false });
+    await vi.waitFor(() => expect(completeJsonWithWebSearch).toHaveBeenCalledTimes(2));
+    factDeadline.abort();
+    const result = await pending;
+    expect(result.source).toBe("openai");
+    expect(result.card.stops?.[0].dishes).toBe("수제 티라미수");
+    expect(completeJsonWithWebSearch).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5500 }));
+  });
+
+  it("resolves a stalled writer at its stage deadline", async () => {
+    const writerDeadline = new AbortController();
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => ms === 12000 ? writerDeadline.signal : originalTimeout(ms));
+    vi.mocked(completeJson).mockImplementation(() => new Promise(() => {}));
+    const pending = recommendPlacesWithOpenAi(input());
+    await vi.waitFor(() => expect(completeJson).toHaveBeenCalledOnce());
+    writerDeadline.abort();
+    expect((await pending).source).toBe("fallback");
+    expect(vi.mocked(completeJson).mock.calls[0][0].signal?.aborted).toBe(true);
+  });
+
+  it("does not upgrade a conversation-friendly source into a confirmed quietness claim", async () => {
+    const place = cafe("a");
+    place.evidence![0].text = "차를 마시며 대화하는 티룸입니다.";
+    vi.mocked(completeJson).mockResolvedValueOnce({ intro: "차를 곁들이며 쉬어갈 한 곳을 골랐어요.",
+      picks: [{ id: "kakao:a", why: "조용해서 둘이 대화하기 좋은 곳이에요.", evidenceIds: ["observation:garden-a"] }] });
+    const result = await recommendPlacesWithOpenAi({ ...input(), candidates: [place] });
+    expect(result.card.stops?.[0].reason).not.toContain("조용");
+    expect(vi.mocked(completeJson).mock.calls[0][0].messages[0].content).toContain("conversation-friendly does not prove quiet");
   });
 });

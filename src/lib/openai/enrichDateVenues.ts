@@ -11,7 +11,22 @@ import { readVenueEvidence, writeVenueEvidence } from "./venueEvidenceStore";
 
 const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_CACHED_VENUES = 256;
+const INTERACTIVE_RESEARCH_BUDGET_MS = 7000;
 const evidenceCache = new Map<string, { expiresAt: number; observations: NonNullable<DiscoverCandidate["evidence"]> }>();
+
+function untilResearchAbort<T>(operation: Promise<T>, fallback: T, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation.catch(() => fallback);
+  if (signal.aborted) {
+    void operation.catch(() => undefined);
+    return Promise.resolve(fallback);
+  }
+  return new Promise(resolve => {
+    const abort = () => resolve(fallback);
+    signal.addEventListener("abort", abort, { once: true });
+    void operation.then(resolve, () => resolve(fallback))
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
+}
 
 function cacheKey(candidate: DiscoverCandidate) {
   return `${dateCandidateKey(candidate)}:${candidate.name}:${candidate.roadAddress || candidate.address}`;
@@ -104,6 +119,22 @@ export function acceptVenueObservation(candidate: DiscoverCandidate, value: unkn
     sourceVenueName: fact.sourceVenueName as string, sourceAddress: fact.sourceAddress as string };
 }
 
+function wantsNoiseEvidence(state: AIPlannerState) {
+  return (state.preferences?.crowdTolerance ?? 1) <= 0.35
+    || (state.preferences?.vibe ?? []).some(vibe => /조용|한적/.test(vibe)
+      && !/아니|않|말고|싫|원하지|필요\s*없/.test(vibe));
+}
+
+function hasRequestedResearchEvidence(candidate: DiscoverCandidate, state: AIPlannerState) {
+  if (!hasRequestedVenueEvidence(candidate, state)) return false;
+  if (!wantsNoiseEvidence(state)) return true;
+  // Menu or garden facts do not establish the noise/crowd experience. A
+  // sourced negative observation is useful, too: the planner can compare it.
+  return (candidate.evidence ?? []).some(fact => fact.venueId === dateCandidateKey(candidate)
+    && researchEvidenceFresh(fact) && ["source_checked", "search_report"].includes(fact.verification ?? "")
+    && /소음|조용|시끄|혼잡|붐비|한산/.test(fact.text));
+}
+
 /** Once each requested experience has comparable supported options, reuse the
  * verified branch cache instead of launching another full web-search sweep. */
 export function researchRolesNeedingEvidence(candidates: DiscoverCandidate[], state: AIPlannerState) {
@@ -119,7 +150,7 @@ export function researchRolesNeedingEvidence(candidates: DiscoverCandidate[], st
     if (!candidatesForRole.length) return false;
     const target = Math.min(candidatesForRole.length, role === "walk" && isTravelPlan(state)
       ? courseSize(state).days : role === "meal" || role === "cafe" ? 2 : 1);
-    return candidatesForRole.filter(candidate => hasRequestedVenueEvidence(candidate, state)).length < target;
+    return candidatesForRole.filter(candidate => hasRequestedResearchEvidence(candidate, state)).length < target;
   });
 }
 
@@ -129,7 +160,7 @@ export function venueResearchTargets(candidates: DiscoverCandidate[], state: AIP
   const bySlot = new Map<string, DiscoverCandidate[]>();
   for (const candidate of candidates) {
     if (!needed.has(candidateActivitySlot(candidate))) continue;
-    if (hasRequestedVenueEvidence({ ...candidate, evidence: candidate.evidence ?? cachedEvidence(candidate) ?? [] }, state)) continue;
+    if (hasRequestedResearchEvidence({ ...candidate, evidence: candidate.evidence ?? cachedEvidence(candidate) ?? [] }, state)) continue;
     const key = candidateActivitySlot(candidate);
     bySlot.set(key, [...(bySlot.get(key) ?? []), candidate]);
   }
@@ -160,6 +191,31 @@ export function venueResearchTargets(candidates: DiscoverCandidate[], state: AIP
   return targets;
 }
 
+/** One interactive wave compares a few strong candidates for every missing
+ * experience instead of exhausting one category and researching again. */
+export function interactiveVenueResearchTargets(candidates: DiscoverCandidate[], state: AIPlannerState) {
+  const roles = researchRolesNeedingEvidence(candidates, state);
+  const byRole = new Map(roles.map(role => [role, candidates.filter(candidate =>
+    candidateActivitySlot(candidate) === role && !hasRequestedResearchEvidence(candidate, state))]));
+  const targets: DiscoverCandidate[] = [];
+  for (let round = 0; round < 4 && targets.length < 8; round++) {
+    for (const [role, group] of byRole) {
+      const perRole = byRole.size === 1 || role === "cafe" && wantsCafeAtmosphere(state) ? 4 : 2;
+      if (round >= perRole || !group[round] || targets.length >= 8) continue;
+      targets.push(group[round]);
+    }
+  }
+  return targets;
+}
+
+function interactiveResearchFocus(candidates: DiscoverCandidate[], state: AIPlannerState) {
+  return new Map(candidates.map(candidate => [dateCandidateKey(candidate), [
+    ...(candidateActivitySlot(candidate) === "meal" ? ["menu"]
+      : candidateActivitySlot(candidate) === "cafe" ? wantsCafeAtmosphere(state) ? ["space"] : ["space", "menu"] : ["experience"]),
+    ...(wantsNoiseEvidence(state) ? ["noise", "crowd"] : []),
+  ]]));
+}
+
 /** Search-linked observations are leads; the linked page has not been independently fact-checked. */
 type ResearchDiagnostics = { onRejected?: (detail: { reason: ObservationRejection; name: string; address: string; reportedName: unknown; reportedAddress: unknown }) => void };
 type ResearchProfile = "interactive" | "background";
@@ -174,7 +230,7 @@ async function researchVenueBatch(candidates: DiscoverCandidate[], state: AIPlan
   const chunks = Array.from({ length: Math.ceil(targets.length / 2) }, (_, index) => targets.slice(index * 2, index * 2 + 2));
   const results = await Promise.allSettled(chunks.map(async group => {
     let sourceUrls: string[] = [];
-    const result = await completeJsonWithWebSearch<{ venues?: unknown }>({
+    const result = await untilResearchAbort(completeJsonWithWebSearch<{ venues?: unknown }>({
       timeoutMs, signal, maxTokens: 2000, requireSearch: true, searchContextSize: "medium",
       onSources: urls => { sourceUrls = urls; },
       instructions: [
@@ -191,7 +247,7 @@ async function researchVenueBatch(candidates: DiscoverCandidate[], state: AIPlan
           : candidateActivitySlot(candidate) === "cafe" && wantsCafeAtmosphere(state)
           ? "Find specific interior, terrace, garden, architecture or view evidence. Menu alone does not answer this request."
           : candidateActivitySlot(candidate) === "meal" ? "Find specific dishes, ingredients or preparation that distinguish this restaurant." : "Find a concrete visitor experience; do not imply a scheduled event is currently running." })) },
-    });
+    }), null, signal);
     if (!result) unavailableCalls++;
     const allowedIds = new Set(group.map(dateCandidateKey));
     const accepted = new Map<string, NonNullable<DiscoverCandidate["evidence"]>>();
@@ -230,42 +286,61 @@ async function researchVenueBatch(candidates: DiscoverCandidate[], state: AIPlan
   });
 }
 
-/** Spend a bounded second pass only on under-supported requested experiences. */
+/** Interactive requests use one shared seven-second wave. Only the offline
+ * background profile can spend a second pass on under-supported experiences. */
 export async function enrichDateVenues(candidates: DiscoverCandidate[], state: AIPlannerState, diagnostics?: ResearchDiagnostics, profile: ResearchProfile = "interactive", signal?: AbortSignal) {
   if (signal?.aborted) return candidates;
-  const stored = await readVenueEvidence(candidates);
+  const startedAt = performance.now();
+  const requestSignal = profile === "interactive"
+    ? AbortSignal.any([AbortSignal.timeout(INTERACTIVE_RESEARCH_BUDGET_MS), ...(signal ? [signal] : [])]) : signal;
+  const stored = await untilResearchAbort(readVenueEvidence(candidates),
+    new Map<string, NonNullable<DiscoverCandidate["evidence"]>>(), requestSignal);
   const grounded = candidates.map(candidate => {
     const evidence = [...new Map([...(candidate.evidence ?? []).filter(fact => researchEvidenceFresh(fact)),
+      ...(cachedEvidence(candidate) ?? []).filter(fact => researchEvidenceFresh(fact)),
       ...(stored.get(dateCandidateKey(candidate)) ?? [])]
       .map(fact => [`${fact.url}:${fact.text}`, fact])).values()];
-    return evidence.length ? { ...candidate, evidence } : candidate;
+    return { ...candidate, evidence };
   });
-  if (!isOpenAiConfigured() || signal?.aborted) return grounded;
+  if (!isOpenAiConfigured() || requestSignal?.aborted) return grounded;
   if (!researchRolesNeedingEvidence(grounded, state).length) return grounded;
   const researchStarted = Date.now();
-  const firstLimit = profile === "background" ? 10 : 8;
-  const firstTimeoutMs = profile === "background" ? 20000 : 9000;
-  const totalBudgetMs = profile === "background" ? 33000 : 15500;
+  if (profile === "interactive") {
+    const targets = interactiveVenueResearchTargets(grounded, state);
+    const remainingMs = Math.floor(INTERACTIVE_RESEARCH_BUDGET_MS - (performance.now() - startedAt));
+    if (!targets.length || remainingMs < 500) return grounded;
+    const researched = await researchVenueBatch(targets, state, targets.length, remainingMs,
+      diagnostics, interactiveResearchFocus(targets, state), requestSignal);
+    const updated = new Map(researched.map(candidate => [dateCandidateKey(candidate), candidate]));
+    const complete = grounded.map(candidate => updated.get(dateCandidateKey(candidate)) ?? candidate);
+    const changed = researched.filter(candidate => candidate.evidence?.some(fact => Date.parse(fact.checkedAt) >= researchStarted));
+    if (changed.length && !requestSignal?.aborted) {
+      await untilResearchAbort(writeVenueEvidence(changed), undefined, requestSignal);
+    }
+    return complete;
+  }
+  const firstLimit = 10;
+  const firstTimeoutMs = 20000;
+  const totalBudgetMs = 33000;
   const attempted = new Set(venueResearchTargets(grounded, state, firstLimit).map(dateCandidateKey));
-  const first = await researchVenueBatch(grounded, state, firstLimit, firstTimeoutMs, diagnostics, undefined, signal);
-  if (signal?.aborted) return first;
+  const first = await researchVenueBatch(grounded, state, firstLimit, firstTimeoutMs, diagnostics, undefined, requestSignal);
+  if (requestSignal?.aborted) return first;
   const roles = researchRolesNeedingEvidence(first, state);
   const extra: DiscoverCandidate[] = [];
   for (const role of roles) {
     extra.push(...first.filter(candidate => !attempted.has(dateCandidateKey(candidate))
-      && candidateActivitySlot(candidate) === role && !hasRequestedVenueEvidence(candidate, state)).slice(0, 2));
+      && candidateActivitySlot(candidate) === role && !hasRequestedResearchEvidence(candidate, state)).slice(0, 2));
   }
-  // A bounded second pass may improve sparse evidence without turning a
-  // provider timeout into a 30-second chat response.
+  // Offline corpus work can cover more venues after an incomplete first wave.
   const remainingMs = totalBudgetMs - (Date.now() - researchStarted);
   if (!extra.length || remainingMs < 4500) {
-    await writeVenueEvidence(first.filter(candidate => candidate.evidence?.some(fact => Date.parse(fact.checkedAt) >= researchStarted)));
+    await untilResearchAbort(writeVenueEvidence(first.filter(candidate => candidate.evidence?.some(fact => Date.parse(fact.checkedAt) >= researchStarted))), undefined, requestSignal);
     return first;
   }
-  const second = await researchVenueBatch(extra.slice(0, 4), state, 4, Math.min(profile === "background" ? 10000 : 6000, remainingMs), diagnostics, undefined, signal);
+  const second = await researchVenueBatch(extra.slice(0, 4), state, 4, Math.min(10000, remainingMs), diagnostics, undefined, requestSignal);
   const updated = new Map(second.map(candidate => [dateCandidateKey(candidate), candidate]));
   const complete = first.map(candidate => updated.get(dateCandidateKey(candidate)) ?? candidate);
-  if (!signal?.aborted) await writeVenueEvidence(complete.filter(candidate => candidate.evidence?.some(fact => Date.parse(fact.checkedAt) >= researchStarted)));
+  if (!requestSignal?.aborted) await untilResearchAbort(writeVenueEvidence(complete.filter(candidate => candidate.evidence?.some(fact => Date.parse(fact.checkedAt) >= researchStarted))), undefined, requestSignal);
   return complete;
 }
 

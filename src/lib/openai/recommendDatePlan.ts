@@ -310,6 +310,8 @@ export async function recommendDatePlanWithOpenAi(input: {
   semanticPlanningHints?: SemanticPlanningHints;
   /** ResearchPlan has already performed bounded quality research for this pool. */
   researchPlanActive?: boolean;
+  /** Exact server-side venue IDs whose evidence pass has already completed. */
+  venueResearchPreparedIds?: string[];
   experiencePlan?: ExperiencePlan | null;
   researchPlan?: ResearchPlan | null;
   explorationPreferences?: CandidateExplorationPreferences;
@@ -416,8 +418,14 @@ export async function recommendDatePlanWithOpenAi(input: {
   const expectedStops = Math.min(pool.length, Math.max(anchorIds.length,
     input.state.discovery?.maxStops ?? 0, planningStopGuidance(input.state).max));
   const proposalTokens = Math.min(16000, Math.max(1600, 500 + expectedStops * 220));
-  const researchPromise = runtime.untilDeadline(input.researchPlanActive ? Promise.resolve(pool)
-    : enrichDateVenues(pool, input.state, undefined, isTravelPlan(input.state) ? "background" : "interactive", runtime.signal), pool).then(value => {
+  const preparedIds = new Set(input.venueResearchPreparedIds ?? []);
+  const researchTargets = pool.filter(candidate => !preparedIds.has(dateCandidateKey(candidate)));
+  const researchOperation = input.researchPlanActive || !researchTargets.length ? Promise.resolve(pool)
+    : enrichDateVenues(researchTargets, input.state, undefined, "interactive", runtime.signal).then(researched => {
+      const byId = new Map(researched.map(candidate => [dateCandidateKey(candidate), candidate]));
+      return pool.map(candidate => byId.get(dateCandidateKey(candidate)) ?? candidate);
+    });
+  const researchPromise = runtime.untilDeadline(researchOperation, pool).then(value => {
     researchDoneAt = performance.now();
     return value;
   });
