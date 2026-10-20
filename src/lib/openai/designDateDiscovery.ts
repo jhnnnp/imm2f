@@ -2,7 +2,7 @@ import type { AIPlannerState, DateActivityId, DateChatTurn } from "@/features/pl
 import { selectedAreas, uniqueStrings, isTravelPlan, isExclusiveCrawl, courseSize, extractActivitiesFromText } from "@/features/ai/dateBrief";
 import { completeJson } from "./client";
 import { isOpenAiConfigured } from "./env";
-import { retrieveDatePlaybook } from "./datePlaybook";
+import { DATE_PLAYBOOK, datePlaybookTags, selectDatePlaybook } from "./datePlaybook";
 import { explicitlyDislikedActivities, toDateIntent } from "@/features/ai/dateIntent";
 
 type Discovery = NonNullable<AIPlannerState["discovery"]>;
@@ -96,13 +96,14 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
   const pinnedCount = input.state.preserveExistingPlaces ? input.state.pinOrder.length : 0;
   const swapping = input.state.intent === "modify" && input.state.pinOrder.some(name => input.state.excludedPlaces.includes(name));
   const additionCount = pinnedCount && (input.state.addStop || swapping) ? pinnedCount + (input.state.addStop ? 1 : 0) : 0;
+  const queryLimit = Math.min(8, Math.max(4, areas.length * 3));
   const defaults = trip ? ["대표 관광명소", "지역 음식 맛집", "전망 좋은 카페", "산책 명소"] : ["데이트 레스토랑", "디저트 카페", "독립서점", "전시 갤러리", "가볼만한곳"];
-  const queries = areas.flatMap(region => defaults.map(query => ({ region, query })));
+  const queries = defaults.flatMap(query => areas.map(region => ({ region, query })));
   const transport = explicitDiscoveryTransport({ message: input.message,
     userRequests: input.state.userRequests, conversation: input.conversation, previous: previous?.transport });
   const fallback: Discovery = {
     themes: previous?.themes ?? [trip ? "지역의 음식과 풍경을 함께 즐기는 코스" : "식사와 공간, 동네의 볼거리를 함께 즐기는 코스"],
-    priorities: previous?.priorities ?? [], queries: queries.slice(0, 12),
+    priorities: previous?.priorities ?? [], queries: queries.slice(0, queryLimit),
     transport,
     requiredActivities: [...new Set(lockedActivities)],
     activityOrder: userOrder.length >= 2 ? userOrder : retainedOrder,
@@ -110,15 +111,16 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
     maxStops: additionCount || size.max,
   };
   if (input.useExistingBrief || !isOpenAiConfigured()) return fallback;
-  const playbook = await retrieveDatePlaybook(input.message, input.state, "discovery", trip ? 8 : 6);
+  const playbook = selectDatePlaybook(DATE_PLAYBOOK, datePlaybookTags(input.message, input.state), "discovery", trip ? 6 : 4)
+    .map(({ id, title, guidance, example }) => ({ id, title, guidance, example }));
   const raw = await completeJson<Record<string, unknown>>({
-    timeoutMs: 15000, maxTokens: 1800, reasoningEffort: "low", temperature: 0.3,
+    timeoutMs: 8000, maxTokens: 1000, reasoningEffort: "low", temperature: 0.3, retryOnTruncation: false,
     messages: [
       { role: "system", content: [
         "Design a venue discovery brief for a Korean couple's date. You do not pick venues or write the itinerary yet. Return JSON.",
         'Schema: {themes:[string],priorities:[string],queries:[{region:string,query:string}],transport:"walk|drive|transit",requiredActivities:["meal|cafe|walk|exhibit|movie|performance|indoor|nightview"],activityOrder:[],minStops:number,maxStops:number}. For overnight trips honor the supplied minimum and allow 3-4 stops on a full day.',
-        "Invent 2-3 meaningfully different course concepts that fit the user's intent: food destination with a distinctive cafe, architecture and local streets, an exhibition and dessert, regional food and scenery, etc. Never impose the same meal-cafe-walk template.",
-        "queries: 6-12 short complementary Kakao keyword searches (not sentences). Retain the user's exact dish and aesthetic preferences: 파스타, 한옥 카페, 정원 카페, 로스터리, 오션뷰, 독립서점, 공방, 미술관. Include 1-2 broad searches for coverage. Use ONLY the supplied areas as region. Never invent shop names.",
+        "Choose 1-2 concise course concepts that fit the user's intent: food destination with a distinctive cafe, architecture and local streets, an exhibition and dessert, regional food and scenery, etc. Never impose the same meal-cafe-walk template.",
+        `queries: at most ${queryLimit} short complementary Kakao keyword searches (not sentences), covering every supplied area. Retain the user's exact dish and aesthetic preferences: 파스타, 한옥 카페, 정원 카페, 로스터리, 오션뷰, 독립서점, 공방, 미술관. Include one broad search for coverage. Use ONLY the supplied areas as region. Never invent shop names.`,
         "priorities: concrete requested qualities, not generic positivity. requiredActivities: only explicit user requirements, not suggestions you invented. '걷는 거 적게' does NOT require a walk attraction. activityOrder: only an order the user explicitly asks for. An omitted preference is not a prohibition.",
         "Use dateIntent.objective and preferences to propose search themes, including implicit conversation, novelty, photo or quiet-place needs. Treat inferredPreferences as soft hints weighted by confidence. Keep hardConstraints authoritative.",
         "Honor latest corrections and previous brief. For a local date choose 2-4 worthwhile stops, never maximize count. For a trip allow 3-4 per day. Explicit cafe/food/exhibit tours may repeat the requested kind; otherwise diversify experiences. Do not add food to a cafe-only request.",
@@ -139,7 +141,7 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
     if (query.length < 2 || seen.has(key)) return [];
     seen.add(key);
     return [{ region: row.region, query }];
-  }).slice(0, 12);
+  }).slice(0, queryLimit);
   const min = additionCount || Math.max(size.min, (typeof raw.minStops === "number" && Number.isFinite(raw.minStops) ? Math.max(2, Math.min(8, Math.round(raw.minStops))) : fallback.minStops));
   const max = Math.max(min, additionCount || (typeof raw.maxStops === "number" && Number.isFinite(raw.maxStops) ? Math.max(min, Math.min(size.max, Math.round(raw.maxStops))) : fallback.maxStops));
   return {

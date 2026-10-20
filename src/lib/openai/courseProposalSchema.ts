@@ -1,5 +1,5 @@
 /** Provider identities and supported travel days are part of the API contract. */
-export function courseProposalSchema(candidateIds: string[], days: number, selectedCount = 0) {
+export function courseProposalSchema(candidateIds: string[], days: number, selectedCount = 0, proposalCount: 1 | 2 | 3 = selectedCount ? 1 : 3) {
   // A single enum containing >250 long provider IDs can exceed OpenAI's 15k
   // character constraint. Smaller enum branches preserve the exact whitelist.
   const idSchema = candidateIds.length > 250 && candidateIds.join("").length > 15000
@@ -11,7 +11,7 @@ export function courseProposalSchema(candidateIds: string[], days: number, selec
     schema: {
       type: "object", additionalProperties: false, required: ["courses"],
       properties: {
-        courses: { type: "array", minItems: 1, maxItems: selectedCount ? 1 : 3, items: {
+        courses: { type: "array", minItems: 1, maxItems: selectedCount ? 1 : proposalCount, items: {
           type: "object", additionalProperties: false, required: ["theme", "intro", "selected"],
           properties: {
             theme: { type: "string" },

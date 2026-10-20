@@ -129,7 +129,8 @@ export function matchesPlaceKind(candidate: DiscoverCandidate, kind: PlaceAskKin
   if (kind === "restaurant") return matchesActivity(candidate, "meal");
   if (kind === "cafe") return matchesActivity(candidate, "cafe") || /베이커리|디저트|빵/.test(blob);
   if (kind === "dessert") return matchesActivity(candidate, "cafe") || /베이커리|디저트|빵|케이크|아이스크림|젤라또|마카롱|도넛|와플/.test(blob);
-  if (kind === "bar") return /주점|술집|바|이자카야|와인|칵테일|펍|호프|포차|맥주|하이볼|위스키|사케|막걸리|전통주/.test(blob) || matchesActivity(candidate, "meal");
+  if (kind === "bar") return /주점|술집|이자카야|와인|칵테일|펍|호프|포차|맥주|하이볼|위스키|사케|막걸리|전통주/.test(blob)
+    || /(?:^|[\s>])바(?:[\s>]|$)|바$/.test(blob);
   if (kind === "exhibit") return matchesActivity(candidate, "exhibit") || /팝업|공연|극장|영화/.test(blob);
   if (kind === "activity") return classifyDiscoveryIntents(candidate).some(signal => signal.kind === "experience")
     || matchesActivity(candidate, "indoor") || /공방|체험|클래스|방탈출|볼링|보드게임/.test(blob);
@@ -172,6 +173,10 @@ export function filterPlaceCandidates(
     if (seen.has(key)) return false;
     seen.add(key);
     if (!matchesPlaceKind(candidate, ask.kind)) return false;
+    const requestedCuisine = ask.kind === "restaurant" ? extractCuisine(ask.query) : null;
+    const candidateCuisine = extractCuisine(`${venueBlob(candidate)} ${candidate.dishes ?? ""}`);
+    if (requestedCuisine && requestedCuisine !== "any" && candidateCuisine
+      && !matchesCuisine(candidate, requestedCuisine)) return false;
     if (ctx.exclude.some(name => matchesTerm(candidate, name))) return false;
     if (isOffDateVenue(candidate, { allowHarsh: ctx.allowHarsh, allowKaraoke: ask.kind === "activity" })) return false;
     if (ctx.violatesAvoid(venueBlob(candidate))) return false;

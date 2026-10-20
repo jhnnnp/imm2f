@@ -17,6 +17,8 @@ import {
   groundedAreas,
   groundedActivities,
   isDateActivityId,
+  isTravelPlan,
+  KNOWN_AREAS,
   missingSlot,
   uniqueActivities,
   uniqueStrings,
@@ -28,7 +30,7 @@ import { completeJson } from "./client";
 import { isOpenAiConfigured } from "./env";
 import { chatSituationFromMessage } from "./composeDateChat";
 import { explicitDateConstraints } from "@/features/ai/dateConstraints";
-import { retrieveDatePlaybook } from "./datePlaybook";
+import { DATE_PLAYBOOK, datePlaybookTags, selectDatePlaybook } from "./datePlaybook";
 import { deriveDateUnderstanding, explicitFoodExclusions, releasedFoodExclusions, sanitizeDatePreferences, sanitizeInferredPreferences } from "@/features/ai/dateIntent";
 
 export type IntentPayload = {
@@ -400,7 +402,13 @@ export function shouldSkipDateNlu(message: string) {
 }
 
 export function shouldUseLocalInterpret(message: string, _previous?: AIPlannerState) {
-  return shouldSkipDateNlu(message);
+  if (shouldSkipDateNlu(message)) return true;
+  const text = message.normalize("NFKC").trim().replace(/[.!?]+$/, "").trim();
+  // A bare destination or duration chip contains no semantic preference to
+  // infer. Full requests and corrections still receive semantic extraction.
+  if (KNOWN_AREAS.some(area => canonicalizeArea(text) === canonicalizeArea(area))) return true;
+  return /^(?:데이트|당일치기|\d{1,2}\s*박(?:\s*\d{1,2}\s*일)?)$/.test(text)
+    && Boolean(extractStay(text));
 }
 
 export async function interpretDateRequest(input: {
@@ -420,13 +428,19 @@ export async function interpretDateRequest(input: {
   });
   if (!isOpenAiConfigured() || shouldUseLocalInterpret(input.message, input.previousState)) return fallback();
   try {
-    const interpretationRules = await retrieveDatePlaybook(input.message, input.previousState ?? emptyDateBrief(), "interpretation", 4);
+    const previous = input.previousState ?? emptyDateBrief();
+    const interpretationRules = selectDatePlaybook(DATE_PLAYBOOK,
+      datePlaybookTags(input.message, previous), "interpretation", 4)
+      .map(({ id, title, guidance, example }) => ({ id, title, guidance, example }));
+    const complexInterpretation = isTravelPlan(previous) || /여행|휴가|\d{1,2}\s*박/.test(input.message)
+      || input.previousPlaceNames.length > 0 && /변경|바꿔|교체|대신|빼|제외|삭제|다시|말고|않/.test(input.message);
     const response = await completeJson<unknown>({
       jsonSchema: { name: "date_intent_patch_v1", strict: true, schema: dateIntentPayloadSchema },
       temperature: 0,
       maxTokens: 1200,
-      reasoningEffort: "medium",
-      timeoutMs: 30000,
+      reasoningEffort: complexInterpretation ? "medium" : "low",
+      timeoutMs: 12000,
+      retryOnTruncation: false,
       messages: [
         {
           role: "system",

@@ -65,6 +65,67 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+it("starts with a location question and region choices before any server request", () => {
+  render(createElement(AIPlanEditor, editorProps()));
+  expect(screen.getByText("어느 지역에서 데이트하고 싶으세요?")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "성수", exact: true })).toHaveProperty("disabled", false);
+  expect(mocks.recommend).not.toHaveBeenCalled();
+});
+
+it.each(["chip", "typed"])("asks the missing region immediately and preserves the request after a %s answer", async answer => {
+  render(createElement(AIPlanEditor, editorProps()));
+  send("조용한 카페 추천해줘");
+  expect(screen.getByText(/방금 말씀하신 취향과 조건은 그대로 반영/)).toBeTruthy();
+  expect(mocks.recommend).not.toHaveBeenCalled();
+  if (answer === "chip") fireEvent.click(screen.getByRole("button", { name: "성수", exact: true }));
+  else send("대전");
+  await waitFor(() => expect(mocks.recommend).toHaveBeenCalledTimes(1));
+  const request = mocks.recommend.mock.calls[0][0];
+  expect(request.message).toContain("조용한 카페 추천해줘");
+  expect(request.previousState.areas).toEqual([answer === "chip" ? "성수" : "대전"]);
+  expect(screen.getAllByText("조용한 카페 추천해줘", { exact: true })).toHaveLength(1);
+  expect(request.conversation.at(-1).text).toBe(answer === "chip" ? "성수 쪽이 좋아" : "대전");
+});
+
+it("collects trip duration locally and keeps the original region and request", async () => {
+  render(createElement(AIPlanEditor, editorProps({ kind: "trip" })));
+  send("부산 여행");
+  expect(screen.getByText("여행 기간을 알려 주세요")).toBeTruthy();
+  expect(mocks.recommend).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "2박3일", exact: true }));
+  await waitFor(() => expect(mocks.recommend).toHaveBeenCalledTimes(1));
+  const request = mocks.recommend.mock.calls[0][0];
+  expect(request.message).toBe("부산 여행\n2박3일로 짜줘");
+  expect(request.previousState).toMatchObject({ areas: ["부산"], stayKind: "overnight", nights: 2 });
+});
+
+it("retries a failed intake request with its custom region and original preferences exactly once", async () => {
+  mocks.recommend.mockRejectedValueOnce(new Error("network"));
+  render(createElement(AIPlanEditor, editorProps()));
+  send("조용한 카페 추천해줘");
+  const composer = send("대전");
+  await waitFor(() => expect(composer).toHaveProperty("disabled", false));
+  expect(composer.value).toBe("조용한 카페 추천해줘\n대전");
+  fireEvent.click(screen.getByRole("button", { name: "메시지 보내기" }));
+  await waitFor(() => expect(mocks.recommend).toHaveBeenCalledTimes(2));
+  expect(mocks.recommend.mock.calls[1][0]).toMatchObject({
+    message: "조용한 카페 추천해줘\n대전", previousState: { areas: ["대전"] },
+  });
+});
+
+it("shows the complete response and every stop as soon as the server reply arrives", async () => {
+  Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false }) });
+  const text = "두 사람의 취향과 동선을 반영한 장소입니다. ".repeat(25);
+  const reply = { ...plan(), card: { headline: "추천 코스", lines: [text],
+    stops: Array.from({ length: 4 }, (_, index) => ({ name: `즉시 표시 ${index + 1}`, meta: "카페" })) } };
+  mocks.recommend.mockResolvedValueOnce({ result: reply, sessionCandidates: null });
+  render(createElement(AIPlanEditor, editorProps()));
+  await act(async () => { send("성수 데이트 코스 짜줘"); });
+  expect(screen.getByText(text.trim(), { exact: true })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /즉시 표시 4 카페 장소 정보 보기/ })).toBeTruthy();
+  expect(screen.queryByText("답변을 작성하고 있어요")).toBeNull();
+});
+
 it.each([{ isComposing: true }, { keyCode: 229 }])("does not send Enter while a Korean IME is composing (%j)", properties => {
   render(createElement(AIPlanEditor, editorProps()));
   const composer = screen.getByRole("textbox", { name: "AI 플래너에게 메시지" });
@@ -81,7 +142,7 @@ it("keeps Shift + Enter for a newline and ignores empty Enter without starting i
   fireEvent.change(composer, { target: { value: "성수 카페" } });
   fireEvent.keyDown(composer, { key: "Enter", shiftKey: true });
   expect(mocks.recommend).not.toHaveBeenCalled();
-  expect(screen.getByText("어떤 데이트를 계획할까요?")).toBeTruthy();
+  expect(screen.getByText("어느 지역에서 데이트하고 싶으세요?")).toBeTruthy();
 });
 
 it("starts one AI request even when Enter events arrive before React renders the loading state", async () => {

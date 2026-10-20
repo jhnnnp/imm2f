@@ -2,7 +2,7 @@ import "server-only";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { dateCategoryLabel } from "@/features/ai/dateCourse";
 import type { DiscoverCandidate, Place } from "@/features/places/types/place";
-import { loadTourPlaceDetail, loadTourPlaceOverview } from "@/lib/tourapi/client";
+import { loadTourPlaceDetail } from "@/lib/tourapi/client";
 import { distanceMeters } from "@/features/places/geo";
 
 export type PlaceDetailCacheRow = {
@@ -136,26 +136,37 @@ export async function writePlaceDetailCache(candidates: DiscoverCandidate[]) {
 export async function hydrateDateCandidates(candidates: DiscoverCandidate[], saved: Place[]) {
   const cache = await readPlaceDetailCache(candidates);
   const merged = candidates.map(candidate => mergePlaceFacts(candidate, cache, saved));
-  const touristTargets = officialTourEvidenceTargets(merged);
-  for (let start = 0; start < touristTargets.length; start += 4) {
-    await Promise.all(touristTargets.slice(start, start + 4).map(async candidate => {
-      const overview = await loadTourPlaceOverview(candidate.externalPlaceId);
+  const targets = officialTourEvidenceTargets(merged, 6);
+  for (const candidate of merged) {
+    if (targets.length >= 8) break;
+    if (candidate.externalSource === "tourapi" && !candidate.openingHours
+      && !targets.includes(candidate)) targets.push(candidate);
+  }
+  // One bounded wave on shortlisted providers replaces up to four serial
+  // overview batches followed by another detail batch. Hours also matter for
+  // tourist attractions; images are already in search results and are optional.
+  const signal = AbortSignal.timeout(4000);
+  await Promise.all(targets.map(async candidate => {
+    try {
+      const detail = await loadTourPlaceDetail(candidate.externalPlaceId, candidate.category,
+        candidate.tourContentTypeId, { includeImages: false, signal });
+      if (!detail || signal.aborted) return;
+      candidate.image = candidate.image || detail.image;
+      candidate.openingHours = candidate.openingHours || detail.openingHours || undefined;
+      const overview = detail.overview.trim();
       if (!overview) return;
-      const excerpt = overview.slice(0, 250).replace(/\s+\S*$/, "").trim();
-      candidate.evidence = [{ id: `tourapi:${candidate.externalPlaceId}:overview`, venueId: cacheKey(candidate),
+      const excerpt = overview.length > 250
+        ? overview.slice(0, 250).replace(/\s+\S*$/, "").trim() : overview;
+      candidate.evidence = [...(candidate.evidence ?? []), {
+        id: `tourapi:${candidate.externalPlaceId}:overview`, venueId: cacheKey(candidate),
         branchName: candidate.name, attribute: "experience", text: excerpt, sourceExcerpt: excerpt,
         sourceVenueName: candidate.name, sourceAddress: candidate.address,
-        url: candidate.mapUrl, checkedAt: new Date().toISOString(), verification: "source_checked" }];
-    }));
-  }
-  const missingOther = merged.filter(candidate => candidate.externalSource === "tourapi"
-    && candidate.category !== "tourist" && (!candidate.image || !candidate.openingHours)).slice(0, 4);
-  await Promise.all(missingOther.map(async candidate => {
-    const detail = await loadTourPlaceDetail(candidate.externalPlaceId, candidate.category,
-      candidate.tourContentTypeId);
-    if (!detail) return;
-    candidate.image = candidate.image || detail.image;
-    candidate.openingHours = candidate.openingHours || detail.openingHours || undefined;
+        url: "https://www.data.go.kr/data/15101578/openapi.do",
+        checkedAt: new Date().toISOString(), verification: "source_checked",
+      }];
+    } catch {
+      // Optional provider enrichment must not discard otherwise valid venues.
+    }
   }));
   return merged;
 }

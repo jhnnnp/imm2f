@@ -17,6 +17,7 @@ import {
 } from "../courseKeep";
 import {
   emptyDateBrief,
+  extractRequestedAreasFromText,
   missingSlot,
   slotQuestion,
   withActivities,
@@ -28,7 +29,7 @@ import {
 } from "../dateBrief";
 import { isCourseQuickAction } from "../dateCourse";
 import { pendingLabelFor } from "../chatRoute";
-import { isExplorationConversationAside, requestsCandidateExploration, requestsDirectPlanning } from "../chatEntry";
+import { isExplorationConversationAside, plannerEntryIntake, plannerWelcomeCard, requestsCandidateExploration, requestsDirectPlanning } from "../chatEntry";
 import type { AIChatCard, AIChatStop, AIPlannerReply, AIPlannerState, DateIntakeSlot, PlanChange, PlanItem, PlanKind } from "@/features/planning/types/plan";
 import type { Place } from "@/features/places/types/place";
 import { plannerStateFromSeed } from "@/features/taste/compare";
@@ -62,16 +63,6 @@ function sourceHost(url: string) {
 const EDIT_PROMPT = "일정이 조금 빡센 것 같아. 한곳 빼고 남는 곳은 더 여유롭게 해줘.";
 const GENERATE_PLACEHOLDER = "동네와 하고 싶은 일을 말해 주세요";
 const COURSE_PLACEHOLDER = "예: 식당 변경 해줘 · 1번 주차 돼?";
-const WELCOME_CARD: AIChatCard = {
-  headline: "어떤 데이트를 계획할까요?",
-  lines: ["원하는 데이트를 편하게 말해 주세요. 장소 추천, 코스 만들기, 추천 이유와 예약 질문까지 함께 도와드려요."],
-  suggestions: ["왕십리 데이트 코스", "성수 영화·카페 코스", "을지로 공연·저녁 코스"],
-};
-const TRIP_WELCOME_CARD: AIChatCard = {
-  headline: "어디로 여행을 떠나시나요?",
-  lines: ["여행 지역과 기간을 알려 주세요. 아직 기간을 정하지 않았다면 함께 선택할 수 있어요."],
-  suggestions: ["부산 여행", "제주 1박2일 여행", "강릉 당일치기"],
-};
 
 type KeepStep = "idle" | "destination" | "trip-dates";
 
@@ -105,7 +96,6 @@ type ChatTurn = {
   text: string;
   card?: AIChatCard;
   explorationAnchorId?: string;
-  progressive?: boolean;
 };
 
 type Mode = "edit" | "generate";
@@ -204,7 +194,6 @@ function AssistantCard({
   onPick,
   onToggle,
   onSubmit,
-  progressive = false,
   quickRepliesDisabled = false,
   turnId = "welcome",
 }: {
@@ -218,50 +207,18 @@ function AssistantCard({
   onPick: (label: string) => void;
   onToggle?: (label: string) => void;
   onSubmit?: () => void;
-  progressive?: boolean;
   quickRepliesDisabled?: boolean;
   turnId?: string;
 }) {
   const lines = (card?.lines?.length ? card.lines : text ? [text] : [])
     .flatMap(line => line.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean));
-  const totalCharacters = lines.reduce((sum, line) => sum + Array.from(line).length, 0);
-  const totalStops = card?.stops?.length ?? 0;
-  const [visibleCharacters, setVisibleCharacters] = useState(progressive ? 0 : Infinity);
-  const [visibleStops, setVisibleStops] = useState(progressive ? 0 : Infinity);
-  const newestStopRef = useRef<HTMLLIElement>(null);
-  useEffect(() => {
-    if (!progressive || (visibleCharacters >= totalCharacters && visibleStops >= totalStops)) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setVisibleCharacters(totalCharacters);
-      setVisibleStops(totalStops);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      if (visibleCharacters < totalCharacters) setVisibleCharacters(count => Math.min(totalCharacters, count + 9));
-      else setVisibleStops(count => Math.min(totalStops, count + 1));
-    }, visibleCharacters < totalCharacters ? 28 : 260);
-    return () => window.clearTimeout(timer);
-  }, [progressive, totalCharacters, totalStops, visibleCharacters, visibleStops]);
-  useEffect(() => {
-    if (!progressive || visibleStops === 0) return;
-    const frame = window.requestAnimationFrame(() => newestStopRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
-    return () => window.cancelAnimationFrame(frame);
-  }, [progressive, visibleStops]);
-  let remainingCharacters = visibleCharacters;
-  const displayedLines = lines.map(line => {
-    const characters = Array.from(line);
-    const displayed = progressive ? characters.slice(0, Math.max(0, remainingCharacters)).join("") : line;
-    remainingCharacters -= characters.length;
-    return displayed;
-  }).filter(Boolean);
-  const writing = progressive && (visibleCharacters < totalCharacters || visibleStops < totalStops);
   const chips = options?.options?.length ? options.options : (card?.suggestions ?? []);
   const courseActions = chips.length > 0 && chips.every(chip => isCourseQuickAction(chip));
   return (
     <article className="ai-bubble is-assistant">
       {card?.headline ? <b>{card.headline}</b> : null}
-      {displayedLines.map((line, index) => <p key={index} className="ai-bubble-paragraph">{line}</p>)}
-      {!writing && card?.sources?.length ? (
+      {lines.map((line, index) => <p key={index} className="ai-bubble-paragraph">{line}</p>)}
+      {card?.sources?.length ? (
         <div className="ai-answer-sources" aria-label="답변 출처">
           {card.sources.filter(source => sourceHost(source.url)).map(source => (
             <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">
@@ -270,9 +227,9 @@ function AssistantCard({
           ))}
         </div>
       ) : null}
-      {card?.stops?.length && visibleStops > 0 ? (
+      {card?.stops?.length ? (
         <ol className="ai-bubble-stops">
-          {card.stops.slice(0, visibleStops).map((stop, index) => {
+          {card.stops.map((stop, index) => {
             const key = `${turnId}-${stop.name}-${index}`;
             const open = openStopKey === key;
             const multiDay = card.stops?.some(item => (item.dayIndex ?? 0) > 0) ?? false;
@@ -281,7 +238,7 @@ function AssistantCard({
               .filter(item => (item.dayIndex ?? 0) === (stop.dayIndex ?? 0)).length;
             const kakaoUrl = stopKakaoUrl(stop);
             return (
-              <li key={key} ref={index === Math.min(visibleStops, totalStops) - 1 ? newestStopRef : undefined}>
+              <li key={key}>
                 {showDay ? <p className="ai-stop-day">{(stop.dayIndex ?? 0) + 1}일차</p> : null}
                 {!showDay && index > 0 && stop.distanceFromPreviousMeters != null ? (
                   <p className="ai-route-distance"><span>↓</span>{formatHop(stop.distanceFromPreviousMeters, card.routeBasis)}</p>
@@ -327,8 +284,7 @@ function AssistantCard({
           })}
         </ol>
       ) : null}
-      {writing && <span className="ai-writing-indicator" role="status">답변을 작성하고 있어요<span aria-hidden="true">▍</span></span>}
-      {!writing && chips.length > 0 && (
+      {chips.length > 0 && (
         <div className={`ai-quick-replies${courseActions ? " is-course-actions" : ""}`} role="group" aria-label="바로 고르기">
           {chips.map(option => {
             const active = selectedChoices.includes(option);
@@ -395,7 +351,8 @@ export function AIPlanEditor({
       suggestions: ["이 조건으로 코스 만들기"],
     },
   }] : []);
-  const [choicePrompt, setChoicePrompt] = useState<ChoicePrompt | null>(null);
+  const [choicePrompt, setChoicePrompt] = useState<ChoicePrompt | null>(() => tasteSeed ? null : slotPrompt("area"));
+  const pendingIntakeRequestRef = useRef("");
   const [selectedChoices, setSelectedChoices] = useState<string[]>([]);
   const [peek, setPeek] = useState<{ key: string; stop: AIChatStop } | null>(null);
   const [shownStops, setShownStops] = useState<AIChatStop[]>([]);
@@ -687,7 +644,8 @@ export function AIPlanEditor({
     setPlanningSessionId(crypto.randomUUID());
     sessionCandidatesRef.current = null;
     setConversation([]);
-    setChoicePrompt(null);
+    setChoicePrompt(next === "generate" ? slotPrompt("area") : null);
+    pendingIntakeRequestRef.current = "";
     setSelectedChoices([]);
     setPeek(null);
     setShownStops([]);
@@ -819,6 +777,7 @@ export function AIPlanEditor({
 
   async function beginExploration(message: string, nextState: AIPlannerState) {
     if (requestBusyRef.current || keepingRef.current || explorationBusy) return;
+    pendingIntakeRequestRef.current = "";
     const ticket = beginRequest();
     setExplorationBusy(true);
     setLoadingSeconds(0);
@@ -957,7 +916,15 @@ export function AIPlanEditor({
   async function runGenerate(nextState: AIPlannerState, message: string, displayText?: string,
     planningInput?: ItineraryPlanningInput) {
     if (keepingRef.current || phase === "loading" || keeping || ((requestBusyRef.current || explorationBusy) && !planningInput)) return;
-    const request = message.trim();
+    const submittedText = message.trim();
+    const entryText = submittedText || displayText?.trim() || "";
+    const displayedRequest = displayText || submittedText;
+    const resumingIntake = Boolean(pendingIntakeRequestRef.current && !isExplorationConversationAside(entryText));
+    const request = resumingIntake ? [pendingIntakeRequestRef.current, entryText].filter(Boolean).join("\n") : submittedText;
+    if (resumingIntake && nextState.pendingSlot === "area") {
+      const writtenAreas = extractRequestedAreasFromText(entryText);
+      if (writtenAreas.length) nextState = { ...withAreas(nextState, writtenAreas), pendingSlot: null };
+    }
     if (!request && !displayText && !planningInput) return;
     const directPlanning = Boolean(exploration && requestsDirectPlanning(request));
     const explorationIntent = candidateExplorationActive && exploration && !planningInput && request && !directPlanning
@@ -1033,6 +1000,20 @@ export function AIPlanEditor({
       return;
     }
     if (keepStep !== "idle") resetKeep();
+    const entryIntake = !recommendation && !planningInput && !exploration
+      ? plannerEntryIntake({ kind, message: request || entryText, state: nextState }) : null;
+    if (entryIntake) {
+      pendingIntakeRequestRef.current = request || entryText;
+      setPlannerState({ ...entryIntake.state, pendingSlot: entryIntake.slot });
+      setConversation(current => [...current,
+        ...(entryText ? [{ role: "user" as const, text: displayedRequest }] : []),
+        { role: "assistant", text: entryIntake.card.lines.join("\n"), card: entryIntake.card }]);
+      setChoicePrompt({ ...slotPrompt(entryIntake.slot, entryIntake.state), options: entryIntake.card.suggestions ?? [] });
+      setSelectedChoices([]);
+      setGeneratePrompt("");
+      setError("");
+      return;
+    }
     const pending = missingSlot(nextState);
     if (!request && pending) {
       setPlannerState(nextState);
@@ -1045,6 +1026,7 @@ export function AIPlanEditor({
       setChoicePrompt(slotPrompt(pending, nextState));
       return;
     }
+    if (resumingIntake) pendingIntakeRequestRef.current = "";
     const ticket = beginRequest();
     setError("");
     setPhase("loading");
@@ -1053,14 +1035,14 @@ export function AIPlanEditor({
     setChoicePrompt(null);
     setSelectedChoices([]);
     setPeek(null);
-    if (displayText || request) {
-      setConversation(current => [...current, { role: "user", text: displayText || request }]);
+    if (displayedRequest) {
+      setConversation(current => [...current, { role: "user", text: displayedRequest }]);
     }
     setGeneratePrompt("");
     if (composerRef.current) composerRef.current.style.height = "38px";
     const nextTurns = [
       ...conversation,
-      ...(displayText || request ? [{ role: "user" as const, text: displayText || request }] : []),
+      ...(displayedRequest ? [{ role: "user" as const, text: displayedRequest }] : []),
     ].slice(-8);
     const questionCandidates = explorationIntent === "question" && exploration?.groups && !recommendation
       ? visibleExplorationCards(exploration.groups, explorationRejectedIds) : null;
@@ -1091,7 +1073,7 @@ export function AIPlanEditor({
           ? "조건에 맞는 장소를 충분히 찾지 못했습니다. 가고 싶은 동네를 다시 말해 주세요."
           : result.error;
         setConversation(current => [...current, { role: "assistant", text: safeError, card: { headline: "장소를 찾지 못했습니다", lines: [safeError] } }]);
-        setPlannerState(plannerState);
+        setPlannerState(nextState);
         setGeneratePrompt(request || displayText || "");
         return;
       }
@@ -1121,13 +1103,13 @@ export function AIPlanEditor({
       resetKeep();
       setConversation(current => [
         ...current,
-        { role: "assistant", text: result.message, card: { ...result.card, followUp: undefined }, progressive: true },
+        { role: "assistant", text: result.message, card: { ...result.card, followUp: undefined } },
       ]);
     } catch {
       if (!isCurrentRequest(ticket)) return;
       const text = "답변을 가져오지 못했어요. 잠시 후 다시 보내 주세요.";
       setConversation(current => [...current, { role: "assistant", text, card: { headline: "", lines: [text] } }]);
-      setPlannerState(plannerState);
+      setPlannerState(nextState);
       setGeneratePrompt(request || displayText || "");
     } finally {
       if (isCurrentRequest(ticket)) { setPhase("idle"); if (planningInput) setExplorationBusy(false); }
@@ -1279,8 +1261,9 @@ export function AIPlanEditor({
           >
             {conversation.length === 0 && (
               <AssistantCard
-                card={kind === "trip" ? TRIP_WELCOME_CARD : WELCOME_CARD}
+                card={plannerWelcomeCard(kind)}
                 text=""
+                options={choicePrompt}
                 selectedChoices={[]}
                 disabled={phase === "loading"}
                 onPick={pickQuick}
@@ -1305,7 +1288,6 @@ export function AIPlanEditor({
                   onPick={pickQuick}
                   onToggle={label => setSelectedChoices(current => label === "추천에 맡기기" ? [label] : current.includes(label) ? current.filter(item => item !== label) : [...current.filter(item => item !== "추천에 맡기기"), label])}
                   onSubmit={submitChoices}
-                  progressive={message.progressive}
                   quickRepliesDisabled={!last}
                   turnId={`assistant-${index}`}
                 />

@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isKakaoUtilityGroupCode, mapKakaoCategory, searchKakaoPlacesRemote } from "./local";
+
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("mapKakaoCategory", () => {
   it("maps chip categories from Kakao group codes", () => {
@@ -47,5 +49,34 @@ describe("shopping discovery", () => {
       if (previous === undefined) delete process.env.KAKAO_REST_API_KEY;
       else process.env.KAKAO_REST_API_KEY = previous;
     }
+  });
+});
+
+describe("Kakao search geography and duplicate requests", () => {
+  const document = (changes = {}) => ({ id: "region-1", place_name: "같은이름 카페", category_name: "음식점 > 카페",
+    category_group_code: "CE7", address_name: "경기 안양시 동안구", x: "126.96", y: "37.39", ...changes });
+  it("returns no matches when every result is outside the requested city", async () => {
+    vi.stubEnv("KAKAO_REST_API_KEY", "geography-test");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ documents: [document()] }))));
+    const response = await searchKakaoPlacesRemote({ region: "성남시", query: "같은이름 카페" });
+    expect(response.ok && response.places).toEqual([]);
+  });
+  it("does not route a candidate whose provider coordinates are empty", async () => {
+    vi.stubEnv("KAKAO_REST_API_KEY", "coordinate-test");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ documents: [document({ x: "", y: "" })] }))));
+    const response = await searchKakaoPlacesRemote({ query: "같은이름 카페" });
+    expect(response.ok && response.places).toEqual([]);
+  });
+  it("coalesces concurrent searches and releases them on completion", async () => {
+    vi.stubEnv("KAKAO_REST_API_KEY", "dedupe-test");
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ documents: [document()] })));
+    vi.stubGlobal("fetch", fetcher);
+    const [first, second] = await Promise.all([
+      searchKakaoPlacesRemote({ query: "같은이름 카페" }), searchKakaoPlacesRemote({ query: "같은이름 카페" }),
+    ]);
+    expect(first).toEqual(second);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await searchKakaoPlacesRemote({ query: "같은이름 카페" });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });

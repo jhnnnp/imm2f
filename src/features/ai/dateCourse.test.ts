@@ -29,6 +29,8 @@ import {
 
 it("filters child-only attractions from a couple trip unless explicitly requested by name", () => {
   expect(isOffDateVenue(candidate({ name: "우리 놀이터 마루달", category: "tourist", categoryLabel: "관광지" }))).toBe(true);
+  expect(isOffDateVenue(candidate({ name: "국립중앙박물관 어린이박물관", category: "photo", categoryLabel: "문화시설" }))).toBe(true);
+  expect(isOffDateVenue(candidate({ name: "구포 어린이교통공원", category: "tourist", categoryLabel: "관광지" }))).toBe(true);
   expect(isOffDateVenue(candidate({ name: "어린이대공원", category: "nature", categoryLabel: "공원" }))).toBe(false);
 });
 

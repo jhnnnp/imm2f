@@ -102,6 +102,30 @@ describe("dateBrief", () => {
     expect(extractAreasFromText(`성수에서 ${experience} 이어지는 코스를 만들어줘`)).toEqual(["성수"]);
   });
 
+  it.each(["조용한 분위기로 카페 추천해줘", "로맨틱한느낌으로 데이트하고 싶어", "조용한곳으로 가고 싶어",
+    "근처에서 데이트", "야외에서 산책", "실내로 여행", "도시로 여행", "당일치기로 떠날래", "데이트하고싶어", "여행가려구", "추천해줘", "안녕", "고마워", "상관없어"])
+  ("does not turn conversational preferences into a destination: %s", message => {
+    expect(extractAreasFromText(message)).toEqual([]);
+    expect(groundedAreas(message, undefined, ["분위기", "서울"])).toEqual([]);
+    expect(groundedAreas(message, withAreas(emptyDateBrief(), ["증평"]), ["분위기", "서울"])).toEqual(["증평"]);
+  });
+
+  it("keeps a real destination when preferences use the same destination particles", () => {
+    const message = "성수에서 여유로운 분위기로 카페에 가고 싶어";
+    expect(extractRequestedAreasFromText(message)).toEqual(["성수"]);
+    expect(groundedAreas(message, undefined, ["성수", "분위기"])).toEqual(["성수"]);
+  });
+
+  it.each(["증평", "대전", "목포", "남해", "영도", "식사동", "영화동", "봉화", "구로", "세종로"])
+  ("keeps an explicitly named custom destination outside the catalogue: %s", destination => {
+    expect(extractRequestedAreasFromText(`${destination}에서 조용한 분위기로 여행하고 싶어`)).toEqual([destination]);
+    expect(extractRequestedAreasFromText(destination)).toEqual([destination]);
+  });
+
+  it("retains an independently mentioned shorter locality alongside a custom destination", () => {
+    expect(extractRequestedAreasFromText("세종로에서 시작해서 종로도 가자")).toEqual(expect.arrayContaining(["세종로", "종로"]));
+  });
+
   it("preserves unknown localities whose names include an activity word", () => {
     expect(extractRequestedAreasFromText("식사동에서 카페와 산책으로 이어지는 코스")).toEqual(["식사동"]);
     expect(extractRequestedAreasFromText("영화동에서 전시와 실내 활동으로 이어지는 코스")).toEqual(["영화동"]);

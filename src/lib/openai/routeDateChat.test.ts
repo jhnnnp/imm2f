@@ -76,7 +76,7 @@ it("lets semantic reasoning interpret a confident local place request and its co
   expect(result).toMatchObject({ mode: "places", placeAsk: { kind: "cafe", query: "예약 없이 대화하기 좋은 카페", area: "성수" } });
   const request = vi.mocked(completeJson).mock.calls[0][0];
   expect(request.jsonSchema?.schema).toEqual(dateChatRouteSchema);
-  expect(request.reasoningEffort).toBe("medium");
+  expect(request.reasoningEffort).toBe("low");
 });
 
 it("uses conversation meaning for a follow-up without requiring a canned course keyword", async () => {
@@ -90,6 +90,17 @@ it("uses conversation meaning for a follow-up without requiring a canned course 
 
 it("does not generate an itinerary from an empty message", async () => {
   expect(await routeDateChat({ ...input, message: "  " })).toMatchObject({ mode: "chat" });
+  expect(completeJson).not.toHaveBeenCalled();
+});
+
+it.each(["안녕하세요", "고마워요", "뭐 할 수 있어?"])("handles a self-contained conversation without model routing: %s", async message => {
+  expect(await routeDateChat({ message, hasCourse: false, currentCourse: [] })).toMatchObject({ mode: "chat" });
+  expect(completeJson).not.toHaveBeenCalled();
+});
+
+it("routes an exact destination intake choice locally", async () => {
+  expect(await routeDateChat({ message: "성수", hasCourse: false, currentCourse: [],
+    state: { ...emptyDateBrief(), pendingSlot: "area" } })).toMatchObject({ mode: "course" });
   expect(completeJson).not.toHaveBeenCalled();
 });
 

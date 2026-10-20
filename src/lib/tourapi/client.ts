@@ -4,6 +4,7 @@ import { districtFromAddress } from "@/lib/kakao/local";
 import type { DiscoverCandidate, PlaceCategoryId } from "@/features/places/types/place";
 import { getTourApiServiceKey } from "./env";
 import { compactEventYmd, formatEventPeriod, isEndedFestival, koreaTodayYmd, ldongRegnCdFromAreaCode } from "./festivalSchedule";
+import { matchesPlaceRegion, resolvePlaceRegion, validKoreanVenueCoordinates } from "@/features/places/regionScope";
 
 const TOUR_BASE = "https://apis.data.go.kr/B551011/KorService2";
 const PAGE_SIZE = 15;
@@ -53,6 +54,20 @@ type TourItem = {
   checkouttime?: string;
   parkinglodging?: string;
   reservationurl?: string;
+  usetimeculture?: string;
+  usetimeleports?: string;
+  opentime?: string;
+  restdateculture?: string;
+  restdateleports?: string;
+  restdateshopping?: string;
+  parkingculture?: string;
+  parkingleports?: string;
+  parkingshopping?: string;
+  chkpetculture?: string;
+  chkpetleports?: string;
+  chkpetshopping?: string;
+  eventhomepage?: string;
+  progresstype?: string;
 };
 
 type TourResponse = {
@@ -111,9 +126,9 @@ function detailFacts(item: TourItem | undefined, category: PlaceCategoryId) {
     add("체크아웃", item.checkouttime);
     add("주차", item.parkinglodging);
   } else {
-    add("휴무", item.restdate);
-    add("주차", item.parking);
-    add("반려동물", item.chkpet);
+    add("휴무", item.restdate || item.restdateculture || item.restdateleports || item.restdateshopping);
+    add("주차", item.parking || item.parkingculture || item.parkingleports || item.parkingshopping);
+    add("반려동물", item.chkpet || item.chkpetculture || item.chkpetleports || item.chkpetshopping);
   }
   return facts.slice(0, 4);
 }
@@ -149,14 +164,15 @@ function mappedCategory(typeId: TourContentTypeId): PlaceCategoryId {
   return "tourist";
 }
 
-function toCandidate(item: TourItem, typeId: TourContentTypeId): DiscoverCandidate | null {
+function toCandidate(item: TourItem, typeId: TourContentTypeId, requireReportedType = false): DiscoverCandidate | null {
   const reportedType = String(item.contenttypeid ?? item.contentTypeId ?? "").trim();
+  if (requireReportedType && !reportedType) return null;
   if (reportedType && reportedType !== typeId) return null;
   const id = String(item.contentid ?? item.contentId ?? "").trim();
   const name = item.title?.trim() ?? "";
   const lng = Number(item.mapx ?? item.mapX);
   const lat = Number(item.mapy ?? item.mapY);
-  if (!id || !name || !Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+  if (!id || !name || !validKoreanVenueCoordinates([lng, lat])) return null;
   const address = item.addr1 ?? "";
   const category = mappedCategory(typeId);
   const label = { "12": "관광지", "14": "문화시설", "15": "축제·행사", "28": "레포츠",
@@ -171,9 +187,11 @@ function toCandidate(item: TourItem, typeId: TourContentTypeId): DiscoverCandida
     tourContentTypeId: typeId,
     district: districtFromAddress(address) || address,
     address,
-    roadAddress: item.addr2 ?? "",
+    // addr2 is a unit/building detail, not a complete road address.
+    roadAddress: "",
     phone: item.tel ?? "",
-    mapUrl: `https://korean.visitkorea.or.kr/detail/ms_detail.do?cotid=${id}`,
+    // TourAPI numeric contentid is not VisitKorea's UUID-shaped cotid.
+    mapUrl: `https://map.kakao.com/link/map/${encodeURIComponent(name)},${lat},${lng}`,
     coordinates: [lng, lat],
     image: item.firstimage || item.firstimage2 || item.originimgurl || undefined,
     openingHours: period || undefined,
@@ -181,7 +199,28 @@ function toCandidate(item: TourItem, typeId: TourContentTypeId): DiscoverCandida
   };
 }
 
-async function tourFetch(path: string, params: Record<string, string>): Promise<{ ok: true; payload: TourResponse; page: number } | { ok: false; code: KakaoSearchErrorCode; error: string }> {
+type TourFetchResult = { ok: true; payload: TourResponse; page: number } | { ok: false; code: KakaoSearchErrorCode; error: string };
+const tourRequests = new Map<string, Promise<TourFetchResult>>();
+
+async function tourFetch(path: string, params: Record<string, string>, signal?: AbortSignal): Promise<TourFetchResult> {
+  // A caller's cancellation must not abort another caller's shared request.
+  if (signal) return requestTourApi(path, params, signal);
+  const requestId = JSON.stringify([serviceKey(), path, Object.entries(params).sort(([a], [b]) => a.localeCompare(b))]);
+  const existing = tourRequests.get(requestId);
+  if (existing) return existing;
+  const pending = requestTourApi(path, params);
+  tourRequests.set(requestId, pending);
+  try { return await pending; }
+  finally { if (tourRequests.get(requestId) === pending) tourRequests.delete(requestId); }
+}
+
+function tourError(code: string, message?: string): TourFetchResult {
+  if (["22", "23"].includes(code)) return { ok: false, code: "rate_limited", error: "관광정보 검색 한도를 잠시 넘었어요. 조금 뒤에 다시 시도해 주세요." };
+  if (["20", "30", "31", "32"].includes(code)) return { ok: false, code: "invalid_key", error: "TourAPI 키가 거부되었어요. data.go.kr에서 KorService2 활용신청과 키를 확인해 주세요." };
+  return { ok: false, code: "unavailable", error: message || "관광정보를 불러오지 못했어요." };
+}
+
+async function requestTourApi(path: string, params: Record<string, string>, signal?: AbortSignal): Promise<TourFetchResult> {
   const key = serviceKey();
   if (!key) {
     return { ok: false, code: "not_configured", error: "TourAPI 키가 없어요. .env.local의 TOUR_API_SERVICE_KEY를 확인해 주세요." };
@@ -197,7 +236,8 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
   });
 
   try {
-    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(7000) });
+    const timeout = AbortSignal.timeout(4500);
+    const response = await fetch(url, { cache: "no-store", signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     const text = await response.text();
     if (response.status === 429) {
       return { ok: false, code: "rate_limited", error: "검색 한도를 잠시 넘었어요. 조금 뒤에 다시 시도해 주세요." };
@@ -206,12 +246,13 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
       return { ok: false, code: "unavailable", error: "장소를 불러오지 못했어요." };
     }
     if (text.trim().startsWith("<")) {
-      return { ok: false, code: "invalid_key", error: "TourAPI 키가 거부되었어요. data.go.kr에서 KorService2 활용신청과 키를 확인해 주세요." };
+      const code = text.match(/<(?:returnReasonCode|resultCode)>\s*([^<]+)\s*</i)?.[1]?.trim() ?? "";
+      return tourError(code);
     }
     const payload = JSON.parse(text) as TourResponse;
     const code = payload.response?.header?.resultCode ?? payload.resultCode ?? "";
     if (code && code !== "0000") {
-      return { ok: false, code: "unavailable", error: payload.response?.header?.resultMsg || payload.resultMsg || "장소를 불러오지 못했어요." };
+      return tourError(code, payload.response?.header?.resultMsg || payload.resultMsg);
     }
     return { ok: true, payload, page: Number(params.pageNo || "1") };
   } catch {
@@ -222,6 +263,7 @@ async function tourFetch(path: string, params: Record<string, string>): Promise<
 /** List rows from searchFestival2 already use eventStartDate; skip per-item detailIntro2 on browse. */
 function discoverFestivalItems(items: TourItem[]) {
   return items.filter(item => festivalHasPeriod(item)
+    && !/취소|연기|cancel|postpon/i.test(item.progresstype ?? "")
     && !isEndedFestival(festivalStart(item), festivalEnd(item)));
 }
 
@@ -242,7 +284,7 @@ function nearestAreaGroup(lng: number, lat: number) {
 }
 
 function resolveFestivalRegion(input: KakaoSearchInput): PlaceArea | undefined {
-  const direct = regionByQuery(input.region);
+  const direct = resolvePlaceRegion(input.region);
   if (direct) return direct;
   const text = `${input.region ?? ""} ${input.query ?? ""}`.trim();
   if (text) {
@@ -311,13 +353,18 @@ export async function searchTourPlacesRemote(input: TourSearchInput): Promise<Ka
   const requestedPage = Math.min(45, Math.max(1, input.page ?? 1));
   const typeId = input.tourContentTypeId ?? contentTypeId(input.category);
   const category = mappedCategory(typeId);
-  const region = category === "festival" ? resolveFestivalRegion(input) : regionByQuery(input.region);
-  const keyword = [input.region, input.query, input.mood].map(value => value?.trim() ?? "").filter(Boolean).join(" ").trim();
+  const region = category === "festival" ? resolveFestivalRegion(input) : resolvePlaceRegion(input.region);
+  // searchKeyword2 searches the content title. Prefixing "서울 " to an exact
+  // venue title returns no rows; geography belongs in legal-dong parameters
+  // and the result scope checks below.
+  const keyword = [input.query, input.mood].map(value => value?.trim() ?? "").filter(Boolean).join(" ").trim()
+    || input.region?.trim() || "";
   const hasCoords = Number.isFinite(input.x) && Number.isFinite(input.y);
   const hasTypedQuery = Boolean(input.query?.trim() || input.mood?.trim());
   const rows = category === "festival" ? FESTIVAL_PAGE_SIZE : PAGE_SIZE;
   const origin = hasCoords
     ? { x: Number(input.x), y: Number(input.y), radius: Math.min(20000, Math.max(300, Math.round(input.radius ?? 2000))) }
+    : region?.radius && !hasTypedQuery ? { x: region.coordinates[0], y: region.coordinates[1], radius: region.radius }
     : undefined;
   const tokens = category === "festival" ? festivalSearchTokens(input, region) : [];
   const namedFestivalSearch = category === "festival" && tokens.length > 0 && !region && !hasCoords;
@@ -333,21 +380,20 @@ export async function searchTourPlacesRemote(input: TourSearchInput): Promise<Ka
         arrange: "C",
       });
     }
-    if (hasCoords) {
+    if (origin && !hasTypedQuery) {
       return tourFetch("locationBasedList2", {
         ...common,
-        mapX: String(input.x),
-        mapY: String(input.y),
+        mapX: String(origin.x),
+        mapY: String(origin.y),
         radius: String(origin?.radius ?? 2000),
         arrange: "E",
       });
     }
     if (keyword && (hasTypedQuery || !region)) {
       return tourFetch("searchKeyword2", {
-        ...common,
+        pageNo: String(pageNo), numOfRows: String(rows),
         keyword: keyword.length >= 2 ? keyword : `${keyword} 여행`,
-        areaCode: region ? String(region.areaCode) : "",
-        sigunguCode: region?.sigunguCode ? String(region.sigunguCode) : "",
+        lDongRegnCd: ldongRegnCdFromAreaCode(region?.areaCode),
         arrange: "C",
       });
     }
@@ -356,8 +402,7 @@ export async function searchTourPlacesRemote(input: TourSearchInput): Promise<Ka
     }
     return tourFetch("areaBasedList2", {
       ...common,
-      areaCode: String(region.areaCode),
-      sigunguCode: region.sigunguCode ? String(region.sigunguCode) : "",
+      lDongRegnCd: ldongRegnCdFromAreaCode(region.areaCode),
       arrange: "Q",
     });
   };
@@ -382,8 +427,11 @@ export async function searchTourPlacesRemote(input: TourSearchInput): Promise<Ka
   }
 
   const places = items
-    .map(item => (category === "festival" ? withFestivalDistance(item, origin) : toCandidate(item, typeId)))
-    .filter((item): item is DiscoverCandidate => item !== null);
+    .map(item => (category === "festival" ? withFestivalDistance(item, origin)
+      : toCandidate(item, typeId, Boolean(keyword && (hasTypedQuery || !region)))))
+    .filter((item): item is DiscoverCandidate => item !== null)
+    .filter(item => matchesPlaceRegion(item, input.region))
+    .filter(item => !origin || haversineMeters(origin.x, origin.y, ...item.coordinates) <= origin.radius);
   return {
     ok: true,
     places,
@@ -394,22 +442,23 @@ export async function searchTourPlacesRemote(input: TourSearchInput): Promise<Ka
 }
 
 export async function loadTourPlaceDetail(contentId: string, category: PlaceCategoryId,
-  tourContentTypeId?: string): Promise<TourPlaceDetail | null> {
+  tourContentTypeId?: string, options: { includeImages?: boolean; signal?: AbortSignal } = {}): Promise<TourPlaceDetail | null> {
   const id = contentId.trim();
   if (!id) return null;
   const typeId = supportedContentType(tourContentTypeId) ? tourContentTypeId : contentTypeId(category);
   const [common, intro, images] = await Promise.all([
-    tourFetch("detailCommon2", { contentId: id }),
-    tourFetch("detailIntro2", { contentId: id, contentTypeId: typeId }),
-    tourFetch("detailImage2", { contentId: id }),
+    tourFetch("detailCommon2", { contentId: id }, options.signal),
+    tourFetch("detailIntro2", { contentId: id, contentTypeId: typeId }, options.signal),
+    options.includeImages === false ? Promise.resolve(null) : tourFetch("detailImage2", { contentId: id }, options.signal),
   ]);
   const commonItem = common.ok ? asItems(common.payload.response)[0] : undefined;
   const introItem = intro.ok ? asItems(intro.payload.response)[0] : undefined;
-  const imageItem = images.ok ? asItems(images.payload.response)[0] : undefined;
+  const imageItem = images?.ok ? asItems(images.payload.response)[0] : undefined;
   const overview = cleanText(commonItem?.overview);
   const image = commonItem?.firstimage || commonItem?.firstimage2 || imageItem?.originimgurl || imageItem?.firstimage;
-  const openingHours = cleanText(introItem?.usetime || introItem?.playtime || ([introItem?.checkintime, introItem?.checkouttime].filter(Boolean).join(" – ")));
-  const homepage = extractUrl(commonItem?.homepage) || extractUrl(introItem?.reservationurl);
+  const openingHours = cleanText(introItem?.usetime || introItem?.usetimeculture || introItem?.usetimeleports
+    || introItem?.opentime || introItem?.playtime || ([introItem?.checkintime, introItem?.checkouttime].filter(Boolean).join(" – ")));
+  const homepage = extractUrl(commonItem?.homepage) || extractUrl(introItem?.reservationurl) || extractUrl(introItem?.eventhomepage);
   const facts = detailFacts(introItem, category);
   if (!overview && !image && !openingHours && !homepage && !facts.length) return null;
   return { overview, image, openingHours, homepage, facts };

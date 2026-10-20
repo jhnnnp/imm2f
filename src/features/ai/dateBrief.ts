@@ -73,8 +73,22 @@ const AREA_STOPWORDS = new Set([
   ...DATE_ACTIVITY_OPTIONS.map(option => option.label),
   ...DATE_INDOOR_OPTIONS,
   ...DATE_CUISINE_OPTIONS.map(option => option.label),
-  "활동", "이동", "체험", "쇼핑", "관광",
+  "활동", "이동", "체험", "쇼핑", "관광", "맛집", "실내", "야외", "당일치기",
+  "장소", "지역", "도시", "동네", "여행지", "목적지", "출발지", "근처", "주변",
+  "분위기", "느낌", "취향", "기분", "스타일", "테마", "방향", "시간", "날짜", "주말", "평일",
+  "안녕", "안녕하세요", "고마워", "감사해", "모르겠어", "아무데나", "아무거나", "어디든", "미정", "미정이야", "상관없어", "상관없음",
 ]);
+
+/** Grammatical destination markers also attach to preferences ("분위기로").
+ * Reject conversational nouns and verb endings, while retaining unfamiliar
+ * city/neighborhood names rather than requiring a fixed region catalogue. */
+function isAreaNoun(value: string) {
+  const noun = value.replace(/(?:으로|로|에서|쪽)$/, "");
+  return !AREA_STOPWORDS.has(value) && !AREA_STOPWORDS.has(noun)
+    && !/(?:분위기|느낌|취향|스타일|테마|장소|곳|근처|주변)(?:으로|로|에서|쪽)?$/.test(value)
+    && !/(?:가려|갈라|하려|할라|먹|하|했|됐)구$/.test(value)
+    && !/(?:하고싶어?|가고싶어?|놀고싶어?|가려고|가려구|갈래|할래|해줘|해주|알려줘|모르겠어|정했어|좋겠어|좋아|할까|가자)$/.test(value);
+}
 
 const AREA_CANON: Record<string, string> = {
   성수: "성수",
@@ -673,20 +687,28 @@ export function extractAreasFromText(message: string) {
     .filter(area => message.includes(area));
   const travel = [...message.matchAll(/([가-힣]{2,8})\s*(?:여행|에서|으로|쪽)/g)]
     .map(match => match[1])
-    .filter(name => !AREA_STOPWORDS.has(name));
+    .filter(isAreaNoun);
   const suffixed = [...message.matchAll(/(?:^|\s)([가-힣]{2,12}?(?:역|동|시))(?=\s|에서|근처|주변|으로|가서|$)/g),
     ...message.matchAll(/(?:^|\s)([가-힣]{1,4}구)(?=\s|에서|근처|주변|으로|가서|$)/g)]
     // Check the original noun before stripping geographic suffixes: "전시"
     // and "활동" are experiences, not the localities "전" and "활동".
-    .filter(match => !AREA_STOPWORDS.has(match[1]))
+    .filter(match => isAreaNoun(match[1]))
     .map(match => match[1].replace(/(?:역|시)$/, ""))
-    .filter(name => !/(?:가려|갈라|하려|할라|먹|하|했|됐)구$/.test(name));
+    .filter(isAreaNoun);
   const going = known.length || travel.length || suffixed.length ? []
     : [...message.matchAll(/(?:^|\s)([가-힣]{2,8})\s*(?:가려|갈래|가고|가자|가려고)/g)]
-      .map(match => match[1]).filter(name => !AREA_STOPWORDS.has(name));
+      .map(match => match[1]).filter(isAreaNoun);
   const bare = message.trim().match(/^[가-힣]{2,6}$/)?.[0];
-  return uniqueStrings([...known, ...travel, ...suffixed, ...going,
-    ...(bare && !AREA_STOPWORDS.has(bare) && !/가려|갈래|여행|데이트|추천|코스/.test(bare) ? [bare] : [])].map(canonicalizeArea), 3);
+  const explicit = [...travel, ...suffixed, ...going,
+    ...(bare && isAreaNoun(bare) && !/가려|갈래|여행|데이트|추천|코스/.test(bare) ? [bare] : [])];
+  // "종로" inside an explicitly written "세종로" is not a second area.
+  // Retain the shorter area when the user also mentioned it independently.
+  const standaloneKnown = known.filter(area => {
+    const containing = explicit.filter(name => name.length > area.length && name.includes(area)
+      && !(name.startsWith(area) && /^(?:에|에서|으로|로|쪽)$/.test(name.slice(area.length))));
+    return !containing.length || containing.reduce((text, name) => text.replaceAll(name, ""), message).includes(area);
+  });
+  return uniqueStrings([...standaloneKnown, ...explicit].map(canonicalizeArea), 3);
 }
 
 /** Places mentioned as rejected destinations are references, not search areas. */

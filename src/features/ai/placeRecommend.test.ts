@@ -53,6 +53,10 @@ describe("placeRecommend", () => {
     expect(placeTourSearch({ kind: "activity", query: "체험", area: "전주" })?.tourContentTypeId).toBe("28");
     expect(placeTourSearch({ kind: "exhibit", query: "전시", area: "전주" })?.tourContentTypeId).toBe("14");
     expect(placeTourSearch(pastaAsk)).toBeNull();
+    expect(placeTourSearch({ kind: "exhibit", query: "현대미술", area: "서울" })?.query).toBe("현대미술");
+    expect(placeTourSearch({ kind: "activity", query: "카약", area: "부산" })?.query).toBe("카약");
+    expect(placeTourSearch({ kind: "shopping", query: "빈티지", area: "서울" })?.query).toBe("빈티지");
+    expect(placeTourSearch({ kind: "festival", query: "불꽃축제", area: "서울" })?.query).toBe("불꽃축제");
   });
 
   it("keeps source-classified shopping and events separate from unrelated venues", () => {
@@ -89,8 +93,16 @@ describe("placeRecommend", () => {
     expect(restaurants.map(item => item.name)).toEqual(["파스타집 A"]);
     const bars = filterPlaceCandidates(pool, { kind: "bar", query: "술집", area: "성수" }, { allowHarsh: { ...noAllow, bar: true }, exclude: [], violatesAvoid: () => false });
     expect(bars.map(item => item.name)).toContain("성수 포차");
+    expect(bars.map(item => item.name)).not.toContain("파스타집 A");
     const cafes = filterPlaceCandidates(pool, { kind: "cafe", query: "카페", area: "성수" }, { allowHarsh: noAllow, exclude: ["카페 온"], violatesAvoid: () => false });
     expect(cafes).toEqual([]);
+  });
+
+  it("does not fill a specific cuisine request with a conflicting cuisine", () => {
+    const pool = [candidate({ externalPlaceId: "pasta", name: "이탈리안 식당" }),
+      candidate({ externalPlaceId: "soup", name: "국밥집", detailedCategory: "음식점 > 한식 > 국밥" })];
+    expect(filterPlaceCandidates(pool, pastaAsk, { allowHarsh: noAllow, exclude: [], violatesAvoid: () => false })
+      .map(place => place.externalPlaceId)).toEqual(["pasta"]);
   });
 
   it("ranks query matches and public facts higher", () => {

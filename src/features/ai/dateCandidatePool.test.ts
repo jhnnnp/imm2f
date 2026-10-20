@@ -40,4 +40,13 @@ describe("date candidate pool", () => {
     expect(disliked.eligible).toHaveLength(1);
     expect(disliked.records[0].scores.context).toBeLessThan(neutral.records[0].scores.context);
   });
+  it("rejects unrouteable coordinates and festivals outside the chosen trip dates", () => {
+    const pool = buildDateCandidatePool([
+      venue("zero", "좌표 없는 장소", { coordinates: [0, 0] }),
+      venue("festival", "지난 축제", { category: "festival", openingHours: "2026.09.01 – 2026.09.03" }),
+      venue("current", "여행일의 축제", { category: "festival", openingHours: "2026.09.25 – 2026.09.27" }),
+    ], { ...emptyDateBrief(), dateLabel: "2026-09-26" });
+    expect(pool.eligible.map(place => place.externalPlaceId)).toEqual(["current"]);
+    expect(pool.records.map(record => record.rejectedReasons)).toEqual([["invalid_coordinates"], ["event_date_mismatch"], []]);
+  });
 });

@@ -3,7 +3,8 @@ import { emptyDateBrief, withAreas } from "@/features/ai/dateBrief";
 
 vi.mock("./client", () => ({ completeJson: vi.fn() }));
 vi.mock("./env", () => ({ isOpenAiConfigured: vi.fn(() => true) }));
-vi.mock("./datePlaybook", () => ({ retrieveDatePlaybook: vi.fn() }));
+vi.mock("./datePlaybook", async importOriginal => ({ ...await importOriginal<typeof import("./datePlaybook")>(),
+  retrieveDatePlaybook: vi.fn() }));
 
 import { completeJson } from "./client";
 import { retrieveDatePlaybook } from "./datePlaybook";
@@ -12,6 +13,30 @@ import { designDateDiscovery, explicitDiscoveryTransport, requestedActivityOrder
 beforeEach(() => vi.clearAllMocks());
 
 describe("user-authored date sequence", () => {
+  it("keeps exact preference queries while bounding discovery generation and eliminating remote playbook work", async () => {
+    vi.mocked(completeJson).mockResolvedValueOnce({ themes: ["정원과 파스타"], priorities: ["정원 공간"], queries: [
+      { region: "성수", query: "파스타" }, { region: "성수", query: "정원 카페" },
+      { region: "다른 지역", query: "임의 카페" }, { region: "성수", query: "갤러리" },
+      { region: "성수", query: "독립서점" }, { region: "성수", query: "추가 검색" },
+    ] });
+    const state = withAreas(emptyDateBrief(), ["성수"]);
+    const result = await designDateDiscovery({ message: "성수에서 파스타 먹고 정원 카페 가고 싶어", state, taste: ["한적한 공간"] });
+    expect(result.queries).toHaveLength(4);
+    expect(result.queries).toEqual(expect.arrayContaining([{ region: "성수", query: "파스타" }, { region: "성수", query: "정원 카페" }]));
+    expect(result.queries.every(query => query.region === "성수")).toBe(true);
+    expect(completeJson).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 8000,
+      maxTokens: 1000, reasoningEffort: "low", retryOnTruncation: false }));
+    expect(retrieveDatePlaybook).not.toHaveBeenCalled();
+  });
+
+  it("covers every supplied region in a bounded fallback query list", async () => {
+    vi.mocked(completeJson).mockResolvedValueOnce(null);
+    const state = withAreas(emptyDateBrief(), ["부산", "제주", "군산"]);
+    const result = await designDateDiscovery({ message: "세 지역 후보를 보고 싶어", state, taste: [] });
+    expect(new Set(result.queries.map(query => query.region))).toEqual(new Set(["부산", "제주", "군산"]));
+    expect(result.queries.length).toBeLessThanOrEqual(8);
+  });
+
   it("keeps dinner, cafe and performance in the order the user asked", () => {
     expect(requestedActivityOrder("왕십리에서 저녁 먹고 예쁜 카페와 공연장 데이트", ["meal", "cafe", "performance"]))
       .toEqual(["meal", "cafe", "performance"]);

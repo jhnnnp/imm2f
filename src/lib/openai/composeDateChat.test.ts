@@ -7,6 +7,22 @@ vi.mock("./client", () => ({ completeJson: vi.fn() }));
 afterEach(() => { vi.resetAllMocks(); vi.unstubAllEnvs(); });
 
 describe("composeDateChat", () => {
+  it("asks for the missing destination without a model round trip", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test");
+    const card = await composeDateChat({ situation: "need_area", userMessage: "여행 가고 싶어",
+      state: emptyDateBrief() });
+    expect(card.headline).toBe("어디로 떠날까요?");
+    expect(completeJson).not.toHaveBeenCalled();
+  });
+
+  it.each(["greeting", "capability"] as const)("answers an initial %s without waiting for a provider", async situation => {
+    vi.stubEnv("OPENAI_API_KEY", "test");
+    const card = await composeDateChat({ situation, userMessage: situation === "greeting" ? "안녕하세요" : "뭐 할 수 있어",
+      state: emptyDateBrief() });
+    expect(card.lines.length).toBeGreaterThan(0);
+    expect(completeJson).not.toHaveBeenCalled();
+  });
+
   it("does not treat plan requests as capability talk", () => {
     expect(chatSituationFromMessage("을지로에서 뭘 해")).toBeNull();
     expect(chatSituationFromMessage("맛집 소개해줘")).toBeNull();
@@ -68,6 +84,8 @@ describe("composeDateChat", () => {
       state: { ...emptyDateBrief(), areas: ["성수"] }, extras: { currentCourse: ["식당 A", "카페 B"] } });
     expect(card.lines.join(" ")).toContain("대화하려는 데이트");
     expect(card.suggestions).toEqual(["도보 이동 줄여줘"]);
+    expect(completeJson).toHaveBeenCalledWith(expect.objectContaining({ reasoningEffort: "low",
+      timeoutMs: 8000, retryOnTruncation: false }));
   });
 
   it("does not truncate a contextual answer at 400 characters or discard a deliberate no-chip reply", async () => {

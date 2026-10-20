@@ -33,6 +33,38 @@ describe("date course agent orchestration", () => {
     expect(result.attempts).toBe(1);
   });
 
+  it("replans for new exact-venue evidence even when the provider identity is unchanged", async () => {
+    const observations: Array<DiscoverCandidate[]> = [];
+    const result = await runDateAgentCourse({ candidates: [candidate("a")],
+      propose: async candidates => { observations.push(candidates);
+        return reply(Boolean(candidates[0].openingHours), ["영업시간 확인 필요"]); },
+      researchAfterFailure: async () => [{ ...candidate("a"), openingHours: "11:00–21:00" }],
+    });
+    expect(result.attempts).toBe(2);
+    expect(result.newCandidatesOnRepair).toBe(0);
+    expect(observations[1][0].openingHours).toBe("11:00–21:00");
+    expect(result.reply.items).toHaveLength(1);
+  });
+
+  it("preserves sourced evidence when a search rediscovers the same venue with sparse details", async () => {
+    const evidence = [{ id: "garden", text: "정원 좌석이 안내되어 있어요.", url: "https://example.com/a", checkedAt: "2026-10-20" }];
+    const result = await runDateAgentCourse({ candidates: [{ ...candidate("a"), evidence, openingHours: "11:00–21:00" }],
+      propose: async candidates => reply(candidates.length > 1),
+      researchAfterFailure: async () => [candidate("a"), candidate("b")],
+    });
+    expect(result.candidates[0].evidence).toEqual(evidence);
+    expect(result.candidates[0].openingHours).toBe("11:00–21:00");
+  });
+
+  it("keeps the original truthful failure when repair research is unavailable", async () => {
+    const first = reply(false, ["실제 보행 경로 미확인"]);
+    const result = await runDateAgentCourse({ candidates: [candidate("a")], propose: async () => first,
+      researchAfterFailure: async () => { throw new Error("provider unavailable"); },
+    });
+    expect(result.reply).toBe(first);
+    expect(result.attempts).toBe(1);
+  });
+
   it("does not search around an unverified food allergy", async () => {
     let searched = false;
     await runDateAgentCourse({ candidates: [candidate("a")],

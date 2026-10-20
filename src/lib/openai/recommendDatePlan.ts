@@ -17,7 +17,7 @@ import { buildFallbackCourse, courseSelectionScore, discoveryCatalog, evaluateCo
 import { isOpenAiConfigured } from "./env";
 import { distanceMeters } from "@/features/places/geo";
 import { fetchFootRoute, type FootLeg, type FootRoute } from "@/lib/routing/footRoute";
-import { retrieveDatePlaybook } from "./datePlaybook";
+import { DATE_PLAYBOOK, datePlaybookTags, selectDatePlaybook } from "./datePlaybook";
 import { tripLocalWindows } from "@/features/ai/planningSupport";
 import { toDateIntent } from "@/features/ai/dateIntent";
 import type { DateMemoryContext } from "@/features/ai/dateMemory";
@@ -261,7 +261,7 @@ const DESIGN_PROMPT = [
   "The research brief contains the user's taste, possible concepts, travel mode and explicit requirements. Do not force meal-cafe-walk. Every stop must contribute a different worthwhile experience unless this is an explicit themed tour.",
   "dateIntent.hardConstraints are mandatory. dateIntent.preferences, inferredPreferences and memorySuggestions guide ranking only; inferred confidence lowers their weight. Check excludedFoods against known menu facts and never treat an unknown menu as proof of safety.",
   "The service does not manage budgets or collect menu costs. Do not rank venues by price, offer value-for-money alternatives, ask for a budget, or claim that any spending limit was verified. Design around experiences, dates, pace and route feasibility.",
-  "Produce up to proposalCount complete itinerary alternatives. Each courses entry is an ENTIRE trip covering every requiredDayIndex; never return one day per courses entry or divide selectedAnchorIds between alternatives. When proposalCount is 1, return exactly one complete itinerary containing every selectedAnchorId exactly once. Prefer one memorable anchor with complementary nearby venues. A restaurant should fit the requested dish/cuisine; a cafe needs a sourced reason to visit; a landmark should offer a real experience, not just fill a slot.",
+  "Compare candidate combinations, then return only the strongest complete itinerary when proposalCount is 1. Each courses entry is an ENTIRE trip covering every requiredDayIndex; never return one day per courses entry or divide selectedAnchorIds between alternatives. Include every selectedAnchorId exactly once. Prefer one memorable anchor with complementary nearby venues. A restaurant should fit the requested dish/cuisine; a cafe needs a sourced reason to visit; a landmark should offer a real experience, not just fill a slot.",
   "Use venue-specific observations for food, architecture, atmosphere and highlights only when they distinguish the exact branch. Missing observations mean unknown, not bad. Never invent facts, ratings, popularity, beauty, opening hours or prices. Provider IDs bind candidate identities; source URLs alone do not prove every statement. User-saved venues are useful preferences, not mandatory winners.",
   "Read the CURRENT message and conversation. For a swap keep every keepPlace, exclude the old venue, and replace only that experience. For an addition preserve existing stops and add one. Follow requested activity order and do not reintroduce rejected venues. An area change starts a new geographic course unless the user explicitly connects both areas.",
   "Evaluate full-route cohesion: avoid backtracking, unnecessary detours, repeating the same experience, and geographically disconnected picks. Coordinates and straight-line neighbor distances are provided. They are not actual walking routes. Prefer compact clusters for walking; driving trips can cover a wider area.",
@@ -338,6 +338,19 @@ export async function recommendDatePlanWithOpenAi(input: {
     complexGroups.set(relation.complexKey, members);
   }
   const days = courseSize(input.state).days;
+  const proposalCount = 1;
+  const complexSchedule = days > 1 || anchorIds.length > 3 || input.state.intent === "modify"
+    || Boolean(input.condition.timeSpecified || input.state.foodAllergy);
+  const reasoningEffort = complexSchedule ? "medium" : "low";
+  // Curated rules are already bundled with this engine. Loading and embedding
+  // the same rules adds network work before the actual, grounded planning call.
+  const playbookTags = datePlaybookTags(input.prompt, input.state);
+  if (input.saved.length) playbookTags.add("personalized");
+  const planningPlaybook = [
+    ...selectDatePlaybook(DATE_PLAYBOOK, playbookTags, "selection", isTravelPlan(input.state) ? 8 : 6),
+    ...(input.state.intent === "modify" ? selectDatePlaybook(DATE_PLAYBOOK, playbookTags, "editing", 2) : []),
+    ...selectDatePlaybook(DATE_PLAYBOOK, playbookTags, "response", 2),
+  ].map(({ id, title, guidance, example }) => ({ id, title, guidance, example }));
   const serializeCatalog = (venues: DiscoverCandidate[]) => venues.map(candidate => ({
     id: dateCandidateKey(candidate), name: candidate.name,
     category: candidate.detailedCategory || dateCategoryLabel(candidate),
@@ -358,7 +371,7 @@ export async function recommendDatePlanWithOpenAi(input: {
     latestMessage: input.prompt.slice(0, 800), recentTurns: (input.conversation ?? []).slice(-10),
     brief: input.state.discovery, dateIntent: toDateIntent(input.state), areas: input.state.areas,
     days, requiredDayIndices: Array.from({ length: days }, (_, day) => day),
-    proposalCount: anchorIds.length ? 1 : 3,
+    proposalCount,
     target: { ...planningStopGuidance(input.state),
       max: Math.max(planningStopGuidance(input.state).max, anchorIds.length) },
     schedule: { ...assumedTimeWindow(input.state),
@@ -400,8 +413,9 @@ export async function recommendDatePlanWithOpenAi(input: {
   };
   let researchDoneAt = startedAt;
   let modelDoneAt = startedAt;
-  const proposalTokens = Math.min(16000, Math.max(2400 + Math.max(0, days - 3) * 750,
-    (Math.max(anchorIds.length, days * 3) + 2) * 150 * (anchorIds.length ? 1 : 3)));
+  const expectedStops = Math.min(pool.length, Math.max(anchorIds.length,
+    input.state.discovery?.maxStops ?? 0, planningStopGuidance(input.state).max));
+  const proposalTokens = Math.min(16000, Math.max(1600, 500 + expectedStops * 220));
   const researchPromise = runtime.untilDeadline(input.researchPlanActive ? Promise.resolve(pool)
     : enrichDateVenues(pool, input.state, undefined, isTravelPlan(input.state) ? "background" : "interactive", runtime.signal), pool).then(value => {
     researchDoneAt = performance.now();
@@ -409,19 +423,14 @@ export async function recommendDatePlanWithOpenAi(input: {
   });
   const modelPromise = isOpenAiConfigured() && pool.length >= 1
     ? (async () => {
-      const [selection, editing, response] = await runtime.untilDeadline(Promise.all([
-        retrieveDatePlaybook(input.prompt, input.state, "selection", isTravelPlan(input.state) ? 11 : 8, input.saved.length ? ["personalized"] : [], runtime.signal),
-        input.state.intent === "modify" ? retrieveDatePlaybook(input.prompt, input.state, "editing", isTravelPlan(input.state) ? 3 : 2, [], runtime.signal) : Promise.resolve([]),
-        retrieveDatePlaybook(input.prompt, input.state, "response", isTravelPlan(input.state) ? 4 : 3, [], runtime.signal),
-      ]), [[], [], []]);
       // Curation must see the new observations, not merely validate against them later.
       const researchedPool = await researchPromise;
       if (!runtime.canGenerate()) return null;
       return completeJson<{ courses?: unknown }>({
         messages: courseProposalMessages({ ...payload, candidates: serializeCatalog(researchedPool),
-          planningPlaybook: [...selection, ...editing, ...response] }, input.semanticPlanningHints),
-        jsonSchema: courseProposalSchema(researchedPool.map(dateCandidateKey), days, anchorIds.length),
-        reasoningEffort: "medium", temperature: 0.2,
+          planningPlaybook }, input.semanticPlanningHints),
+        jsonSchema: courseProposalSchema(researchedPool.map(dateCandidateKey), days, anchorIds.length, proposalCount),
+        reasoningEffort, temperature: 0.2,
         maxTokens: proposalTokens,
         signal: runtime.signal, retryOnTruncation: false,
         timeoutMs: Math.min(runtime.remainingMs(), isTravelPlan(input.state) ? 35000 : 30000),
@@ -479,7 +488,7 @@ export async function recommendDatePlanWithOpenAi(input: {
           affectedDays: [...affectedDays],
           structureProblems: evaluated.length ? [] : [...rejectionReasons],
           instruction: "Repair hard failures only. Every returned courses entry must contain the entire trip, every requiredDayIndex and every selectedAnchorId exactly once. Never distribute days or selected IDs across separate alternatives. If affectedDays is nonempty, preserve lockedDayRows exactly, including order and duration; change only affected days. Group stops in the same named complex on one day. Return up to proposalCount complete itineraries." }, input.semanticPlanningHints),
-        jsonSchema: courseProposalSchema(grounded.map(dateCandidateKey), days, anchorIds.length),
+        jsonSchema: courseProposalSchema(grounded.map(dateCandidateKey), days, anchorIds.length, proposalCount),
         reasoningEffort: "medium", temperature: 0.2, maxTokens: proposalTokens,
         signal: runtime.signal, retryOnTruncation: false, timeoutMs: Math.min(25000, runtime.remainingMs()),
       });
@@ -526,7 +535,13 @@ export async function recommendDatePlanWithOpenAi(input: {
         state: input.state, condition: input.condition, route });
       return { ...option, route, verification };
     }));
-    const inspected = await inspectRoutes(routeOptions);
+    // A valid model course always outranks degraded seeds. Do not make that
+    // response wait for unrelated fallback routes, which can time out separately.
+    const modelOptions = routeOptions.filter(option => !option.deterministicSeed);
+    let inspected = await inspectRoutes(modelOptions.length ? modelOptions : routeOptions);
+    if (modelOptions.length && !inspected.some(item => item.route && item.verification.passed)) {
+      inspected = [...inspected, ...await inspectRoutes(routeOptions.filter(option => option.deterministicSeed))];
+    }
     let valid = inspected.filter((item): item is RankedOption & { route: FootRoute; verification: ReturnType<typeof verifyDateItinerary> } =>
       Boolean(item.route && item.verification.passed));
     if (!valid.length && inspected.some(item => item.route) && modelResult
@@ -543,7 +558,7 @@ export async function recommendDatePlanWithOpenAi(input: {
           affectedDays: [...affectedDays],
           lockedDayRows: base.course.rows.filter(row => !affectedDays.has(row.day_index ?? 0)),
           instruction: "The route verifier rejected the checked course. Repair only affectedDays; keep lockedDayRows exactly unchanged and keep every selectedAnchorId. Return up to proposalCount complete courses covering every requiredDayIndex." }, input.semanticPlanningHints),
-        jsonSchema: courseProposalSchema(grounded.map(dateCandidateKey), days, anchorIds.length),
+        jsonSchema: courseProposalSchema(grounded.map(dateCandidateKey), days, anchorIds.length, proposalCount),
         reasoningEffort: "medium", temperature: 0.2, maxTokens: proposalTokens,
         signal: runtime.signal, retryOnTruncation: false, timeoutMs: Math.min(25000, runtime.remainingMs()),
       });
@@ -655,7 +670,8 @@ export async function recommendDatePlanWithOpenAi(input: {
     complexGroupCount: complexGroups.size, complexRelationCount: groundedGraph.relations.length,
     targetedRepairCandidateCount: failedCourses.filter(course => course.hardIssues.some(issue =>
       issue.code === "repeated_complex_day" || issue.code === "confirmed_closed")).length,
-    seedCount: seeds.length, modelProposalCount: considered, degraded,
+    seedCount: seeds.length, requestedProposalCount: proposalCount, modelProposalCount: considered, degraded,
+    reasoningEffort, proposalTokenBudget: proposalTokens, playbookSource: "bundled",
     designTimeoutMs: runtime.timeoutMs, designRepairCount: runtime.repairs,
     semanticHintDimensions: input.semanticPlanningHints && hasSemanticPlanningHints(input.semanticPlanningHints)
       ? Object.keys(input.semanticPlanningHints) : [],

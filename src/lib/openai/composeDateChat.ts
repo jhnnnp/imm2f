@@ -164,14 +164,19 @@ export async function composeDateChat(input: {
   slot?: DateIntakeSlot | null;
 }): Promise<AIChatCard> {
   const card = dateChatCard(input);
-  if (!isOpenAiConfigured()) return card;
+  // These turns do not require venue reasoning. Asking a model to rephrase an
+  // already-known intake question delays the user's next useful action.
+  if (!isOpenAiConfigured() || input.situation === "need_area"
+    || (input.situation === "greeting" || input.situation === "capability")
+      && !selectedAreas(input.state).length && !input.extras?.currentCourse?.length) return card;
   try {
     const parsed = await completeJson<{ reply?: unknown; suggestions?: unknown }>({
       temperature: 0.6,
       jsonSchema: { name: "date_chat_reply_v2", strict: true, schema: dateChatReplySchema },
-      maxTokens: 1000,
-      reasoningEffort: "medium",
-      timeoutMs: 25000,
+      maxTokens: 700,
+      reasoningEffort: "low",
+      timeoutMs: 8000,
+      retryOnTruncation: false,
       messages: [
         { role: "system", content: CHAT_PROMPT },
         {

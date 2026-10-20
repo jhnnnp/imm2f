@@ -7,12 +7,14 @@ import { verifyDateItinerary } from "@/features/ai/dateVerifier";
 import { completeJson } from "./client";
 import { courseProposalMessages, footRouteForDays, recommendDatePlanWithOpenAi } from "./recommendDatePlan";
 import { enrichDateVenues } from "./enrichDateVenues";
+import { retrieveDatePlaybook } from "./datePlaybook";
 import { fetchFootRoute } from "@/lib/routing/footRoute";
 import type { SemanticPlanningHints } from "@/features/ai/semanticPlanningHints";
 
 vi.mock("./client", () => ({ completeJson: vi.fn() }));
 vi.mock("./env", () => ({ isOpenAiConfigured: () => true }));
-vi.mock("./datePlaybook", () => ({ retrieveDatePlaybook: vi.fn(async () => []) }));
+vi.mock("./datePlaybook", async importOriginal => ({ ...await importOriginal<typeof import("./datePlaybook")>(),
+  retrieveDatePlaybook: vi.fn(async () => []) }));
 vi.mock("./enrichDateVenues", () => ({ enrichDateVenues: vi.fn(async (pool: DiscoverCandidate[]) => pool) }));
 vi.mock("@/lib/routing/footRoute", () => ({ fetchFootRoute: vi.fn(async (points: unknown[]) => ({
   provider: "osm_foot", meters: (points.length - 1) * 200, seconds: (points.length - 1) * 180,
@@ -47,6 +49,43 @@ beforeEach(() => vi.mocked(completeJson).mockReset().mockResolvedValue(modelCour
 afterEach(() => vi.restoreAllMocks());
 
 describe("course proposal semantic boundary", () => {
+  it("requests one complete curated itinerary and uses bundled guidance without a semantic retrieval round trip", async () => {
+    vi.mocked(retrieveDatePlaybook).mockClear();
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+      candidates, saved: [], state: state(), researchPlanActive: true });
+    const request = vi.mocked(completeJson).mock.calls[0][0];
+    const payload = JSON.parse(request.messages[1].content);
+    expect(payload.proposalCount).toBe(1);
+    expect(request.jsonSchema).toMatchObject({ schema: { properties: { courses: { maxItems: 1 } } } });
+    expect(payload.planningPlaybook.map((card: { id: string }) => card.id)).toContain("venue-specific-evidence");
+    expect(retrieveDatePlaybook).not.toHaveBeenCalled();
+    expect(request.maxTokens).toBeLessThan(2400);
+    expect(result.recommendations.map(item => item.id)).toEqual(["kakao:meal", "kakao:quiet", "kakao:walk"]);
+  });
+
+  it("does not wait for fallback walking routes when the model itinerary already passes verification", async () => {
+    vi.mocked(fetchFootRoute).mockClear();
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+      candidates, saved: [], state: state(), researchPlanActive: true });
+    expect(result.source).toBe("openai");
+    expect(result.design?.routeBasis).toBe("walking");
+    expect(fetchFootRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("still verifies fallback routes when the preferred model route fails", async () => {
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ ...modelCourse.courses[0],
+      selected: modelCourse.courses[0].selected.map(row => ({ ...row,
+        id: row.id === "kakao:quiet" ? "kakao:noisy" : row.id })) }] });
+    vi.mocked(fetchFootRoute).mockClear().mockResolvedValueOnce({ provider: "osm_foot", meters: 1000,
+      seconds: 86400, legs: [{ meters: 500, seconds: 43200 }, { meters: 500, seconds: 43200 }] });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,
+      candidates, saved: [], state: state(), researchPlanActive: true });
+    expect(vi.mocked(fetchFootRoute).mock.calls.length).toBeGreaterThan(1);
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(result.design?.routeBasis).toBe("walking");
+    expect(result.source).toBe("fallback");
+  });
+
   it("preserves the model's grounded selection judgment, intro and cited source through validation and scheduling", async () => {
     const intro = "걷는 시간 사이에 앉아서 대화할 여유를 두고, 식사와 휴식을 자연스럽게 이어봤어요. 영업시간과 예약 여부는 방문 전에 확인해 주세요.";
     const reason = "자료에 소개된 정원 좌석을 참고해, 둘이 쉬어가는 경험을 이곳에 담았어요.";
@@ -61,7 +100,7 @@ describe("course proposal semantic boundary", () => {
     expect(result.recommendations.find(place => place.id === "kakao:quiet")?.reasons).toEqual([reason]);
     expect(result.items.find(item => item.placeName === "정원 카페")?.memo).toBe(reason);
     expect(result.card.stops?.find(stop => stop.name === "정원 카페")?.factSourceUrl).toBe("https://example.com/quiet");
-    expect(vi.mocked(completeJson).mock.calls[0][0].reasoningEffort).toBe("medium");
+    expect(vi.mocked(completeJson).mock.calls[0][0].reasoningEffort).toBe("low");
   });
 
   it("discards unsupported generated venue claims while preserving the valid itinerary", async () => {
@@ -188,6 +227,7 @@ describe("course proposal semantic boundary", () => {
     const call = vi.mocked(completeJson).mock.calls[0][0];
     const payload = JSON.parse(call.messages[1].content);
     expect(payload).toMatchObject({ proposalCount: 1, requiredDayIndices: [0, 1, 2] });
+    expect(call.reasoningEffort).toBe("medium");
     expect(call.jsonSchema?.schema.properties).toMatchObject({ courses: { maxItems: 1,
       items: { properties: { selected: { minItems: 15 } } } } });
   });

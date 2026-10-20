@@ -1,6 +1,6 @@
 import type { AIPlannerState, DateChatTurn, PlaceAskKind } from "@/features/planning/types/plan";
 import { detectPlaceKind, placeQueryFromMessage, routeDateChatLocally, type ChatMode, type ChatRoute } from "@/features/ai/chatRoute";
-import { extractAreasFromText, selectedAreas, uniqueStrings } from "@/features/ai/dateBrief";
+import { extractRequestedAreasFromText, selectedAreas, uniqueStrings } from "@/features/ai/dateBrief";
 import { chatSituationFromMessage } from "./composeDateChat";
 import { completeJson } from "./client";
 import { isOpenAiConfigured } from "./env";
@@ -68,12 +68,22 @@ export async function routeDateChat(input: {
   currentCategories?: string[];
   conversation?: DateChatTurn[];
 }): Promise<ChatRoute> {
+  const situation = chatSituationFromMessage(input.message);
   const local = routeDateChatLocally({
     message: input.message,
     state: input.state,
     hasCourse: input.hasCourse,
-    chatSituation: chatSituationFromMessage(input.message),
+    chatSituation: situation,
   });
+  if (situation === "greeting" || situation === "thanks" || situation === "capability") return local;
+  // An exact intake choice contains no additional semantics to classify.
+  // Longer preference-bearing messages continue through the model below.
+  const text = input.message.trim();
+  const writtenAreas = extractRequestedAreasFromText(text);
+  if (!input.hasCourse && writtenAreas.length === 1
+    && text.replace(/\s/g, "") === writtenAreas[0].replace(/\s/g, "")) return local;
+  if (!input.hasCourse && input.state?.pendingSlot === "span"
+    && /^(?:당일(?:치기)?|[1-6]\s*박\s*[2-7]\s*일)(?:로)?[.!~]*$/.test(text)) return local;
   const explicitNumbers = [...input.message.matchAll(/(?<!\d)(\d+)\s*번/g)].map(match => Number(match[1]));
   if (!input.hasCourse && input.state?.shownPlaces?.length && /코스|일정|짜/.test(input.message)
     && explicitNumbers.some(index => index < 1 || index > input.state!.shownPlaces!.length)) {
@@ -111,8 +121,8 @@ export async function routeDateChat(input: {
       temperature: 0,
       jsonSchema: { name: "date_chat_route_v2", strict: true, schema: dateChatRouteSchema },
       maxTokens: 700,
-      reasoningEffort: "medium",
-      timeoutMs: 20000,
+      reasoningEffort: needsEditResolution ? "medium" : "low",
+      timeoutMs: 8000,
       messages: [
         { role: "system", content: ROUTER_PROMPT },
         {
@@ -136,8 +146,8 @@ export async function routeDateChat(input: {
       const kind = KINDS.has(parsed.placeKind as PlaceAskKind)
         ? parsed.placeKind as PlaceAskKind
         : detectPlaceKind(input.message) ?? input.state?.placeAsk?.kind ?? "spot";
-      const written = extractAreasFromText(input.message);
-      const area = written[0] || (typeof parsed.area === "string" && input.message.includes(parsed.area) ? parsed.area.trim() : "");
+      const written = extractRequestedAreasFromText(input.message);
+      const area = written[0] || "";
       const fallbackArea = area || input.state?.placeAsk?.area || (input.state ? selectedAreas(input.state)[0] : "") || "";
       const query = typeof parsed.query === "string" ? parsed.query.trim().slice(0, 160) : "";
       return {

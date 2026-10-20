@@ -20,7 +20,8 @@ import { mergeSessionFeedback, placeSessionFeedbackSignals,
 import { interpretDateRequest } from "@/lib/openai/interpretDateRequest";
 import { getDateTurnInterpreterMode, runDateTurnShadow, type DateTurnShadowResult } from "@/lib/openai/dateTurnShadowRunner";
 import { loadTasteBoard } from "@/features/taste/actions";
-import { applyTasteFallback, applyTasteHarshAllow, seedFromProfile, violatesTasteAvoid } from "@/features/taste/compare";
+import { applyTasteHarshAllow, seedFromProfile, violatesTasteAvoid } from "@/features/taste/compare";
+import { applyPlannerTasteHints } from "./plannerPersonalization";
 import { applyRanking } from "@/lib/openai/rank";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
 import { isShoppingSearch } from "@/lib/kakao/placeClassification";
@@ -100,7 +101,7 @@ import type { ChatRoute } from "./chatRoute";
 import { recommendPlacesWithOpenAi } from "@/lib/openai/recommendPlaces";
 import { discoverVenueLeads, leadMatchesCandidate } from "@/lib/openai/discoverVenueLeads";
 import { answerDateQuestion, type QuestionContextStop } from "@/lib/openai/answerDateQuestion";
-import { PLACE_KIND_LABEL, isMoreRequest } from "@/features/ai/chatRoute";
+import { PLACE_KIND_LABEL, isMoreRequest, routeDateChatLocally } from "@/features/ai/chatRoute";
 import {
   PLACE_PICK_MIN,
   filterPlaceCandidates,
@@ -789,8 +790,28 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     }
   };
   const currentCourse = previousStops.map(stop => stop.name);
+  const tasteBoardPromise = loadTasteBoard();
+  const localRoute = message ? routeDateChatLocally({ message, state: previousState,
+    hasCourse: currentCourse.length > 0, chatSituation: chatSituationFromMessage(message) }) : null;
+  const interpretMessage = async () => {
+    const board = await tasteBoardPromise;
+    const seed = board.compare?.seed ?? (board.you ? seedFromProfile(board.you) : null);
+    return interpretDateRequest({ message, previousState: previousState && seed
+      ? applyPlannerTasteHints(previousState, seed) : previousState,
+      previousPlaceNames: previousStops.map(stop => stop.name), dateLabel: input.dateLabel,
+      conversation: input.conversation });
+  };
+  // Classification and preference extraction do not depend on one another.
+  // Start them together for planning requests, while conversational turns
+  // continue to avoid an unnecessary extraction call.
+  const pendingInterpretation = message && !planningInput && localRoute
+    && (localRoute.mode === "course" || localRoute.mode === "places")
+    ? interpretMessage() : null;
+  // Promise.all below owns profile failures. A speculative extraction may be
+  // unused after semantic routing, but must never become an unhandled rejection.
+  void pendingInterpretation?.catch(() => undefined);
   const [tasteBoard, routed] = await Promise.all([
-    loadTasteBoard(),
+    tasteBoardPromise,
     message ? routeDateChat({
       message,
       state: previousState,
@@ -802,7 +823,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   ]);
   const tasteSeed = tasteBoard.compare?.seed ?? (tasteBoard.you ? seedFromProfile(tasteBoard.you) : null);
   const avoidFoods = tasteSeed?.avoidFoods ?? [];
-  const filledPrevious = previousState && tasteSeed ? applyTasteFallback(previousState, tasteSeed) : previousState;
+  const filledPrevious = previousState && tasteSeed ? applyPlannerTasteHints(previousState, tasteSeed) : previousState;
   const taskExecutionObservations: import("./dateObservation").DateObservation[] = [];
   const withLimitedTasks = async (executePrimary: () => AIPlannerResult | Promise<AIPlannerResult>,
     state: AIPlannerState): Promise<AIPlannerResult> => {
@@ -911,9 +932,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     if (route.mode === "places" && route.placeAsk) {
       // Standalone recommendations need the same contextual understanding as
       // courses. Otherwise new exclusions and preferences never reach filters.
-      const understood = await interpretDateRequest({ message, previousState: state,
-        previousPlaceNames: previousStops.map(stop => stop.name), dateLabel: input.dateLabel,
-        conversation: input.conversation });
+      const understood = await (pendingInterpretation ?? interpretMessage());
       state = { ...understood.state, shownPlaces: state.shownPlaces,
         seenPlaces: state.seenPlaces, placeAsk: route.placeAsk };
       await observeTurn(state, route);
@@ -968,13 +987,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   }
 
   const interpretation = message && !planningInput
-    ? await interpretDateRequest({
-      message,
-      previousState: filledPrevious,
-      previousPlaceNames: previousStops.map(stop => stop.name),
-      dateLabel: input.dateLabel,
-      conversation: input.conversation,
-    })
+    ? await (pendingInterpretation ?? interpretMessage())
     : {
       state: { ...filledPrevious!, dateLabel: input.dateLabel || filledPrevious?.dateLabel || null, pendingSlot: missingSlot(filledPrevious) },
       slot: missingSlot(filledPrevious),
@@ -1030,7 +1043,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       ], 500),
     },
   });
-  const interpreted = tasteSeed ? applyTasteFallback(interpretedRaw, tasteSeed) : interpretedRaw;
+  const interpreted = tasteSeed ? applyPlannerTasteHints(interpretedRaw, tasteSeed) : interpretedRaw;
   const slot = missingSlot(interpreted) ?? (input.planKind === "trip" && !interpreted.stayKind ? "span" : null);
   if (slot) {
     const question = slotQuestion(slot, interpreted);

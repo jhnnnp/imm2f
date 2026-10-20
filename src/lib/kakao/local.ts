@@ -2,6 +2,7 @@ import { kakaoCategoryQuery, kakaoGroupCode } from "@/features/places/config/kak
 import type { KakaoPlaceCandidate, PlaceCategoryId } from "@/features/places/types/place";
 import { getKakaoApiKeys } from "./env";
 import { classifyKakaoPlace } from "./placeClassification";
+import { matchesPlaceRegion, validKoreanVenueCoordinates } from "@/features/places/regionScope";
 
 type KakaoKeywordDocument = {
   id?: string;
@@ -90,7 +91,7 @@ function toCandidate(document: KakaoKeywordDocument, includeShopping = false): K
     && !(includeShopping && classification.shoppingKind && classification.visitable)) return null;
   const lng = Number(document.x);
   const lat = Number(document.y);
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+  if (!validKoreanVenueCoordinates([lng, lat])) return null;
   const categoryName = document.category_name ?? "";
   const mapped = mapKakaoCategory(document.category_group_code ?? "", categoryName);
   const address = document.address_name ?? "";
@@ -163,15 +164,26 @@ function buildSearchUrl(input: KakaoSearchInput) {
   return { url, keyword };
 }
 
-async function requestKakao(key: string, url: URL) {
-  return fetch(url, {
-    headers: {
-      Authorization: `KakaoAK ${key}`,
-      KA: `sdk/1.0 os/javascript origin/${kakaoOrigin()}`,
-    },
-    cache: "no-store",
-    signal: AbortSignal.timeout(6000),
-  });
+type KakaoHttpResult = { ok: boolean; status: number; text: () => Promise<string> };
+const kakaoRequests = new Map<string, Promise<KakaoHttpResult>>();
+
+/** Coalesce concurrent identical searches without retaining venue data after
+ * completion or sharing a consumed Response body. */
+async function requestKakao(key: string, url: URL): Promise<KakaoHttpResult> {
+  const requestId = `${key}:${url}`;
+  const existing = kakaoRequests.get(requestId);
+  if (existing) return existing;
+  const pending = (async () => {
+    const response = await fetch(url, {
+      headers: { Authorization: `KakaoAK ${key}`, KA: `sdk/1.0 os/javascript origin/${kakaoOrigin()}` },
+      cache: "no-store", signal: AbortSignal.timeout(4500),
+    });
+    const body = await response.text();
+    return { ok: response.ok, status: response.status, text: async () => body };
+  })();
+  kakaoRequests.set(requestId, pending);
+  try { return await pending; }
+  finally { if (kakaoRequests.get(requestId) === pending) kakaoRequests.delete(requestId); }
 }
 
 function messageFromKakaoBody(text: string, status: number): KakaoSearchResult | null {
@@ -225,11 +237,7 @@ export async function searchKakaoPlacesRemote(input: KakaoSearchInput): Promise<
       const categorized = input.category && input.category !== "all"
         ? mapped.filter(place => place.category === input.category)
         : mapped;
-      const administrativeArea = input.region?.split(/\s+/).findLast(part => /(?:구|군|시)$/.test(part));
-      const scoped = administrativeArea
-        ? categorized.filter(place => `${place.address} ${place.roadAddress} ${place.district}`.includes(administrativeArea))
-        : [];
-      const places = scoped.length ? scoped : categorized;
+      const places = categorized.filter(place => matchesPlaceRegion(place, input.region));
       return {
         ok: true,
         places,

@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyDateBrief, missingSlot } from "@/features/ai/dateBrief";
 import { applyInterpretPatch, dateIntentPayloadSchema, fallbackPatch, interpretDateRequest, mergeDateState, shouldSkipDateNlu, shouldUseLocalInterpret, validateIntentPayload } from "./interpretDateRequest";
 import { completeJson } from "./client";
+import { retrieveDatePlaybook } from "./datePlaybook";
 
 vi.mock("./client", () => ({ completeJson: vi.fn() }));
-vi.mock("./datePlaybook", () => ({ retrieveDatePlaybook: vi.fn(async () => []) }));
+vi.mock("./datePlaybook", async importOriginal => ({ ...await importOriginal<typeof import("./datePlaybook")>(),
+  retrieveDatePlaybook: vi.fn(async () => []) }));
 afterEach(() => { vi.unstubAllEnvs(); vi.mocked(completeJson).mockReset(); });
 
 describe("interpretDateRequest local merge", () => {
@@ -110,6 +112,44 @@ describe("interpretDateRequest local merge", () => {
     expect(shouldUseLocalInterpret("한 곳 더 추가해줘", emptyDateBrief())).toBe(false);
     expect(shouldUseLocalInterpret("일정추가", emptyDateBrief())).toBe(false);
     expect(shouldUseLocalInterpret("밥 먹을 데도 있으면 좋겠어", emptyDateBrief())).toBe(false);
+  });
+
+  it("handles only pure known destination and stay chips locally while retaining semantic requests", () => {
+    expect(shouldUseLocalInterpret("성수")).toBe(true);
+    expect(shouldUseLocalInterpret("성수동")).toBe(true);
+    expect(shouldUseLocalInterpret("부산!")).toBe(true);
+    expect(shouldUseLocalInterpret("2박 3일")).toBe(true);
+    expect(shouldUseLocalInterpret("당일치기")).toBe(true);
+    expect(shouldUseLocalInterpret("성수에서 조용히 대화하고 싶어")).toBe(false);
+    expect(shouldUseLocalInterpret("2박3일 여유롭게 쉬고 싶어")).toBe(false);
+    expect(shouldUseLocalInterpret("부산 말고 제주")).toBe(false);
+    expect(shouldUseLocalInterpret("2박4일")).toBe(false);
+  });
+
+  it("preserves the couple's known preferences and exclusions when a stay chip is answered", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const previous = { ...emptyDateBrief(), areas: ["부산"], preferences: { vibe: ["조용한", "사진 찍기 좋은"], crowdTolerance: 0.2 },
+      objective: "오랜만에 만나 대화하기", excludedFoods: ["새우"], foodAllergy: true,
+      inferredPreferences: [{ value: "대화 중심", evidence: "오랜만에 만나", confidence: 0.8 }] };
+    const result = await interpretDateRequest({ message: "2박3일", previousState: previous, previousPlaceNames: [] });
+    expect(result.state).toMatchObject({ areas: ["부산"], stayKind: "overnight", nights: 2,
+      preferences: previous.preferences, objective: previous.objective,
+      excludedFoods: ["새우"], foodAllergy: true, inferredPreferences: previous.inferredPreferences });
+    expect(completeJson).not.toHaveBeenCalled();
+  });
+
+  it("extracts an ordinary request semantically with bundled guidance and a bounded low-effort call", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.mocked(retrieveDatePlaybook).mockClear();
+    vi.mocked(completeJson).mockResolvedValue({ intent: "create", addAreas: ["성수"],
+      preferences: { vibe: ["조용한"], crowdTolerance: 0.2 } });
+    const result = await interpretDateRequest({ message: "성수에서 오랜만에 만나 조용히 대화하고 싶어", previousPlaceNames: [] });
+    expect(result.state.preferences?.crowdTolerance).toBe(0.2);
+    const request = vi.mocked(completeJson).mock.calls[0][0];
+    expect(request).toMatchObject({ timeoutMs: 12000, reasoningEffort: "low", retryOnTruncation: false });
+    const payload = JSON.parse(request.messages[1].content);
+    expect(payload.interpretationRules.map((card: { id: string }) => card.id)).toContain("interpret-grounded-slots");
+    expect(retrieveDatePlaybook).not.toHaveBeenCalled();
   });
 
   it("does not lock a mix on a destination-only message", () => {
@@ -355,6 +395,7 @@ describe("interpretDateRequest local merge", () => {
     const result = await interpretDateRequest({ message: "부산 2박3일 여행", previousPlaceNames: [] });
     expect(result.state.nights).toBe(2);
     const request = vi.mocked(completeJson).mock.calls[0][0];
+    expect(request).toMatchObject({ timeoutMs: 12000, reasoningEffort: "medium", retryOnTruncation: false });
     expect(request.jsonSchema).toEqual({ name: "date_intent_patch_v1", strict: true, schema: dateIntentPayloadSchema });
     const checkObject = (node: Record<string, unknown>) => {
       if (node.type === "object") {

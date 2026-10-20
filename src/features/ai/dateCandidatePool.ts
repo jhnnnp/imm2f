@@ -5,6 +5,8 @@ import { courseSize, matchesTerm, tripDayYmd } from "./dateBrief";
 import { candidateFoodConflict } from "./dateIntent";
 import { candidateEvidenceFacts, type DateEvidenceFact } from "./dateEvidence";
 import { venueScoreBreakdown } from "./courseDesign";
+import { validKoreanVenueCoordinates } from "@/features/places/regionScope";
+import { festivalPeriodCoversYmd } from "@/lib/tourapi/festivalSchedule";
 
 export type DateCandidateRecord = {
   id: string;
@@ -34,11 +36,15 @@ export function buildDateCandidatePool(
     if (seen.has(id)) continue;
     seen.add(id);
     const rejectedReasons: string[] = [];
+    if (!validKoreanVenueCoordinates(venue.coordinates)) rejectedReasons.push("invalid_coordinates");
     if (state.excludedPlaces.some(name => matchesTerm(venue, name))) rejectedReasons.push("excluded_place");
     const menu = (venue.evidence ?? []).filter(item => item.attribute === "menu").map(item => item.text).join(" ");
     if (candidateFoodConflict(`${venue.name} ${venue.detailedCategory ?? ""} ${venue.dishes ?? ""} ${menu}`, state.excludedFoods ?? []))
       rejectedReasons.push("excluded_food");
     if (venue.performanceEvent && validDates.length && !validDates.includes(venue.performanceEvent.dateYmd))
+      rejectedReasons.push("event_date_mismatch");
+    if (venue.category === "festival" && venue.openingHours && validDates.length
+      && !validDates.some(day => day && festivalPeriodCoversYmd(venue.openingHours, day)))
       rejectedReasons.push("event_date_mismatch");
     if (admit && !admit(venue)) rejectedReasons.push("search_policy");
     records.push({ id, type: candidateActivitySlot(venue), venue,
