@@ -35,7 +35,7 @@ it("automatically displays both saved birthdays and recurring relationship anniv
   fireEvent.click(within(dialog).getByRole("button", { name: "닫기" }));
   fireEvent.click(screen.getByRole("button", { name: `${formatKoDate("2026-10-22")} · 우리의 2주년` }));
   expect(within(screen.getByRole("dialog")).getByText("우리의 2주년")).toBeTruthy();
-  expect(screen.getByRole("link", { name: /우리의 날짜 수정/ }).getAttribute("href")).toBe("/invite#our-dates");
+  expect(screen.queryByRole("link", { name: /우리의 날짜 수정|생일·기념일 입력/ })).toBeNull();
 });
 it("uses the familiar Sunday-first calendar while keeping month navigation and today working", () => {
   render(createElement(CalendarBoard, { trip: empty, date: empty, memories: [], drafts: [] }));
@@ -45,4 +45,15 @@ it("uses the familiar Sunday-first calendar while keeping month navigation and t
   expect(screen.getByText("2026년 11월")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "오늘" }));
   expect(screen.getByText("2026년 10월")).toBeTruthy();
+});
+
+it("keeps all six weeks in a long month without a registration banner", () => {
+  render(createElement(CalendarBoard, { trip: empty, date: empty, memories: [], drafts: [] }));
+  fireEvent.click(screen.getByRole("button", { name: "이전 달" }));
+  fireEvent.click(screen.getByRole("button", { name: "이전 달" }));
+  expect(screen.getByText("2026년 8월")).toBeTruthy();
+  expect(document.querySelectorAll(".calendar-dates > button")).toHaveLength(42);
+  expect((document.querySelector(".calendar-grid") as HTMLElement).style.getPropertyValue("--calendar-weeks")).toBe("6");
+  expect(screen.queryByRole("region", { name: "우리의 중요한 날짜" })).toBeNull();
+  expect(screen.queryByText("둘의 날짜를 오래 기억해요")).toBeNull();
 });

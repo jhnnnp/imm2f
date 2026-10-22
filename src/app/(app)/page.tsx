@@ -3,7 +3,6 @@ import { PageLoading } from "@/components/layout/PageLoading";
 import { HomeDashboard } from "@/features/home/components/HomeDashboard";
 import { HomeRecentMemory } from "@/features/home/components/HomeRecentMemory";
 import { HomeWorkspaceSync } from "@/features/home/components/HomeWorkspaceSync";
-import { CoupleKeyDatesSetup } from "@/features/couple/components/CoupleKeyDatesSetup";
 import { RecentActivityPreview } from "@/features/collaboration/components/RecentActivityPreview";
 import { listMemories } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
@@ -41,7 +40,6 @@ export default function HomePage() {
         </div>
         <p className="hand-note">just us.</p>
       </div>
-      <Suspense fallback={null}><CoupleKeyDatesSetup onboarding /></Suspense>
       <Suspense fallback={<PageLoading />}>
         <HomePageContent />
       </Suspense>

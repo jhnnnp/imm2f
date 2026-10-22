@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { InviteManager } from "@/features/auth/components/InviteManager";
 import { PartnerManage } from "@/features/auth/components/PartnerManage";
-import { CoupleKeyDatesSetup } from "@/features/couple/components/CoupleKeyDatesSetup";
 import { getCoupleConnection } from "@/features/auth/session";
 import { pairLabel } from "@/features/auth/koreanName";
 import { formatKoDate } from "@/lib/dates";
@@ -51,7 +50,6 @@ export default async function InvitePage() {
           partnerName={session.partner.displayName}
           connectedOn={connectedOn}
         />
-        <CoupleKeyDatesSetup />
       </div>
     );
   }
@@ -65,7 +63,6 @@ export default async function InvitePage() {
         </div>
       </div>
       <InviteManager />
-      <CoupleKeyDatesSetup />
     </div>
   );
 }

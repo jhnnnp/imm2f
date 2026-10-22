@@ -70,7 +70,7 @@ export function CoupleKeyDatesForm({ initial, onboarding = false }: { initial: C
       if (scopeRef.current !== requestScope) return;
       if ("error" in result) { setError(result.error); setConflict(Boolean(result.conflict)); return; }
       apply(result.snapshot);
-      setMessage(skip ? "나중에 파트너 화면에서 입력할 수 있어요." : "둘의 날짜를 저장했어요. 캘린더에 자동으로 표시돼요.");
+      setMessage(skip ? "나중에 Insights 화면에서 입력할 수 있어요." : "둘의 날짜를 저장했어요. 캘린더에 자동으로 표시돼요.");
       emitCoupleActivitiesChanged(snapshot.scope);
       if (onboarding) setDismissed(true);
       router.refresh();
@@ -89,7 +89,7 @@ export function CoupleKeyDatesForm({ initial, onboarding = false }: { initial: C
           <label><span>생일</span><input type="date" aria-label={`생일 ${index + 1} 날짜`} min="1900-01-01" max={today} value={entry.date} onChange={event => { changed(); setBirthdays(current => current.map((item, position) => position === index ? { ...item, date: event.target.value } : item)); }} /></label>
         </div>)}</div>
       </fieldset>
-      <p className={styles.note}>양력 생일 기준으로 표시해요. 입력한 이름을 두 사람이 함께 보며, 파트너 화면에서 언제든 바꾸거나 지울 수 있어요.</p>
+      <p className={styles.note}>양력 생일 기준으로 표시해요. 입력한 이름을 두 사람이 함께 보며, Insights 화면에서 언제든 바꾸거나 지울 수 있어요.</p>
       {conflict && <div className={styles.conflict} role="status"><p>서로의 변경을 덮어쓰지 않도록 저장을 멈췄어요. 입력을 유지하거나 최신 값을 다시 불러올 수 있어요.</p><button type="button" disabled={pending} onClick={async () => { try { const next = await readCoupleKeyDates(); if (scopeRef.current === currentScope) { apply(next); setMessage("최신 날짜를 불러왔어요."); } } catch { setError("최신 날짜를 불러오지 못했어요."); } }}>입력 대신 최신 값 불러오기</button></div>}
       {error && <p className={styles.error} role="alert">{error}</p>}
       {message && <p className={styles.feedback} role="status">{message}</p>}

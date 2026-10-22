@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { readCalendarWorkspace } from "@/features/collaboration/workspaceReads";
 import { hasDateContent, upsertDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
@@ -156,12 +156,8 @@ export function CalendarBoard({
     <>
     <SyncNotice message={syncError} onRetry={retrySync} />
     <div className={`calendar-layout ${styles.layout}`}>
-      <section className={styles.dateNote} aria-label="우리의 중요한 날짜">
-        <div><span>DATES TO REMEMBER</span><h2>둘의 날짜를 오래 기억해요</h2><p>{sharedKeyDates.birthdays.length || sharedKeyDates.relationshipStartedOn ? "생일과 주년, 100일마다 찾아오는 기념일을 함께 챙겨요." : "두 사람의 생일과 사귄 날짜를 남기면 이 달력에 자동으로 모여요."}</p></div>
-        <Link href="/invite#our-dates">{sharedKeyDates.birthdays.length || sharedKeyDates.relationshipStartedOn ? "우리의 날짜 수정" : "생일·기념일 입력"}<span aria-hidden="true">↗</span></Link>
-      </section>
       <SyncNotice message={holidays.error} onRetry={holidays.retry} />
-      <div className={`calendar-grid ${styles.sheet}`}>
+      <div className={`calendar-grid ${styles.sheet}`} style={{ "--calendar-weeks": cells.length / 7 } as CSSProperties}>
         <div className="calendar-month-nav">
           <div className="calendar-month-controls">
             <button type="button" className="calendar-nav-button" onClick={() => setCursor(current => (current ? shiftMonth(current, -1) : current))} aria-label="이전 달" disabled={view.getFullYear() <= 1900 && view.getMonth() === 0}>‹</button>
@@ -200,8 +196,8 @@ export function CalendarBoard({
               >
                 <b>{cell.day}</b>
                 <span className="calendar-cell-events">
-                  {marks.slice(0, 2).map(mark => mark && <small className={mark.className} key={mark.label}>{mark.label}</small>)}
-                  {marks.length > 2 && <small className="is-more">+{marks.length - 2}</small>}
+                  {marks.slice(0, marks.length > 2 ? 1 : 2).map(mark => mark && <small className={mark.className} key={mark.label}>{mark.label}</small>)}
+                  {marks.length > 2 && <small className="is-more">+{marks.length - 1}</small>}
                 </span>
               </button>
             );
