@@ -49,6 +49,39 @@ beforeEach(() => vi.mocked(completeJson).mockReset().mockResolvedValue(modelCour
 afterEach(() => vi.restoreAllMocks());
 
 describe("course proposal semantic boundary", () => {
+  it("curates places and visit order without model durations or a hidden time-window rejection in route-only mode", async () => {
+    vi.mocked(completeJson).mockResolvedValueOnce({ courses: [{ theme: "가까운 성수 동선", intro: "식사와 카페, 공원을 가까운 순서로 연결했어요.",
+      selected: ["meal", "quiet", "walk"].map(id => ({ id: `kakao:${id}`, day_index: 0,
+        reason: "이전 장소와 자연스럽게 이어지는 방문 순서로 골랐어요.", evidenceIds: ["provider:category"] })) }] });
+    vi.mocked(fetchFootRoute).mockResolvedValueOnce({ provider: "osm_foot", meters: 400, seconds: 86400,
+      legs: [{ meters: 200, seconds: 43200 }, { meters: 200, seconds: 43200 }] });
+    const result = await recommendDatePlanWithOpenAi({ prompt: "성수 장소 추천과 동선만", condition: { ...condition, timeSpecified: true },
+      candidates, saved: [], anchorCandidateIds: ["kakao:meal", "kakao:quiet", "kakao:walk"], researchPlanActive: true,
+      state: { ...state(), routeOnly: true, startTime: "23:00", endTime: "23:01", userRequests: ["첫날 밤 11시 도착"] } });
+    expect(result.source).toBe("openai");
+    expect(result.items.map(item => item.placeName)).toEqual(["정원 식당", "정원 카페", "작은 공원"]);
+    expect(result.items.every(item => item.startTime === "12:00" && item.durationMinutes === 60)).toBe(true);
+    expect(result.card.stops?.every(stop => stop.startTime === undefined && stop.durationMinutes === undefined)).toBe(true);
+    const request = vi.mocked(completeJson).mock.calls[0][0];
+    const payload = JSON.parse(request.messages[1].content);
+    const selectionSchema = request.jsonSchema?.schema.properties.courses.items.properties.selected.items;
+    expect(selectionSchema?.required).not.toContain("duration_minutes");
+    expect(selectionSchema?.properties).not.toHaveProperty("duration_minutes");
+    expect(payload).not.toHaveProperty("schedule");
+    expect(payload.candidates.every((candidate: Record<string, unknown>) => !("defaultDurationMinutes" in candidate))).toBe(true);
+    expect(payload.dateIntent.hardConstraints).toMatchObject({ startTime: null, endTime: null });
+    expect(request.messages[0].content).not.toContain('"duration_minutes":60');
+    expect(completeJson).toHaveBeenCalledOnce();
+  });
+
+  it("keeps exact selected-ID checks in route-only mode", async () => {
+    const result = await recommendDatePlanWithOpenAi({ prompt: "선택 장소로 동선", condition, candidates, saved: [],
+      state: { ...state(), routeOnly: true }, anchorCandidateIds: ["kakao:missing"] });
+    expect(result.items).toEqual([]);
+    expect(result.design?.feasibility?.reason).toBe("missing_selected_places");
+    expect(completeJson).not.toHaveBeenCalled();
+  });
+
   it("does not repeat evidence research for prepared venues but still researches a newly added repair venue", async () => {
     vi.mocked(enrichDateVenues).mockClear();
     await recommendDatePlanWithOpenAi({ prompt: "성수 데이트", condition,

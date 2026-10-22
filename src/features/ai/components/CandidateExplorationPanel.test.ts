@@ -59,7 +59,7 @@ it("adds useful visit checks to older cards that only contain a place type, with
     groups: [{ ...groups[0], id: "nightview", title: "야경", cards: [card], availableCount: 1 }] })));
   expect(screen.getByText("전망대", { exact: true })).toBeTruthy();
   expect(screen.getByText("선택한 야경 조건으로 찾은 장소예요. 주소와 동선을 비교해 골라 주세요.")).toBeTruthy();
-  expect(screen.getByText("방문 전 야간 개방 여부, 이용 시간과 접근 경로를 확인해 주세요.")).toBeTruthy();
+  expect(screen.getByText("야간 개방 여부와 접근 경로를 살펴보세요.")).toBeTruthy();
   expect(screen.queryByText(/야간 개방이 확인/)).toBeNull();
 });
 

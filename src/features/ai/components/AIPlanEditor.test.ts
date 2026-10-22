@@ -57,7 +57,7 @@ function deferred<T>() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.recommend.mockResolvedValue(chat());
-  mocks.propose.mockResolvedValue({ changes: [{ type: "duration", itemId: item.id, minutes: 90, label: "체류 시간", detail: "90분" }], summary: "더 여유롭게" });
+  mocks.propose.mockResolvedValue({ changes: [{ type: "remove", itemId: item.id, label: "확인한 카페 제외", detail: "이 장소를 코스에서 제외합니다." }], summary: "장소 제외" });
   Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: true }) });
   Element.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
@@ -99,32 +99,72 @@ it("collects trip duration locally and keeps the original region and request", a
   expect(request.previousState).toMatchObject({ areas: ["부산"], stayKind: "overnight", nights: 2 });
 });
 
-it("collects a missing performance date locally and sends that explicit date to the engine", async () => {
+it("recommends performance venues without requiring a date or showtime", async () => {
   render(createElement(AIPlanEditor, editorProps({ startDate: undefined })));
   send("성수에서 연극 보고 저녁 데이트 코스 짜줘");
-  expect(screen.getByText("언제 관람할 예정인가요?")).toBeTruthy();
-  expect(mocks.recommend).not.toHaveBeenCalled();
-  send("2026-10-24");
   await waitFor(() => expect(mocks.recommend).toHaveBeenCalledTimes(1));
-  expect(mocks.recommend.mock.calls[0][0]).toMatchObject({ dateLabel: "2026-10-24",
-    previousState: { areas: ["성수"], dateLabel: "2026-10-24" } });
+  expect(screen.queryByText("언제 관람할 예정인가요?")).toBeNull();
+  expect(mocks.recommend.mock.calls[0][0].dateLabel).toBeUndefined();
+  expect(mocks.recommend.mock.calls[0][0].previousState.areas).toEqual(["성수"]);
   expect(mocks.recommend.mock.calls[0][0].message).toContain("연극 보고 저녁");
 });
 
-it("preserves all preferences through region, duration, transport and origin questions", async () => {
+it("keeps all preferences through region and trip length without asking route details", async () => {
   render(createElement(AIPlanEditor, editorProps({ kind: "trip" })));
   send("해산물 빼고 조용한 여행 일정과 가는 법 알려줘");
   fireEvent.click(screen.getByRole("button", { name: "부산", exact: true }));
   fireEvent.click(screen.getByRole("button", { name: "2박3일", exact: true }));
-  expect(screen.getByText("어떻게 이동하시나요?")).toBeTruthy();
-  expect(mocks.recommend).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "대중교통으로 갈게", exact: true }));
-  expect(screen.getByText("어디에서 출발하시나요?")).toBeTruthy();
-  send("서울역에서 출발");
   await waitFor(() => expect(mocks.recommend).toHaveBeenCalledTimes(1));
+  expect(screen.queryByText("어떻게 이동하시나요?")).toBeNull();
+  expect(screen.queryByText("어디에서 출발하시나요?")).toBeNull();
   const input = mocks.recommend.mock.calls[0][0];
   expect(input.previousState).toMatchObject({ areas: ["부산"], nights: 2, stayKind: "overnight" });
-  expect(input.message).toBe("해산물 빼고 조용한 여행 일정과 가는 법 알려줘\n부산 쪽이 좋아\n2박3일로 짜줘\n대중교통으로 갈게\n서울역에서 출발");
+  expect(input.message).toBe("해산물 빼고 조용한 여행 일정과 가는 법 알려줘\n부산 쪽이 좋아\n2박3일로 짜줘");
+});
+
+it("retains the first request when a destination answer includes optional transport details", async () => {
+  render(createElement(AIPlanEditor, editorProps({ kind: "trip" })));
+  send("해산물은 빼고 조용한 여행 일정 짜줘");
+  send("부산, 대중교통으로 갈게");
+  expect(screen.getByText("여행 기간을 알려 주세요")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "2박3일", exact: true }));
+  await waitFor(() => expect(mocks.recommend).toHaveBeenCalledTimes(1));
+  expect(mocks.recommend.mock.calls[0][0].message)
+    .toBe("해산물은 빼고 조용한 여행 일정 짜줘\n부산, 대중교통으로 갈게\n2박3일로 짜줘");
+});
+
+it("shows places and their order without schedule times, stay durations or costs", async () => {
+  const reply = plan();
+  reply.card.stops = [{ name: item.placeName, meta: "성수 · 카페", startTime: "14:00", durationMinutes: 60,
+    openingHours: "09:00~22:00", address: "서울 성동구" }];
+  mocks.recommend.mockResolvedValueOnce({ result: reply, sessionCandidates: null });
+  render(createElement(AIPlanEditor, editorProps()));
+  send("성수 코스");
+  fireEvent.click(await screen.findByRole("button", { name: /확인한 카페.*장소 정보 보기/ }));
+  expect(screen.getAllByText(item.placeName).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/14:00|60분|10,000원|09:00~22:00|이용시간/)).toBeNull();
+});
+
+it.each(["clarification", "chat"])("ignores obsolete %s time questions without losing the request", async status => {
+  mocks.recommend.mockResolvedValueOnce({ result: { status, message: "시작 시간을 골라 주세요",
+    card: { headline: "시작 시간", lines: ["시작 시간을 골라 주세요"] }, state: completeState(),
+    slot: "time", options: ["오후 2시"], multiple: false }, sessionCandidates: null });
+  render(createElement(AIPlanEditor, editorProps()));
+  const composer = send("성수 코스");
+  await waitFor(() => expect(composer).toHaveProperty("value", "성수 코스"));
+  expect(screen.queryByText("시작 시간을 골라 주세요")).toBeNull();
+  expect(screen.queryByRole("button", { name: "오후 2시" })).toBeNull();
+});
+
+it("does not show or apply obsolete stay-duration edits", async () => {
+  mocks.propose.mockResolvedValueOnce({ changes: [{ type: "duration", itemId: item.id, minutes: 90,
+    label: "체류 시간", detail: "90분" }], summary: "체류 시간 90분으로 변경" });
+  const props = editorProps({ kind: "trip", items: [item] });
+  render(createElement(AIPlanEditor, props));
+  fireEvent.click(screen.getByRole("button", { name: "변경안 만들기" }));
+  await screen.findByRole("alert");
+  expect(screen.queryByText(/체류 시간|90분/)).toBeNull();
+  expect(props.onApply).not.toHaveBeenCalled();
 });
 
 it("keeps a pending request during a conversational detour and resumes its original question", async () => {
@@ -275,11 +315,11 @@ it("does not call the edit action for an empty request", () => {
 });
 
 it("keeps old clarification choices inactive when a newer question has the same label", async () => {
-  const clarification = (slot: "time" | "cuisine", message: string) => ({ result: {
+  const clarification = (slot: "indoor" | "cuisine", message: string) => ({ result: {
     status: "clarification", message, card: { headline: message, lines: [message] }, state: completeState(),
     options: ["상관없음"], multiple: false, slot,
   }, sessionCandidates: null });
-  mocks.recommend.mockResolvedValueOnce(clarification("time", "시작 시간 질문"))
+  mocks.recommend.mockResolvedValueOnce(clarification("indoor", "실내 활동 질문"))
     .mockResolvedValueOnce(clarification("cuisine", "음식 종류 질문"));
   render(createElement(AIPlanEditor, editorProps()));
   send("성수 데이트");

@@ -172,6 +172,8 @@ export type AIPlannerChat = {
 export type AIPlannerResult = AIPlannerReply | AIPlannerClarification | AIPlannerChat;
 
 export type AIPlannerState = {
+  /** Place selection and visit order only; stored times are compatibility defaults. */
+  routeOnly?: boolean;
   /** The current date's goal, separate from mandatory activities. */
   objective?: string;
   preferences?: {

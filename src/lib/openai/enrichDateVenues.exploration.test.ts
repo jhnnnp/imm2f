@@ -73,4 +73,24 @@ describe("exploration evidence handoff", () => {
       (options.payload as { venues: unknown[] }).venues);
     expect(requested).toHaveLength(2);
   });
+
+  it("resolves each exact branch separately inside a short research deadline and reports only attempted IDs", async () => {
+    const candidates = Array.from({ length: 4 }, (_, index) => ({ ...venue,
+      externalPlaceId: `single-${index}`, name: `전망대 ${index}` }));
+    const attempted = vi.fn();
+    await enrichResearchNeedEvidence(candidates, emptyDateBrief(), [need], 2, undefined, false, attempted);
+    expect(attempted).toHaveBeenCalledExactlyOnceWith(["kakao:single-0", "kakao:single-1"]);
+    expect(completeJsonWithWebSearch).toHaveBeenCalledTimes(2);
+    for (const [request] of vi.mocked(completeJsonWithWebSearch).mock.calls) {
+      expect(request).toMatchObject({ maxTokens: 900, searchContextSize: "low" });
+      expect((request.payload as { venues: unknown[] }).venues).toHaveLength(1);
+    }
+  });
+
+  it("does not mark unsearched identities as attempted when research is aborted", async () => {
+    const attempted = vi.fn();
+    await enrichResearchNeedEvidence([venue], emptyDateBrief(), [need], 2, AbortSignal.abort(), true, attempted);
+    expect(attempted).not.toHaveBeenCalled();
+    expect(completeJsonWithWebSearch).not.toHaveBeenCalled();
+  });
 });

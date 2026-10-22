@@ -26,6 +26,7 @@ export function selectedDateFeasibility(candidates: DiscoverCandidate[], anchorI
   if (selected.some((venue, index) => selected.slice(index + 1).some(other => sameVenueBranch(venue, other))))
     return { passed: false, reason: "duplicate_selected_place",
       message: "선택한 후보 중 서로 다른 검색 출처의 같은 장소가 있어요. 같은 지점은 하나만 골라 주세요." };
+  if (state.routeOnly) return null;
   if (!performanceVisitDate(state) && selected.some(venue => candidateActivitySlot(venue) === "performance" && venue.performanceEvent))
     return { passed: false, reason: "performance_visit_date_missing",
       message: "공연 방문 날짜를 먼저 정해야 회차를 확인할 수 있어요. 방문 날짜를 알려주시거나 공연 장소를 바꿔 주세요." };

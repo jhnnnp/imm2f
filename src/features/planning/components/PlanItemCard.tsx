@@ -45,6 +45,7 @@ export function PlanItemCard({
   showTime?: boolean;
 }) {
   const letter = variant === "letter";
+  const editingTime = showTime && editing;
   const [startTime, setStartTime] = useState(item.startTime);
   const [durationMinutes, setDurationMinutes] = useState(item.durationMinutes);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -78,8 +79,8 @@ export function PlanItemCard({
   const stamp = String(index + 1).padStart(2, "0");
   return (
     <article
-      className={`timeline-item ${letter ? "is-letter" : ""} ${dragging ? "is-dragging" : ""} ${tossing ? "is-toss" : ""} ${dropTarget ? "is-drop-target" : ""} ${editing ? "is-editing" : ""}`}
-      draggable={!editing}
+      className={`timeline-item ${letter ? "is-letter" : ""} ${dragging ? "is-dragging" : ""} ${tossing ? "is-toss" : ""} ${dropTarget ? "is-drop-target" : ""} ${editingTime ? "is-editing" : ""}`}
+      draggable={!editingTime}
       onDragStart={event => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", item.id);
@@ -94,7 +95,7 @@ export function PlanItemCard({
       {letter && <span className="letter-pin" aria-hidden="true" />}
       <div className="timeline-item-head">
         <button className="drag" type="button" aria-label={`${item.placeName} 순서 변경`} aria-haspopup="menu" aria-expanded={menuOpen} title="끌어서 이동하거나 눌러서 순서 변경" onPointerDown={event => event.stopPropagation()} onClick={() => setMenuOpen(open => !open)}>⠿</button>
-        {letter ? <span className="letter-stamp">{stamp}</span> : showTime ? <time>{item.startTime}</time> : null}
+        {letter || !showTime ? <span className="letter-stamp">{stamp}</span> : <time>{item.startTime}</time>}
         <span className="timeline-category">{item.category}</span>
         <div className="item-actions" ref={menuRef}>
           <button
@@ -113,7 +114,7 @@ export function PlanItemCard({
             <div className={`item-action-menu${menuAbove ? " is-above" : ""}`} role="menu">
               <button type="button" role="menuitem" disabled={!onMovePrevious} onClick={() => { setMenuOpen(false); onMovePrevious?.(); }}>앞으로 이동</button>
               <button type="button" role="menuitem" disabled={!onMoveNext} onClick={() => { setMenuOpen(false); onMoveNext?.(); }}>뒤로 이동</button>
-              {onUpdate && (
+              {showTime && onUpdate && (
                 <button type="button" role="menuitem" onClick={() => {
                   onEdit(editing ? null : item.id);
                   setMenuOpen(false);
@@ -135,7 +136,7 @@ export function PlanItemCard({
         {item.memo && <ExpandableText text={item.memo} className={styles.memo} label={`${item.placeName} 메모`} />}
         {!letter && showTime && <small className={styles.duration}>{item.durationMinutes}분</small>}
       </div>
-      {editing && onUpdate && (
+      {editingTime && onUpdate && (
         <div className="timeline-edit-panel">
           <label><span>일정 시간</span><input type="time" step={300} required value={startTime} onChange={event => setStartTime(event.target.value)} /></label>
           <label><span>소요 시간</span><select value={durationMinutes} onChange={event => setDurationMinutes(Number(event.target.value))}>{[...new Set([30, 45, 60, 90, 120, 150, 180, item.durationMinutes])].sort((a, b) => a - b).map(minutes => <option key={minutes} value={minutes}>{minutes >= 60 ? `${Math.floor(minutes / 60)}시간${minutes % 60 ? ` ${minutes % 60}분` : ""}` : `${minutes}분`}</option>)}</select></label>

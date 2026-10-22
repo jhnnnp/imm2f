@@ -50,13 +50,13 @@ export function verifyDateItinerary(input: {
   const performanceRows = input.course.rows.filter(row => byId.get(String(row.id ?? ""))?.performanceEvent);
   for (const row of performanceRows) {
     const event = byId.get(String(row.id ?? ""))!.performanceEvent!;
-    if (!performanceVisitDate(input.state)) issues.push(planningIssue("performance_time_unverified",
+    if (!input.state.routeOnly && !performanceVisitDate(input.state)) issues.push(planningIssue("performance_time_unverified",
       "공연 방문 날짜를 먼저 정해야 회차를 확인할 수 있어요.", { candidateId: row.id, dayIndex: row.day_index ?? 0 }));
-    else if (event.dateYmd !== tripDayYmd(input.state, row.day_index ?? 0))
+    else if (performanceVisitDate(input.state) && event.dateYmd !== tripDayYmd(input.state, row.day_index ?? 0))
       issues.push(planningIssue("performance_date_mismatch", `${(row.day_index ?? 0) + 1}일차 공연 날짜 불일치`,
         { candidateId: row.id, dayIndex: row.day_index ?? 0 }));
   }
-  if (!input.route && performanceRows.length && performanceVisitDate(input.state)) {
+  if (!input.state.routeOnly && !input.route && performanceRows.length && performanceVisitDate(input.state)) {
     scheduledRows = assignStartTimes(input.course.rows, input.candidates, input.state, input.condition.startTime);
     if (scheduledRows.length !== input.course.rows.length) issues.push(planningIssue("schedule_infeasible",
       "지정한 시간 안에 공연 회차와 이동·체류를 배치할 수 없음"));
@@ -78,7 +78,7 @@ export function verifyDateItinerary(input: {
     }
     for (const [day, meters] of distanceByDay) if (meters > dailyLimit)
       issues.push(planningIssue("actual_route_limit", "실제 보행 경로가 이동 한도를 초과함", { dayIndex: day }));
-    {
+    if (!input.state.routeOnly) {
       const schedule = assignStartTimes(input.course.rows, input.candidates, input.state, input.condition.startTime,
         input.route.legs.map(leg => Math.ceil(leg.seconds / 60)));
       scheduledRows = schedule;

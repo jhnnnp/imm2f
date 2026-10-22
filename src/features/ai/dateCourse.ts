@@ -585,6 +585,8 @@ export function assignStartTimes(
   dayStart = assumedTimeWindow(state).startTime,
   verifiedTravelMinutes?: number[], openingCache: DateOpeningCache = new Map(),
 ): DateCourseRow[] {
+  // Required legacy storage fields do not represent a promised visit schedule.
+  if (state.routeOnly) return rows.map(row => ({ ...row, start_time: "12:00", duration_minutes: 60 }));
   const performanceSchedule = schedulePerformanceCourse(rows, candidates, state, dayStart, verifiedTravelMinutes, openingCache);
   if (performanceSchedule !== undefined) return performanceSchedule ?? [];
   const byId = new Map(candidates.map(candidate => [dateCandidateKey(candidate), candidate]));

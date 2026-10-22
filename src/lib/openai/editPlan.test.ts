@@ -20,14 +20,17 @@ describe("AI plan edit validation", () => {
     },
   );
 
-  it("keeps valid explicit edits, known ids and one change per item", async () => {
+  it("ignores duration edits and sends only place information to the edit model", async () => {
     vi.mocked(completeJson).mockResolvedValue({ changes: [
       { type: "duration", itemId: "unknown", minutes: 90 },
       { type: "duration", itemId: "first", minutes: 90 },
       { type: "remove", itemId: "first" },
     ] });
-    expect(await proposePlanEditsWithOpenAi({ kind: "date", prompt: "카페에서 90분 머물고 싶어요", items }))
-      .toMatchObject({ changes: [{ type: "duration", itemId: "first", minutes: 90 }] });
+    expect(await proposePlanEditsWithOpenAi({ kind: "date", prompt: "카페를 빼줘", items }))
+      .toMatchObject({ changes: [{ type: "remove", itemId: "first" }] });
+    const request = vi.mocked(completeJson).mock.calls[0][0];
+    expect(request.messages[1].content).not.toContain("startTime");
+    expect(request.messages[1].content).not.toContain("durationMinutes");
   });
 
   it("does not coerce a numeric provider id into a real string id", async () => {

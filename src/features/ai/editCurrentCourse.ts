@@ -18,8 +18,15 @@ export function editCurrentCourse(plan: AIPlannerReply, edit: NonNullable<ChatRo
   const indexed = plan.items.map((item, index) => ({ item, recommendation: plan.recommendations[index], card: plan.card.stops?.[index], originalIndex: index + 1 }));
   const selected = edit.kind === "remove" ? indexed.filter(stop => !edit.indices.includes(stop.originalIndex))
     : edit.kind === "reorder" ? edit.indices.map(index => indexed[index - 1]).filter(Boolean) : indexed;
+  const routeOnly = state.routeOnly || plan.state.routeOnly;
+  if (routeOnly && edit.kind === "retime") {
+    const message = "장소와 방문 순서 중심으로 추천하고 있어요. 바꾸고 싶은 장소나 순서를 알려 주세요.";
+    return { status: "chat", message, card: { headline: "", lines: [message] }, state: plan.state };
+  }
   const window = assumedTimeWindow(state);
-  let scheduled = fitSchedule(selected.map(stop => ({ ...stop, coordinates: stop.item.coordinates, dayIndex: stop.item.dayIndex, durationMinutes: state.pace === "relaxed" && edit.kind === "retime" ? Math.max(90, stop.item.durationMinutes) : stop.item.durationMinutes })), window.startTime, window.specified ? window.endTime : "23:59", state.discovery?.transport ?? "walk", {}, options?.verifiedTravelMinutes);
+  let scheduled = routeOnly ? selected.map(stop => ({ ...stop, coordinates: stop.item.coordinates,
+    dayIndex: stop.item.dayIndex, startTime: "12:00", durationMinutes: 60 }))
+    : fitSchedule(selected.map(stop => ({ ...stop, coordinates: stop.item.coordinates, dayIndex: stop.item.dayIndex, durationMinutes: state.pace === "relaxed" && edit.kind === "retime" ? Math.max(90, stop.item.durationMinutes) : stop.item.durationMinutes })), window.startTime, window.specified ? window.endTime : "23:59", state.discovery?.transport ?? "walk", {}, options?.verifiedTravelMinutes);
   if (scheduled && options?.targetItemId && options.targetStartTime && edit.kind === "retime") {
     const targetIndex = scheduled.findIndex(stop => stop.item.id === options.targetItemId);
     const desired = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(options.targetStartTime)
@@ -53,14 +60,14 @@ export function editCurrentCourse(plan: AIPlannerReply, edit: NonNullable<ChatRo
     return prev && prev.dayIndex === stop.dayIndex && prev.coordinates && stop.coordinates ? Math.round(distanceMeters(prev.coordinates, stop.coordinates)) : null;
   });
   const recommendations = scheduled.map((stop, index) => ({ ...stop.recommendation, durationMinutes: stop.durationMinutes, distanceFromPreviousMeters: hops[index] }));
-  const stops = scheduled.map((stop, index) => ({ ...stop.card, name: stop.item.placeName, meta: stop.card?.meta ?? stop.item.category, startTime: window.specified ? stop.startTime : undefined, durationMinutes: window.specified ? stop.durationMinutes : undefined, dayIndex: stop.item.dayIndex, distanceFromPreviousMeters: hops[index] }));
+  const stops = scheduled.map((stop, index) => ({ ...stop.card, name: stop.item.placeName, meta: stop.card?.meta ?? stop.item.category, startTime: !routeOnly && window.specified ? stop.startTime : undefined, durationMinutes: !routeOnly && window.specified ? stop.durationMinutes : undefined, dayIndex: stop.item.dayIndex, distanceFromPreviousMeters: hops[index] }));
   const removed = indexed.filter(stop => !selected.includes(stop)).map(stop => stop.item.placeName);
-  const message = edit.kind === "remove" ? `${removed.join(", ")}만 뺐어요. 나머지 장소는 그대로 두고 이동 시간을 다시 맞췄어요.`
+  const message = edit.kind === "remove" ? `${removed.join(", ")}만 뺐어요. 나머지 장소는 그대로 두고 ${routeOnly ? "방문 순서와 동선을 정리했어요." : "이동 시간을 다시 맞췄어요."}`
     : edit.kind === "reorder" ? `${items.map(item => item.placeName).join(" → ")} 순서로 바꿨어요. 장소는 그대로예요.`
       : options?.targetItemId && options.targetStartTime
         ? `${items.find(item => item.id === options.targetItemId)?.placeName ?? "요청한 장소"} 시작을 ${options.targetStartTime}로 옮겼어요. 나머지 장소는 순서대로 이어져요.`
         : `장소와 순서는 그대로 두고 ${window.startTime}부터 ${window.endTime} 안에 마치도록 시간을 맞췄어요.`;
-  return { ...plan, state: nextState, message, condition: { ...plan.condition, startTime: window.startTime, endTime: window.endTime, dateLabel: state.dateLabel || plan.condition.dateLabel, budget: null, timeSpecified: window.specified },
+  return { ...plan, state: { ...nextState, routeOnly }, message, condition: { ...plan.condition, startTime: window.startTime, endTime: window.endTime, dateLabel: state.dateLabel || plan.condition.dateLabel, budget: null, timeSpecified: !routeOnly && window.specified },
     design: plan.design ? { ...plan.design, theme: edit.kind === "remove" ? "기존 코스에서 요청한 장소를 제외한 코스" : plan.design.theme, totalDistanceMeters: hops.reduce<number>((sum, hop) => sum + (hop ?? 0), 0) } : undefined,
     items, recommendations, card: { ...plan.card, headline: `${selectedAreas(state).join(" · ")} ${items.length}곳`, lines: [message], stops },
   };

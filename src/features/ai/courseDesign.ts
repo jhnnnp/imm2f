@@ -216,7 +216,7 @@ export function discoveryCatalog(pool: DiscoverCandidate[], state: AIPlannerStat
   return chosen.slice(0, limit);
 }
 
-export function parseCourseProposals(value: unknown, days: number, candidateCount = 500): CourseProposal[] {
+export function parseCourseProposals(value: unknown, days: number, candidateCount = 500, routeOnly = false): CourseProposal[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 4).flatMap(raw => {
     if (!raw || typeof raw !== "object") return [];
@@ -228,12 +228,12 @@ export function parseCourseProposals(value: unknown, days: number, candidateCoun
       const row = item as Record<string, unknown>;
       if (typeof row.id !== "string" || !row.id.trim()
         || !Number.isInteger(row.day_index) || Number(row.day_index) < 0 || Number(row.day_index) >= days
-        || !Number.isInteger(row.duration_minutes) || Number(row.duration_minutes) < 30
-        || Number(row.duration_minutes) > 180) return null;
+        || !routeOnly && (!Number.isInteger(row.duration_minutes) || Number(row.duration_minutes) < 30
+          || Number(row.duration_minutes) > 180)) return null;
       const reason = typeof row.reason === "string" ? row.reason.replace(/[\n\r*_#`]/g, " ").trim().slice(0, 180) : "";
       const evidenceIds = Array.isArray(row.evidenceIds) && row.evidenceIds.length <= 8
         && row.evidenceIds.every(id => typeof id === "string") ? row.evidenceIds as string[] : [];
-      return { id: row.id, day_index: Number(row.day_index), duration_minutes: Number(row.duration_minutes),
+      return { id: row.id, day_index: Number(row.day_index), duration_minutes: routeOnly ? 60 : Number(row.duration_minutes),
         ...(reason ? { reasons: [reason], reasonEvidenceIds: evidenceIds } : {}) };
     });
     return rows.some(row => row === null) ? []
@@ -316,9 +316,9 @@ function experienceFlowScore(places: DiscoverCandidate[], state: AIPlannerState)
 function optimizeDay(rows: DateCourseRow[], byId: Map<string, DiscoverCandidate>, state: AIPlannerState) {
   if (rows.length < 2 || rows.length > 7) return rows;
   const catalog = [...byId.values()];
-  const timeSensitive = (state.discovery?.requiredActivities ?? state.activities).includes("nightview")
+  const timeSensitive = !state.routeOnly && ((state.discovery?.requiredActivities ?? state.activities).includes("nightview")
     || rows.some(row => { const candidate = byId.get(row.id!)!; return candidate.performanceEvent
-      || verifiedOpeningWindows(candidate, tripDayYmd(state, row.day_index ?? 0)) !== null; });
+      || verifiedOpeningWindows(candidate, tripDayYmd(state, row.day_index ?? 0)) !== null; }));
   const openingCache: DateOpeningCache = new Map();
   let best: DateCourseRow[] | null = null;
   let cost = Infinity;
@@ -454,13 +454,13 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
   for (const row of rows) {
     const event = byId.get(row.id!)?.performanceEvent;
     if (!event) continue;
-    if (!eventDate) report("performance_time_unverified", "공연 방문 날짜를 먼저 정해야 회차를 확인할 수 있어요.",
+    if (!state.routeOnly && !eventDate) report("performance_time_unverified", "공연 방문 날짜를 먼저 정해야 회차를 확인할 수 있어요.",
       { candidateId: row.id, dayIndex: row.day_index ?? 0 });
-    else if (event.dateYmd !== tripDayYmd(state, row.day_index ?? 0))
+    else if (eventDate && event.dateYmd !== tripDayYmd(state, row.day_index ?? 0))
       report("performance_date_mismatch", `${(row.day_index ?? 0) + 1}일차 공연 날짜 불일치`,
         { candidateId: row.id, dayIndex: row.day_index ?? 0 });
   }
-  if (state.intent !== "modify" && eventDate && /공연(?!장)|연극|뮤지컬|콘서트/.test(latestRequest)
+  if (!state.routeOnly && state.intent !== "modify" && eventDate && /공연(?!장)|연극|뮤지컬|콘서트/.test(latestRequest)
     && !selected.some(candidate => candidate.performanceEvent
       && Array.from({ length: days }, (_, day) => tripDayYmd(state, day)).includes(candidate.performanceEvent.dateYmd))) {
     report("performance_time_unverified", "방문일 공연 회차 미확인");
@@ -478,7 +478,7 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
     // Search-reported menus cannot establish ingredient or cross-contact safety.
     report("allergy_unverified", "알레르기 안전성 미확인");
   }
-  const requiredTime = requiredOpeningTime(state);
+  const requiredTime = state.routeOnly ? null : requiredOpeningTime(state);
   if (requiredTime) for (const row of rows) {
     const candidate = byId.get(row.id!)!;
     const profile = planningEvidenceProfile(candidate, requiredTime, tripDayYmd(state, row.day_index ?? 0));
@@ -521,7 +521,7 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
   if (route.longestHop > maxHop) report("long_hop", "한 구간의 이동 부담이 너무 큼");
   if (mode === "walk" && route.meters > (state.walkingPreference === "short" ? 2200 : 5500) * days) report("walking_burden", "전체 도보 부담이 너무 큼");
   const timedRows = rows.length ? assignStartTimes(rows, candidates, state) : [];
-  if (rows.length && !timedRows.length) {
+  if (!state.routeOnly && rows.length && !timedRows.length) {
     report("schedule_infeasible", "지정한 시간 안에 이동과 체류를 배치할 수 없음");
     const agreed = assumedTimeWindow(state);
     const localWindows = tripLocalWindows(state.userRequests ?? [], days);
@@ -538,7 +538,7 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
         { candidateId: row.id, dayIndex: day, constraint: localWindows[day]?.start ?? agreed.startTime });
     }
   }
-  for (const row of timedRows) {
+  for (const row of state.routeOnly ? [] : timedRows) {
     const candidate = byId.get(row.id!);
     if (!candidate || !row.start_time) continue;
     if (verifiedOpeningAtVisit(candidate, tripDayYmd(state, row.day_index ?? 0), row.start_time,
@@ -573,7 +573,7 @@ export function evaluatePreparedCourse(proposal: CourseProposal, preparedRows: D
       * (1 + (1 - (state.preferences?.walkingTolerance ?? 0.5)) * 0.7),
     flow: experienceFlowScore(selected, state) * 3,
     pacing: -Math.max(0, selected.length - (travel ? 4 * days : 3)) * 2,
-    schedule: rows.length && timedRows.length ? 4 : 0,
+    schedule: !state.routeOnly && rows.length && timedRows.length ? 4 : 0,
     violations: -issues.filter(issue => issue.severity === "hard").length * 100
       - issues.filter(issue => issue.severity === "soft").length * 8,
   };
@@ -599,8 +599,8 @@ export function planningStopGuidance(state: AIPlannerState) {
 
 function softStopTarget(state: AIPlannerState) {
   const days = courseSize(state).days;
-  if (days === 1) return state.timeWindow === "evening" || state.timeWindow === "night" ? 2 : 3;
-  const windows = tripLocalWindows(state.userRequests ?? [], days);
+  if (days === 1) return !state.routeOnly && (state.timeWindow === "evening" || state.timeWindow === "night") ? 2 : 3;
+  const windows = state.routeOnly ? {} : tripLocalWindows(state.userRequests ?? [], days);
   const lateFirstDay = Boolean(windows[0]?.start && windows[0].start >= "18:00");
   const lastDayEnd = windows[days - 1]?.end;
   const earlyLastDay = Boolean(lastDayEnd && lastDayEnd <= "15:00");

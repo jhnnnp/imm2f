@@ -3,7 +3,7 @@ import { DATE_AREA_OPTIONS, extractRequestedAreasFromText, extractStay, selected
 import { isQuestion, routeDateChatLocally } from "./chatRoute";
 import { explicitDateConstraints } from "./dateConstraints";
 import { explicitFoodExclusions, releasedFoodExclusions } from "./dateIntent";
-import { hasPlannerOrigin, type PlannerDialogueSlot } from "./plannerDialogueState";
+import type { PlannerDialogueSlot } from "./plannerDialogueState";
 
 export type { PlannerDialogueSlot } from "./plannerDialogueState";
 
@@ -32,7 +32,7 @@ export function plannerWelcomeCard(kind: PlanKind, suggestedAreas?: string[]): A
   return {
     headline: kind === "trip" ? "어느 지역으로 여행을 떠나시나요?" : "어느 지역에서 데이트하고 싶으세요?",
     lines: ["가고 싶은 도시나 동네를 골라 주세요. 원하는 장소·분위기·기간을 함께 적어 주셔도 좋아요.",
-      "목록에 없는 지역도 직접 입력할 수 있어요. 정해 둔 시간과 취향이 있다면 함께 알려 주세요."],
+      "목록에 없는 지역도 직접 입력할 수 있어요. 좋아하는 음식이나 분위기가 있다면 함께 알려 주세요."],
     suggestions: areaChoices(suggestedAreas),
   };
 }
@@ -60,26 +60,8 @@ export function plannerEntryIntake(input: { kind: PlanKind; message: string; sta
       lines: ["며칠 동안 여행하시나요? 기간에 맞춰 장소와 하루별 동선을 함께 짤게요."],
       suggestions: ["당일치기", "1박2일", "2박3일", "직접 입력"] } };
   }
-  const attendance = [...input.message.matchAll(/영화|뮤지컬|연극|콘서트|공연/g)].some(match =>
-    !/^\s*(?:은|는|을|를|도)?\s*(?:빼|제외|말고|안\s*보|보지\s*않)/.test(input.message.slice(match.index + match[0].length)))
-    && !/공연장\s*(?:구경|탐방)|영화관\s*(?:건물|위치)/.test(input.message);
-  if (route.mode === "course" && attendance && !state.dateLabel) {
-    return { slot: "date", state, card: { headline: "언제 관람할 예정인가요?",
-      lines: ["공연과 영화는 방문일에 따라 일정이 달라요. 관람할 날짜를 알려 주세요. 예매와 좌석 가능 여부는 별도로 확인해야 해요."],
-      suggestions: ["오늘", "내일", "이번 주 토요일", "직접 입력"] } };
-  }
-  if (routeRequest) {
-    const context = [...(state.userRequests ?? []), input.message].join("\n");
-    const transport = /(?:도보|걸어서|걷는\s*경로|대중교통|지하철|버스|자가용|렌터카|차로|운전|택시)/.test(context);
-    const noRoute = /출발지\s*없이|현지\s*(?:코스|일정|장소)만/.test(context);
-    const origin = hasPlannerOrigin(context);
-    if (!transport && !noRoute) return { slot: "transport", state, card: { headline: "어떻게 이동하시나요?",
-      lines: ["출발지부터 가는 방법을 고려하려면 이동수단을 알려 주세요. 현지 장소만 추천받을 수도 있어요."],
-      suggestions: ["대중교통으로 갈게", "자가용으로 갈게", "도보로 이동할게", "현지 코스만 추천해줘"] } };
-    if (!origin && !noRoute) return { slot: "origin", state, card: { headline: "어디에서 출발하시나요?",
-      lines: ["출발할 역이나 동네를 ‘서울역에서 출발’처럼 적어 주세요. 정확한 교통편과 실시간 소요 시간은 지도에서 확인할 수 있어요."],
-      suggestions: ["직접 입력", "현지 코스만 추천해줘"] } };
-  }
+  // Recommendations need a destination and trip length. Dates, transport and
+  // departure details remain optional instructions, never another intake gate.
   return null;
 }
 

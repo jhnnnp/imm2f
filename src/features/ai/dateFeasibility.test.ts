@@ -8,6 +8,12 @@ const venues = Array.from({ length: 15 }, (_, index) => ({ externalSource: "kaka
 const ids = venues.map(venue => `kakao:${venue.externalPlaceId}`);
 
 describe("chosen itinerary feasibility lower bounds", () => {
+  it("does not invent a minimum time budget for a route-only selection", () => {
+    expect(selectedDateFeasibility(venues, ids, { ...emptyDateBrief(), routeOnly: true,
+      startTime: "23:00", endTime: "23:01", userRequests: ["마지막 날 오후 2시 출발"] })).toBeNull();
+    expect(selectedDateFeasibility(venues, ["kakao:missing"], { ...emptyDateBrief(), routeOnly: true })?.reason)
+      .toBe("missing_selected_places");
+  });
   it("rejects selecting the same exact branch from two different providers", () => {
     const branch: DiscoverCandidate = { externalSource: "kakao", externalPlaceId: "a", name: "같은 식당",
       category: "restaurant", categoryLabel: "식당", district: "성수", address: "서울 성동구 성수이로 10",

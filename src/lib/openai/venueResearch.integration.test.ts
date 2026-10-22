@@ -20,7 +20,7 @@ it("keeps successful evidence when another research request rejects", async () =
     categoryLabel: "카페", district: "성동구", address: "서울 성동구 왕십리로 281", roadAddress: "서울 성동구 왕십리로 281",
     phone: "", mapUrl: "", coordinates: [127.04, 37.56],
   }));
-  search.mockRejectedValueOnce(new Error("provider unavailable"));
+  search.mockResolvedValue({ venues: [] }).mockRejectedValueOnce(new Error("provider unavailable"));
   search.mockImplementationOnce(async input => {
     const venue = input.payload.venues[0];
     input.onSources(["https://example.com/cafe"]);
@@ -31,8 +31,11 @@ it("keeps successful evidence when another research request rejects", async () =
   const result = await enrichDateVenues(candidates, emptyDateBrief());
   expect(result).toHaveLength(4);
   expect(result[0].evidence).toEqual([]);
-  expect(result[2].evidence?.[0].branchName).toBe("카페2");
+  expect(result[1].evidence?.[0].branchName).toBe("카페1");
+  expect(result[2].evidence).toEqual([]);
   expect(result[3].evidence).toEqual([]);
+  expect(search).toHaveBeenCalledTimes(4);
+  expect(search.mock.calls.every(([input]) => input.payload.venues.length === 1)).toBe(true);
 });
 
 it("keeps unknown cafe space facts unknown after one bounded interactive wave", async () => {
@@ -50,7 +53,7 @@ it("keeps unknown cafe space facts unknown after one bounded interactive wave", 
       sourceExcerpt: "정원과 테라스 좌석이 있습니다." }] }] };
   });
   const result = await enrichDateVenues(candidates, { ...emptyDateBrief(), activities: ["cafe"], userRequests: ["예쁜 카페"] });
-  expect(search).toHaveBeenCalledTimes(2);
+  expect(search).toHaveBeenCalledTimes(4);
   expect(result.every(candidate => !candidate.evidence?.length)).toBe(true);
   expect(search.mock.calls.every(([input]) => input.timeoutMs > 0 && input.timeoutMs <= 7000)).toBe(true);
   expect(search.mock.calls.flatMap(([input]) => input.payload.venues.map((venue: { id: string }) => venue.id)))
@@ -66,7 +69,7 @@ it("honors the shared deadline and retains early successful evidence when anothe
   const controller = new AbortController();
   const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
   try {
-    search.mockImplementationOnce(async input => {
+    search.mockResolvedValue({ venues: [] }).mockImplementationOnce(async input => {
       const venue = input.payload.venues[0];
       input.onSources(["https://example.com/early"]);
       return { venues: [{ id: venue.id, observations: [{ text: "정원과 테라스 좌석이 있습니다.",
@@ -74,13 +77,13 @@ it("honors the shared deadline and retains early successful evidence when anothe
         sourceExcerpt: "정원과 테라스 좌석이 있습니다." }] }] };
     }).mockImplementationOnce(() => new Promise(() => {}));
     const pending = enrichDateVenues(candidates, { ...emptyDateBrief(), activities: ["cafe"] });
-    await vi.waitFor(() => expect(search).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(search).toHaveBeenCalledTimes(4));
     expect(timeout).toHaveBeenCalledWith(7000);
     controller.abort();
     const result = await pending;
     expect(result[0].evidence?.[0].text).toContain("정원과 테라스");
     expect(result[2].evidence?.length ?? 0).toBe(0);
-    expect(search).toHaveBeenCalledTimes(2);
+    expect(search).toHaveBeenCalledTimes(4);
   } finally { timeout.mockRestore(); }
 });
 
@@ -120,8 +123,9 @@ it("does not treat warm menu-only facts as evidence of a quiet conversation venu
   search.mockResolvedValue({ venues: [] });
   const result = await enrichDateVenues(candidates, { ...emptyDateBrief(), activities: ["meal"],
     preferences: { vibe: ["조용한"], crowdTolerance: 0.2 } });
-  expect(search).toHaveBeenCalledTimes(1);
-  expect(search.mock.calls[0][0].payload.venues.every((venue: { researchFocus: string }) => venue.researchFocus.includes("noise, crowd"))).toBe(true);
+  expect(search).toHaveBeenCalledTimes(2);
+  expect(search.mock.calls.every(([input]) => input.payload.venues.length === 1
+    && input.payload.venues[0].researchFocus.includes("noise, crowd"))).toBe(true);
   expect(result.every(candidate => candidate.evidence?.length === 1)).toBe(true);
   expect(result.some(candidate => candidate.evidence?.some(fact => /조용|소음/.test(fact.text)))).toBe(false);
 });

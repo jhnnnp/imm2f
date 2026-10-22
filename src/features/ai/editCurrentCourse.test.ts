@@ -29,3 +29,24 @@ it("keeps the original course when a targeted shift overflows the target day's w
   const result = editCurrentCourse(plan, { kind: "retime", indices: [] }, state, { targetItemId: "i2", targetStartTime: "16:00", verifiedTravelMinutes: [0, 0, 120, 0, 0] });
   expect(result.status).toBe("chat");
 });
+
+it("changes places and visit order without fitting legacy clocks in a route-only recommendation", () => {
+  const routeState = { ...state, routeOnly: true, startTime: "23:58", endTime: "23:59" };
+  const routePlan = { ...plan, state: routeState };
+  const result = editCurrentCourse(routePlan, { kind: "remove", indices: [2] }, routeState);
+  expect(result.status).toBe("plan");
+  if (result.status !== "plan") return;
+  expect(result.items.map(item => item.placeName)).toEqual(["장소0", "장소2", "장소3", "장소4", "장소5"]);
+  expect(result.condition.timeSpecified).toBe(false);
+  expect(result.card.stops?.every(stop => stop.startTime === undefined && stop.durationMinutes === undefined)).toBe(true);
+  expect(result.message).not.toContain("시간");
+  expect(result.state.routeOnly).toBe(true);
+});
+
+it("does not turn a route-only recommendation into a timed schedule during a follow-up", () => {
+  const routePlan = { ...plan, state: { ...state, routeOnly: true } };
+  const result = editCurrentCourse(routePlan, { kind: "retime", indices: [] }, routePlan.state);
+  expect(result.status).toBe("chat");
+  expect(result.message).toContain("장소와 방문 순서");
+  expect(routePlan.items).toEqual(items);
+});

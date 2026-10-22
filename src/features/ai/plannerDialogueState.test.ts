@@ -1,29 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { emptyDateBrief } from "./dateBrief";
 import { validPlannerState, validateDatePlannerInput } from "./plannerInputValidation";
-import { hasPlannerOrigin, isPlannerOriginAnswer, resumePlannerDialogue } from "./plannerDialogueState";
+import { answersPlannerDialogue, resumePlannerDialogue } from "./plannerDialogueState";
 import { plannerEntryState } from "./chatEntry";
 import { applyInterpretPatch, fallbackPatch } from "@/lib/openai/interpretDateRequest";
 
 describe("pending planner dialogue", () => {
-  it.each(["서울고속버스터미널", "서울고속버스터미널에서 출발", "부산 버스정류장에서 출발", "동대구 환승센터", "서울역에서"])
-  ("retains an actual departure answer even when its name contains transport words: %s", message => {
-    expect(isPlannerOriginAnswer(message)).toBe(true);
+  it("recognizes the remaining answers even when they contain optional transport preferences", () => {
+    expect(answersPlannerDialogue("area", "부산, 대중교통으로 갈게")).toBe(true);
+    expect(answersPlannerDialogue("span", "2박3일 버스로 갈게")).toBe(true);
+    expect(answersPlannerDialogue("area", "부산은 버스가 나아?")).toBe(false);
   });
 
-  it.each(["버스가 나아?", "서울고속버스터미널에서 출발하면 버스가 나아?", "서울고속버스터미널에서 출발하는 버스 있나", "서울역에서 어떻게 가?", "버스 탈까", "출발지는 아직 미정"])
-  ("keeps route questions and unknown origins out of origin answers: %s", message => {
-    expect(isPlannerOriginAnswer(message)).toBe(false);
-  });
-
-  it.each(["출발지는 아직 미정", "출발지부터 고려한 부산 1박2일 경로", "어디에서 출발할지 몰라", "출발지는 정해지지 않았어"])
-  ("does not count a reference to the origin field as a departure place: %s", message => {
-    expect(hasPlannerOrigin(message)).toBe(false);
-  });
-
-  it.each(["서울역에서 출발", "출발지는 서울 고속버스터미널", "출발지: 대전역", "출발지 서울역", "동대구 환승센터부터 출발"])
-  ("recognizes supplied origins without using a fixed location list: %s", message => {
-    expect(hasPlannerOrigin(message)).toBe(true);
+  it("keeps optional date, transport and origin instructions without adding intake steps", () => {
+    const first = "서울고속버스터미널에서 출발해서 대중교통으로 2026-10-24 여행 갈게. 해산물은 빼줘";
+    const result = resumePlannerDialogue([first], "부산 2박3일", emptyDateBrief());
+    expect(result.request).toBe(`${first}\n부산 2박3일`);
   });
 
   it("preserves exact preference text across several answers and idempotent retries", () => {

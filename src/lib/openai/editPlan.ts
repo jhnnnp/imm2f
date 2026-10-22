@@ -19,11 +19,6 @@ type EditPayload = {
   }>;
 };
 
-function editMinutes(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 30 && value <= 240
-    && value % 10 === 0 ? value : null;
-}
-
 function explicitlyRemovesAll(prompt: string, itemCount: number) {
   const remove = /빼|삭제|제외|지워|지우|없애|취소|비워|비우/.test(prompt);
   const negated = /(?:빼|삭제하|제외하|지우|없애|취소하|비우)지\s*(?:말|않)|(?:삭제|제외|취소)\s*(?:금지|하지\s*마)/.test(prompt);
@@ -51,8 +46,6 @@ export async function proposePlanEditsWithOpenAi(input: {
     id: item.id,
     name: item.placeName,
     category: item.category,
-    startTime: item.startTime,
-    durationMinutes: item.durationMinutes,
   }));
 
   try {
@@ -66,9 +59,9 @@ export async function proposePlanEditsWithOpenAi(input: {
           content: [
             "You edit an existing couple plan. Never invent places, addresses, coordinates, prices, distances, travel times, or new item ids.",
             "Only propose changes for provided item ids.",
-            "Allowed change types: remove, duration.",
-            "For duration, minutes must be 30-240 in steps of 10.",
-            "JSON shape: {\"changes\":[{\"type\":\"remove\",\"itemId\":\"...\"},{\"type\":\"duration\",\"itemId\":\"...\",\"minutes\":90}]}",
+            "The plan is a list of places in visiting order. Do not create or edit clocks, stay durations or budgets.",
+            "Only remove places the user wants excluded. Do not remove a place to satisfy an unrelated time or duration request.",
+            "JSON shape: {\"changes\":[{\"type\":\"remove\",\"itemId\":\"...\"}]}",
             "Return 1-4 useful changes. If the request cannot be fulfilled with existing items, return {\"changes\":[]}.",
           ].join(" "),
         },
@@ -103,18 +96,6 @@ export async function proposePlanEditsWithOpenAi(input: {
           detail: "일정에서 이 장소를 제외합니다.",
         });
         continue;
-      }
-      if (row.type === "duration") {
-        const minutes = editMinutes(row.minutes);
-        if (minutes === null || minutes === item.durationMinutes) continue;
-        seen.add(itemId);
-        changes.push({
-          type: "duration",
-          itemId,
-          minutes,
-          label: item.placeName,
-          detail: `머무는 시간 ${item.durationMinutes}분 → ${minutes}분`,
-        });
       }
     }
 

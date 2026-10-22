@@ -48,19 +48,19 @@ describe("conversational planner intake", () => {
     expect(plannerEntryIntake({ kind: "trip", message: "카페 추천해줘", state: withAreas(emptyDateBrief(), ["제주"]) })).toBeNull();
   });
 
-  it("asks an attendance date only for scheduled itinerary experiences without a selected date", () => {
+  it("recommends performance venues without requiring an attendance date", () => {
     const request = { kind: "date" as const, message: "성수에서 연극 보고 저녁 데이트 코스 짜줘", state: emptyDateBrief() };
-    expect(plannerEntryIntake(request)?.slot).toBe("date");
+    expect(plannerEntryIntake(request)).toBeNull();
     expect(plannerEntryIntake({ ...request, dateLabel: "2026-10-24" })).toBeNull();
     expect(plannerEntryIntake({ ...request, message: `${request.message}\n2026-10-25` })).toBeNull();
     expect(plannerEntryIntake({ ...request, message: "성수 조용한 카페 추천해줘" })).toBeNull();
   });
 
-  it("collects only missing route details and permits a local-only course", () => {
+  it("recommends a route without requiring transport or departure details", () => {
     const request = { kind: "trip" as const, message: "부산 1박2일 여행 일정과 가는 법 알려줘", state: emptyDateBrief() };
-    expect(plannerEntryIntake(request)?.slot).toBe("transport");
+    expect(plannerEntryIntake(request)).toBeNull();
     const transport = { ...request, message: `${request.message}\n대중교통으로 갈게` };
-    expect(plannerEntryIntake(transport)?.slot).toBe("origin");
+    expect(plannerEntryIntake(transport)).toBeNull();
     const complete = { ...transport, message: `${transport.message}\n서울역에서 출발` };
     expect(plannerEntryIntake(complete)).toBeNull();
     expect(plannerEntryIntake({ ...transport, message: `${transport.message}\n현지 코스만 추천해줘` })).toBeNull();
@@ -74,11 +74,9 @@ describe("conversational planner intake", () => {
   });
 
   it.each(["출발지는 아직 미정", "출발지부터 고려한 경로로 짜줘", "출발지는 정해지지 않았어"])
-  ("still asks for a missing origin after route metadata: %s", detail => {
+  ("does not block venue recommendations on unspecified departure details: %s", detail => {
     const message = `부산 1박2일 여행 일정과 가는 법 알려줘\n대중교통으로 갈게\n${detail}`;
-    const result = plannerEntryIntake({ kind: "trip", message, state: emptyDateBrief() });
-    expect(result?.slot).toBe("origin");
-    expect(result?.state.areas).toEqual(["부산"]);
+    expect(plannerEntryIntake({ kind: "trip", message, state: emptyDateBrief() })).toBeNull();
   });
 
   it("completes route intake with a terminal answer without replacing the destination", () => {

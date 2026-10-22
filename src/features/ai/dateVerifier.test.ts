@@ -14,6 +14,15 @@ const route = (meters: number, seconds: number): FootRoute =>
   ({ provider: "osm_foot", meters, seconds, legs: [{ meters, seconds }] });
 
 describe("date itinerary verifier", () => {
+  it("checks route distance without fitting invented times in place-and-route mode", () => {
+    const state = { ...emptyDateBrief(), routeOnly: true, startTime: "23:00", endTime: "23:01" };
+    const valid = verifyDateItinerary({ course, candidates: [], state, condition, route: route(500, 86400) });
+    expect(valid.passed).toBe(true);
+    expect(valid.scheduledRows).toBeUndefined();
+    const excessive = verifyDateItinerary({ course, candidates: [], state, condition, route: route(3300, 60) });
+    expect(excessive.passed).toBe(false);
+    expect(excessive.hardIssues.some(issue => issue.code === "actual_route_limit")).toBe(true);
+  });
   it("checks walking time against the reserved gap", () => {
     expect(routeLegsFitSchedule(course.rows, [{ meters: 700, seconds: 1200 }])).toBe(true);
     expect(routeLegsFitSchedule(course.rows, [{ meters: 700, seconds: 1900 }])).toBe(false);

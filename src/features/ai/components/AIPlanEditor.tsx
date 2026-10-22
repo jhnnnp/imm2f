@@ -24,12 +24,11 @@ import {
   withAreaScope,
   withCuisine,
   withStayKind,
-  withTimeWindow,
 } from "../dateBrief";
 import { isCourseQuickAction } from "../dateCourse";
 import { isQuestion, pendingLabelFor } from "../chatRoute";
 import { isExplorationConversationAside, plannerEntryIntake, plannerEntryState, plannerWelcomeCard, requestsCandidateExploration, requestsDirectPlanning } from "../chatEntry";
-import { isPlannerOriginAnswer, resumePlannerDialogue, startsNewPlannerDialogue, type PendingPlannerDialogue, type PlannerDialogueSlot } from "../plannerDialogueState";
+import { answersPlannerDialogue, resumePlannerDialogue, startsNewPlannerDialogue, type PendingPlannerDialogue, type PlannerDialogueSlot } from "../plannerDialogueState";
 import type { AIChatCard, AIChatStop, AIPlannerReply, AIPlannerState, DateIntakeSlot, PlanChange, PlanItem, PlanKind } from "@/features/planning/types/plan";
 import type { Place } from "@/features/places/types/place";
 import { plannerStateFromSeed } from "@/features/taste/compare";
@@ -60,7 +59,7 @@ function sourceHost(url: string) {
   }
 }
 
-const EDIT_PROMPT = "일정이 조금 빡센 것 같아. 한곳 빼고 남는 곳은 더 여유롭게 해줘.";
+const EDIT_PROMPT = "이 코스에서 마지막 장소를 빼줘.";
 const GENERATE_PLACEHOLDER = "동네와 하고 싶은 일을 말해 주세요";
 const COURSE_PLACEHOLDER = "예: 식당 변경 해줘 · 1번 주차 돼?";
 
@@ -107,23 +106,19 @@ function slotPrompt(slot: DateIntakeSlot, state?: AIPlannerState): ChoicePrompt 
 }
 
 function applySlot(kind: ChoicePrompt["kind"], choices: string[], state: AIPlannerState): AIPlannerState {
-  if (kind === "date" || kind === "origin" || kind === "transport") return { ...state, pendingSlot: null };
   if (kind === "activity") return { ...withActivities(state, choices.filter(choice => choice !== "추천에 맡기기")), intakeFocusDone: true };
   if (kind === "area") return withAreas(state, choices);
   if (kind === "scope") return withAreaScope(state, choices[0] ?? "");
   if (kind === "span") return withStayKind(state, choices[0] ?? "");
-  if (kind === "time") return withTimeWindow(state, choices[0] ?? "");
   if (kind === "cuisine") return withCuisine(state, choices[0] ?? "");
   return { ...state, indoorPlay: choices[0] ?? null, pendingSlot: null };
 }
 
 function slotUserText(kind: ChoicePrompt["kind"], choices: string[]) {
-  if (kind === "date" || kind === "origin" || kind === "transport") return choices[0] ?? "";
   if (kind === "activity") return choices.includes("추천에 맡기기") ? "데이트 취향은 추천에 맡길게" : `${choices.join(", ")} 중심으로 데이트하고 싶어`;
   if (kind === "area") return `${choices.join(", ")} 쪽이 좋아`;
   if (kind === "scope") return choices[0] ?? "주변 범위를 정했어";
   if (kind === "span") return `${choices[0] ?? "데이트"}로 짜줘`;
-  if (kind === "time") return choices[0] === "상관없음" ? "시간은 상관없어" : `${choices[0]} 시작하면 좋겠어`;
   if (kind === "cuisine") return choices[0] === "상관없음" ? "식사는 알아서 골라줘" : `${choices[0]} 먹고 싶어`;
   return choices[0] === "상관없음" ? "실내는 알아서 골라줘" : `${choices[0]} 하고 싶어`;
 }
@@ -160,13 +155,12 @@ function CoursePlacePeek({ stop, onClose }: { stop: AIChatStop; onClose: () => v
       </div>
       {stop.reason ? <p className="ai-place-peek-reason">{stop.reason}</p> : null}
       {stop.coordinates ? <PlaceLocationMap name={stop.name} coordinates={stop.coordinates} /> : null}
-      {(stop.address || phone || stop.openingHours || stop.rating != null || stop.dishes) ? (
+      {(stop.address || phone || stop.rating != null || stop.dishes) ? (
         <dl className="ai-place-peek-facts">
           {stop.rating != null ? <div><dt>평점</dt><dd>{stop.rating}점{stop.ratingCount ? ` · 후기 ${stop.ratingCount}` : ""}</dd></div> : null}
           {stop.dishes ? <div><dt>음식</dt><dd>{stop.dishes}</dd></div> : null}
           {stop.factSourceUrl && sourceHost(stop.factSourceUrl) ? <div><dt>출처</dt><dd><a href={stop.factSourceUrl} target="_blank" rel="noopener noreferrer">{sourceHost(stop.factSourceUrl)}</a></dd></div> : null}
           {stop.address ? <div><dt>주소</dt><dd>{stop.address}</dd></div> : null}
-          {stop.openingHours ? <div><dt>{stop.source === "tourapi" ? "기간" : "이용시간"}</dt><dd>{stop.openingHours}</dd></div> : null}
           {phone ? <div><dt>전화</dt><dd><a href={`tel:${phone}`}>{stop.phone}</a></dd></div> : null}
         </dl>
       ) : null}
@@ -262,7 +256,6 @@ function AssistantCard({
                         {stop.isSaved ? <span className="ai-stop-saved">저장한 곳</span> : null}
                       </strong>
                       <small className="ai-stop-meta">{stop.meta}</small>
-                      {stop.startTime ? <small className="ai-stop-time">{stop.startTime}{stop.durationMinutes ? ` · 약 ${stop.durationMinutes}분` : ""}</small> : null}
                       {stop.reason && stop.reason !== stop.meta ? <small className="ai-stop-reason">{stop.reason}</small> : null}
                       <small className="ai-stop-cue">{open ? "장소 정보 닫기" : "장소 정보 보기"}</small>
                     </span>
@@ -332,7 +325,7 @@ export function AIPlanEditor({
   candidateExplorationActive?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>(kind === "date" ? "generate" : items.length ? "edit" : "generate");
-  const [editPrompt, setEditPrompt] = useState(() => items.length <= 1 ? "이 장소에서 여유롭게 머물 수 있도록 체류 시간을 조정해줘." : EDIT_PROMPT);
+  const [editPrompt, setEditPrompt] = useState(EDIT_PROMPT);
   const [generatePrompt, setGeneratePrompt] = useState(() => tasteSeed?.prompt ?? "");
   const [phase, setPhase] = useState<"idle" | "loading" | "preview">("idle");
   const [changes, setChanges] = useState<PlanChange[]>([]);
@@ -687,14 +680,15 @@ export function AIPlanEditor({
       setPhase("idle");
       return;
     }
-    if (!result.changes.length) {
-      setError(result.summary || "바꿀 항목을 찾지 못했어요.");
+    const placeChanges = result.changes.filter(change => change.type === "remove");
+    if (!placeChanges.length) {
+      setError("제외할 장소를 찾지 못했어요. 빼고 싶은 장소를 알려 주세요.");
       setPhase("idle");
       return;
     }
-    setChanges(result.changes);
-    setSummary(result.summary);
-    setSelected(result.changes.map(() => true));
+    setChanges(placeChanges);
+    setSummary("선택한 장소를 코스에서 제외합니다.");
+    setSelected(placeChanges.map(() => true));
     setPhase("preview");
   }
 
@@ -921,16 +915,11 @@ export function AIPlanEditor({
     const submittedText = message.trim();
     const entryText = submittedText || displayText?.trim() || "";
     const displayedRequest = displayText || submittedText;
-    const pendingDialogueSlot = pendingIntakeRequestRef.current?.slot;
-    const transportAnswer = pendingDialogueSlot === "transport"
-      && /^(?:대중교통|지하철|버스|자가용|렌터카|차|도보|걸어서|택시)(?:으로|로)?\s*(?:갈게|갈래|이동할게|갈\s*거야)?[.!~]*$/.test(entryText);
-    const originAnswer = pendingDialogueSlot === "origin" && isPlannerOriginAnswer(entryText);
+    const pendingAnswer = pendingIntakeRequestRef.current
+      ? answersPlannerDialogue(pendingIntakeRequestRef.current.slot, entryText) : false;
     const resumingIntake = Boolean(pendingIntakeRequestRef.current && !isExplorationConversationAside(entryText)
-      && !/^\s*왜/.test(entryText) && (!isQuestion(entryText, false) || transportAnswer || originAnswer));
-    const answerText = resumingIntake && pendingDialogueSlot === "origin" && /^[가-힣A-Za-z0-9· -]{2,35}$/.test(entryText)
-      && !/출발|현지|추천|코스|일정|모르|아직/.test(entryText)
-      ? `${entryText}${/(?:에서|부터)$/.test(entryText) ? "" : "에서"} 출발` : entryText;
-    const dialogue = resumePlannerDialogue(resumingIntake ? pendingIntakeRequestRef.current!.turns : [], answerText, nextState);
+      && !/^\s*왜/.test(entryText) && (!isQuestion(entryText, false) || pendingAnswer));
+    const dialogue = resumePlannerDialogue(resumingIntake ? pendingIntakeRequestRef.current!.turns : [], entryText, nextState);
     const request = resumingIntake ? dialogue.request : submittedText;
     const intakeContext = dialogue.turns.join("\n");
     if (resumingIntake || startsNewPlannerDialogue(entryText)) nextState = dialogue.state;
@@ -1097,6 +1086,12 @@ export function AIPlanEditor({
         explorationSelectionRef.current = [];
       }
       setPlannerState(result.state);
+      if ((result.status === "clarification" || result.status === "chat") && result.slot === "time") {
+        setPlannerState({ ...result.state, pendingSlot: null });
+        setChoicePrompt(null);
+        setGeneratePrompt(request);
+        return;
+      }
       if (result.status === "clarification") {
         setConversation(current => [...current, { role: "assistant", text: result.message, card: { ...result.card, suggestions: result.options } }]);
         setChoicePrompt({ options: result.options, multiple: result.multiple, kind: result.slot });
@@ -1472,12 +1467,10 @@ export function AIPlanEditor({
 
       <p className="form-hint ai-disclaimer">
         {mode === "generate"
-          ? recommendation?.design?.routeBasis === "walking"
-            ? "확인된 도보 경로로 이동 시간을 계산했어요. 현장 상황에 따라 달라질 수 있어요."
-            : recommendation
-              ? "이동 시간은 추정이에요. 영업시간과 현장 상황을 확인한 뒤 일정에 담아 주세요."
-              : "원하는 장소나 경험을 말하면 함께 계획해요. ‘장소 후보부터 찾아줘’로 먼저 골라볼 수도 있어요."
-          : "이미 담긴 일정만 삭제하거나 체류 시간을 조정합니다."}
+          ? recommendation
+            ? "마음에 드는 장소를 살펴보고 방문 순서를 바꿔 보세요."
+            : "원하는 장소나 경험을 말하면 함께 계획해요. ‘장소 후보부터 찾아줘’로 먼저 골라볼 수도 있어요."
+          : "이미 담긴 코스에서 빼고 싶은 장소를 알려 주세요."}
       </p>
     </div>
   );

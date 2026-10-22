@@ -37,7 +37,6 @@ import { placeToCandidate } from "@/features/places/discover";
 import { listArchivedDatePlans } from "@/features/planning/actions";
 import {
   areaScopeMeters,
-  assumedTimeWindow,
   applyDateDefaults,
   expandedSearchRegions,
   matchesActivity,
@@ -102,7 +101,7 @@ import { emptySessionCandidates, mergeSessionCandidates, sealSessionCandidates, 
   verifiedSessionCandidates, type SessionCandidateContext } from "./sessionCandidates";
 import { candidateSessionObservation } from "./dateObservation";
 import { buildDateTurnUnderstanding } from "./dateTurnUnderstanding";
-import { tripLocalWindows, unsupportedCourseRequest } from "./planningSupport";
+import { unsupportedCourseRequest } from "./planningSupport";
 import { courseMutationProblems } from "./courseMutation";
 import type { ChatRoute } from "./chatRoute";
 import { recommendPlacesWithOpenAi } from "@/lib/openai/recommendPlaces";
@@ -1030,6 +1029,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   if (courseEdit && input.currentPlan?.items.length && input.currentPlan.items.length === input.currentPlan.recommendations.length) {
     return withLimitedTasks(() => editCurrentCourse(input.currentPlan!, courseEdit!, {
       ...interpretation.state,
+      routeOnly: true,
       userRequests: [...(filledPrevious?.userRequests ?? []), message].filter(Boolean).slice(-MAX_CONVERSATION_NOTES),
     }), interpretation.state);
   }
@@ -1070,7 +1070,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     return clarificationReply(slot, interpreted, card);
   }
 
-  let state = applyDateDefaults(interpreted);
+  let state: AIPlannerState = { ...applyDateDefaults(interpreted), routeOnly: true,
+    startTime: null, endTime: null, budgetWon: null };
   if (planningInput) state = { ...state, pace: planningInput.preferences.pace };
   const rejectedCandidateIds = new Set((rejectedCandidateIdList
     ?? sessionCapture?.previous?.rejectedCandidateIds ?? [])
@@ -1155,15 +1156,13 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   state = applyDateMemory(applyCouplePersonalization(state, couplePersonalization), memory);
   const discoveryDone = performance.now();
   const radius = areaScopeMeters(state);
-  const time = assumedTimeWindow(state);
-  const explicitTripWindows = tripLocalWindows(state.userRequests ?? [], courseSize(state).days);
   const condition = {
     dateLabel: state.dateLabel || "날짜 미정",
-    startTime: time.startTime,
-    endTime: time.endTime,
+    startTime: "00:00",
+    endTime: "23:59",
     budget: null,
     region: selectedRegions.join(" · "),
-    timeSpecified: time.specified || Object.keys(explicitTripWindows).length > 0,
+    timeSpecified: false,
   };
   const recentlyVisited = [...recentPlaceNames(archives.dates)];
   const keywordIntents: DateSearchIntent[] = primarySearchIntents(researchActive, researchPlan,
@@ -1423,7 +1422,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   const wantedSlots = discovery;
   const poolSlots = () => new Set(pool.map(candidateActivitySlot));
   const attemptedResearch = new Set(keywordIntents.map(intent => `${intent.region}:${intent.query}`));
-  const taskPlan = researchActive ? { objectives: dateTaskObjectives(state), steps: [],
+  const initialPoolCoversDiscovery = pool.length >= 8
+    && missingWantedSlots(poolSlots(), discoveryBrief.requiredActivities).length === 0;
+  const taskPlan = researchActive || initialPoolCoversDiscovery ? { objectives: dateTaskObjectives(state), steps: [],
     stopReason: "satisfied" as const, unresolvedActivities: [] } : await runDateTaskPlanner({
     state, regions: selectedRegions, attempted: attemptedResearch,
     canVerifyPerformances: Boolean(process.env.KOPIS_SERVICE_KEY?.trim()),
@@ -1641,14 +1642,15 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   }
   const semanticPlanningHints = semanticPlanningHintsForContext(dateContext);
   const designRuntime = dateDesignRuntime(undefined, { timeoutMs: 35000 });
+  const attemptedVenueEvidenceIds = new Set(researched.map(dateCandidateKey));
   const proposeCourse = (courseCandidates: DiscoverCandidate[], repairAssessment?: DateQualityAssessment) => recommendDatePlanWithOpenAi({
     traceId,
     prompt: message || `${condition.region}에서 ${state.activities.join(", ") || "하루"} 데이트`,
     condition,
     candidates: courseCandidates,
-    // Only these exact IDs were researched concurrently with provider details.
-    // TourAPI overviews arrive through hydration; new repair venues still get research.
-    venueResearchPreparedIds: researched.map(dateCandidateKey),
+    // Reuse exact IDs attempted earlier in this request, including targeted
+    // repair research. New, unattempted repair venues still need evidence.
+    venueResearchPreparedIds: [...attemptedVenueEvidenceIds],
     anchorCandidateIds: selectedAnchorIds,
     saved,
     state,
@@ -1713,8 +1715,12 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
         ...discoveryCatalog(withEvidence, state, rankContext.savedPositive, 20),
       ].map(candidate => [dateCandidateKey(candidate), candidate])).values()];
       const [details, events] = await Promise.all([
-        hydrateDateCandidates(catalog, saved).then(venues => assessment?.researchNeeds.length
-          ? enrichResearchNeedEvidence(venues, state, assessment.researchNeeds, 2, designRuntime.signal, true) : venues),
+        hydrateDateCandidates(catalog, saved).then(venues => {
+          if (!assessment?.researchNeeds.length) return venues;
+          const currentIds = new Set(venues.map(dateCandidateKey));
+          return enrichResearchNeedEvidence(venues, state, assessment.researchNeeds, 2, designRuntime.signal, true,
+            attemptedIds => attemptedIds.filter(id => currentIds.has(id)).forEach(id => attemptedVenueEvidenceIds.add(id)));
+        }),
         attachKopisPerformances(catalog, state.dateLabel, courseSize(state).days),
       ]);
       const eventsById = new Map(events.filter(candidate => candidate.performanceEvent)

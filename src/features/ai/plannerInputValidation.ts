@@ -51,7 +51,7 @@ export function validPlannerState(value: unknown): value is AIPlannerState {
     || !nullable(value.dateLabel, text) || !nullable(value.indoorPlay, text)) return false;
   if (!["objective"].every(key => optional(value[key], text))
     || !["excludedFoods", "userRequests", "shownPlaces", "seenPlaces"].every(key => optional(value[key], strings))
-    || !["foodAllergy", "intakeFocusDone"].every(key => optional(value[key], item => typeof item === "boolean"))
+    || !["foodAllergy", "intakeFocusDone", "routeOnly"].every(key => optional(value[key], item => typeof item === "boolean"))
     || !optional(value.budgetWon, item => nullable(item, number))
     || !optional(value.walkingPreference, item => nullable(item, entry => entry === "short"))) return false;
   if (!optional(value.placeAsk, item => nullable(item, ask => object(ask) && choice(ask.kind,

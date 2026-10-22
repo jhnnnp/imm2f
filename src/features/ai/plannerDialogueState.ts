@@ -1,29 +1,15 @@
 import type { AIPlannerState } from "@/features/planning/types/plan";
-import { emptyDateBrief } from "./dateBrief";
+import { emptyDateBrief, extractRequestedAreasFromText, extractStay } from "./dateBrief";
 
-export type PlannerDialogueSlot = "area" | "span" | "date" | "transport" | "origin";
+export type PlannerDialogueSlot = "area" | "span";
 
 export type PendingPlannerDialogue = { turns: string[]; slot: PlannerDialogueSlot };
 
-const UNKNOWN_ORIGIN = /^(?:아직|미정|모르|정하지|못\s*정|없|어디|어느|추천|골라|정해|나중|추후|고려|출발지|목적지|도착지|현지|그곳|여기|거기|저기)/;
-
-/** A reference to the departure field is not a supplied departure place. */
-export function hasPlannerOrigin(message: string) {
-  const departures = [...message.matchAll(/([^\s,，;.!?。\n]{2,35})(?:에서|부터)\s*출발/g)]
-    .map(match => match[1]);
-  const labelled = [...message.matchAll(/출발(?:지|하는\s*곳)(?:\s*(?:는|은|:)\s*|\s+)([^,，;.!?。\n]{2,60})/g)]
-    .map(match => match[1].trim());
-  return [...departures, ...labelled].some(origin => !UNKNOWN_ORIGIN.test(origin)
-    && !/^(?:대중교통|지하철|버스|자가용|렌터카|도보|택시)(?:으로|로)?$/.test(origin));
-}
-
-/** Transport words in a terminal name must not turn an origin answer into a
- * detour question. Actual questions stay available during intake. */
-export function isPlannerOriginAnswer(message: string) {
-  const text = message.trim();
-  if (/[?？]|어디|어느|어떻게|뭐가|뭘|나아|낫|어때|갈까|탈까|좋을까|있(?:어|나|을까)|될까|인가|일까|몇\s*시|얼마|추천|알려|정해/.test(text)) return false;
-  return hasPlannerOrigin(text)
-    || /^[가-힣A-Za-z0-9· ()-]{2,60}(?:역|터미널|정류장|정류소|공항|항구|버스센터|환승센터)(?:\s*(?:근처|앞|입구))?(?:에서|부터)?[.!~]*$/.test(text);
+/** A region or trip-length answer can include optional preferences such as
+ * transport. Those words alone do not turn the answer into a new question. */
+export function answersPlannerDialogue(slot: PlannerDialogueSlot, message: string) {
+  if (/[?？]|어떻게|어느|언제|뭐가|뭘|나아|낫|어때|좋을까|알려|추천해|왜/.test(message)) return false;
+  return slot === "area" ? extractRequestedAreasFromText(message).length > 0 : Boolean(extractStay(message));
 }
 
 export function startsNewPlannerDialogue(message: string) {

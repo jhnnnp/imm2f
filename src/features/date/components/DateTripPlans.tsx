@@ -33,7 +33,7 @@ export function DateTripPlans({ days, selectedDate }: { days: TripDayPlan[]; sel
                   <li key={item.id}>
                     <span className={styles.number} aria-hidden="true">{index + 1}</span>
                     <div className={styles.placeBody}>
-                      <div className={styles.placeMeta}>{item.category && <span>{item.category}</span>}{item.startTime && <span>{item.startTime}</span>}{item.durationMinutes > 0 && <span>{item.durationMinutes}분 머무르기</span>}</div>
+                      {item.category && <div className={styles.placeMeta}><span>{item.category}</span></div>}
                       <h4>{item.placeName}</h4>
                       {item.memo && <ExpandableText className={styles.memo} text={item.memo} lines={4} label={`${item.placeName} 설명`} />}
                     </div>

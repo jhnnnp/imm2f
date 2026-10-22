@@ -589,6 +589,7 @@ export function DatePlanner({
               <div className="date-plan-body">
                 <PlanTimeline
                   items={items}
+                  showTime={false}
                   columns={items.length >= 3 ? 2 : 1}
                   variant="letter"
                   onReorder={persist}
@@ -608,7 +609,7 @@ export function DatePlanner({
                 scheduleNotesSave(event.target.value);
               }}
               onBlur={() => { if (unsavedTextRef.current && !switchingRef.current && !recordingRef.current) void saveNotes(notesRef.current); }}
-              placeholder="몇 시에 만날지, 비가 오면 어디로 갈지"
+              placeholder="가고 싶은 장소, 함께 하고 싶은 것"
               rows={3}
             />
             <span className={`memo-save-state is-${notesSaveState}`} role="status">

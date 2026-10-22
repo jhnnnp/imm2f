@@ -39,13 +39,13 @@ function candidateEvidenceLinks(card: ExplorationCard) {
 
 function candidateVisitChecks(group: ExplorationActivity) {
   switch (group) {
-    case "meal": return "방문 전 영업시간, 메뉴·가격과 대기 여부를 확인해 주세요.";
-    case "cafe": return "방문 전 영업시간, 메뉴·가격과 원하는 좌석·공간 조건을 확인해 주세요.";
-    case "nightview": return "방문 전 야간 개방 여부, 이용 시간과 접근 경로를 확인해 주세요.";
+    case "meal": return "메뉴와 분위기, 대기 여부를 살펴보세요.";
+    case "cafe": return "메뉴와 좌석, 원하는 공간인지 살펴보세요.";
+    case "nightview": return "야간 개방 여부와 접근 경로를 살펴보세요.";
     case "beach": case "nature": return "방문 전 접근 경로와 현장·날씨 상황을 확인해 주세요.";
-    case "culture": case "festival": return "방문일의 운영·행사 일정, 입장료와 예약 여부를 확인해 주세요.";
-    case "experience": return "방문 전 체험 프로그램, 소요 시간과 예약 가능 여부를 확인해 주세요.";
-    case "shopping": return "방문 전 영업시간과 원하는 매장·상품이 있는지 확인해 주세요.";
+    case "culture": case "festival": return "관심 있는 전시·프로그램과 예약 여부를 살펴보세요.";
+    case "experience": return "체험 프로그램과 예약 여부를 살펴보세요.";
+    case "shopping": return "원하는 매장과 상품이 있는지 살펴보세요.";
   }
 }
 
@@ -157,7 +157,7 @@ export function CandidateExplorationPanel({ area, nights, preferences, onPrefere
       <header className="candidate-results-head"><div><span className="eyebrow">YOUR PLACE SHORTLIST</span>
         <h3>{area} · {nights > 0 ? `${nights}박${nights + 1}일` : "하루"}</h3>
         <p>{planned ? "선택한 장소를 반영한 일정을 아래에서 확인하세요. 후보는 여기서 다시 살펴볼 수 있어요."
-          : "마음에 드는 곳을 개수 제한 없이 골라 주세요. 선택한 장소와 이동 시간을 함께 고려해 일정을 만들어요."}</p></div>
+          : "마음에 드는 곳을 개수 제한 없이 골라 주세요. 선택한 장소의 방문 순서와 동선을 정리해요."}</p></div>
         <button type="button" onClick={onEdit} disabled={busy}>조건 수정</button></header>
       {nights > 6 && <p className="candidate-duration-note" role="status">
         {nights}박 {nights + 1}일 후보 탐색 중입니다. 전체 일정 생성은 현재 최대 6박 7일까지 지원합니다.
