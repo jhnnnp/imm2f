@@ -3,6 +3,12 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 export type Database = {
   public: {
     Tables: {
+      couple_key_dates: {
+        Row: { couple_id: string; relationship_started_on: string | null; birthdays: Json; revision: number; onboarding_completed: boolean; updated_by: string | null; updated_at: string };
+        Insert: { couple_id: string; relationship_started_on?: string | null; birthdays?: Json; revision?: number; onboarding_completed?: boolean; updated_by?: string | null; updated_at?: string };
+        Update: { relationship_started_on?: string | null; birthdays?: Json; revision?: number; onboarding_completed?: boolean; updated_by?: string | null; updated_at?: string };
+        Relationships: [];
+      };
       couple_folders: {
         Row: { id: string; couple_id: string; scope: "vault" | "places"; name: string; color: "sage" | "blue" | "rose" | "sand" | "lavender"; created_at: string; updated_at: string };
         Insert: { id?: string; couple_id: string; scope: "vault" | "places"; name: string; color?: "sage" | "blue" | "rose" | "sand" | "lavender"; created_at?: string; updated_at?: string };
@@ -793,6 +799,10 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      save_couple_key_dates: {
+        Args: { target_couple: string; expected_revision: number; started_on: string | null; birthday_entries: Json; complete_onboarding: boolean };
+        Returns: Database["public"]["Tables"]["couple_key_dates"]["Row"][];
+      };
       reschedule_couple_trip: {
         Args: { target_start_date: string; expected_revision: number; expected_target_updated_at?: string | null; expected_couple_id?: string | null };
         Returns: Json;

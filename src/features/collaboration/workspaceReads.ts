@@ -4,6 +4,7 @@ import { listArchivedDatePlans, listArchivedTripPlans, listDateDrafts, loadCoupl
 import { listMemories, listMemoryCalendarMarks } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
 import { withWorkspaceRead } from "@/lib/supabase/readContext";
+import { readCoupleKeyDates } from "@/features/couple/keyDateActions";
 import { projectTripDayPlans } from "@/features/date/tripDayPlans";
 
 // Browser-dispatched Server Actions are queued. Fan out reads inside one action instead.
@@ -23,10 +24,10 @@ export async function readDateWorkspace() {
 
 export async function readCalendarWorkspace() {
   return withWorkspaceRead(async () => {
-    const [travel, date, drafts, memories, archives] = await Promise.all([
-      readTripDate(), loadCouplePlan("date"), listDateDrafts(), listMemoryCalendarMarks(), listArchivedTripPlans(),
+    const [travel, date, drafts, memories, archives, dates] = await Promise.all([
+      readTripDate(), loadCouplePlan("date"), listDateDrafts(), listMemoryCalendarMarks(), listArchivedTripPlans(), readCoupleKeyDates(),
     ]);
-    return { trip: travel.plan, date, drafts, memories, tripDrafts: travel.drafts, archives };
+    return { trip: travel.plan, date, drafts, memories, tripDrafts: travel.drafts, archives, keyDates: dates.dates };
   });
 }
 

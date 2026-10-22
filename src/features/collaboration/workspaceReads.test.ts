@@ -2,11 +2,12 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { getWorkspaceReadContext } from "@/lib/supabase/readContext";
 import { readCalendarWorkspace, readDateWorkspace, readMapWorkspace, readPlacesWorkspace, readTripWorkspace } from "./workspaceReads";
 
-const reads = vi.hoisted(() => ({ plan: vi.fn(), drafts: vi.fn(), dates: vi.fn(), trips: vi.fn(), tripDrafts: vi.fn(), tripDate: vi.fn(), places: vi.fn(), memories: vi.fn(), marks: vi.fn(), project: vi.fn() }));
+const reads = vi.hoisted(() => ({ plan: vi.fn(), drafts: vi.fn(), dates: vi.fn(), trips: vi.fn(), tripDrafts: vi.fn(), tripDate: vi.fn(), places: vi.fn(), memories: vi.fn(), marks: vi.fn(), project: vi.fn(), keyDates: vi.fn() }));
 vi.mock("@/features/planning/actions", () => ({ loadCouplePlan: reads.plan, listDateDrafts: reads.drafts, listArchivedDatePlans: reads.dates, listArchivedTripPlans: reads.trips, listTripDrafts: reads.tripDrafts, readTripDate: reads.tripDate }));
 vi.mock("@/features/places/actions", () => ({ listPlaces: reads.places }));
 vi.mock("@/features/memories/actions", () => ({ listMemories: reads.memories, listMemoryCalendarMarks: reads.marks }));
 vi.mock("@/features/date/tripDayPlans", () => ({ projectTripDayPlans: reads.project }));
+vi.mock("@/features/couple/keyDateActions", () => ({ readCoupleKeyDates: reads.keyDates }));
 const contexts: unknown[] = [];
 beforeEach(() => {
   contexts.length = 0;
@@ -20,6 +21,7 @@ beforeEach(() => {
   reads.tripDate.mockImplementation((startDate?: string | null) => result({ plan: startDate === undefined ? { kind: "trip", revision: "new" } : { startDate, revision: "active" }, drafts: [{ startDate: "2026-11-01" }] }));
   reads.places.mockImplementation(() => result({ persist: true, places: [{ id: "place" }] }));
   reads.memories.mockImplementation(() => result({ persist: true, memories: [{ id: "memory" }] }));
+  reads.keyDates.mockImplementation(() => result({ dates: { relationshipStartedOn: null, birthdays: [] } }));
   reads.project.mockReturnValue([{ id: "shared-trip-day" }]);
   reads.marks.mockImplementation(() => result([{ id: "mark" }]));
 });

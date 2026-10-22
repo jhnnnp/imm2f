@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, expect, it, vi } from "vitest";
 import type { CouplePlan, PlanItem } from "@/features/planning/types/plan";
 import type { ArchivedTripPlan } from "@/features/planning/actions";
+vi.mock("../usePublicHolidays", () => ({ usePublicHolidays: () => ({ holidays: [], source: "", loading: false, error: "", message: "", retry: vi.fn() }) }));
 vi.mock("@/features/collaboration/useSharedRefresh", () => ({ useSharedRefresh: () => vi.fn() }));
 vi.mock("@/features/collaboration/workspaceReads", () => ({ readCalendarWorkspace: vi.fn() }));
 vi.mock("@/lib/dates", async () => ({ ...await vi.importActual("@/lib/dates"), seoulTodayIso: () => "2026-10-11" }));

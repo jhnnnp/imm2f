@@ -19,7 +19,7 @@ const active = new Map<string, SharedSync>();
 // These tables are explicitly enabled in the repository's Realtime publication.
 // Domain writes announce themselves through activities; resume/poll repairs any
 // missed event without subscribing to unpublished or unscoped child tables.
-const COUPLE_TABLES = ["activities", "memory_wall_boards", "couple_folders", "couple_folder_items", "trip_drafts"];
+const COUPLE_TABLES = ["activities", "memory_wall_boards", "couple_folders", "couple_folder_items", "trip_drafts", "couple_key_dates"];
 
 /** Share one realtime channel and one set of browser listeners per account/space. */
 export function subscribeWorkspaceChanges(coupleId: string, listener: Listener, options: { refreshOnConnect?: boolean; userId?: string } = {}) {

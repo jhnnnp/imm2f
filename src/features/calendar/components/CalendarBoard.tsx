@@ -13,6 +13,11 @@ import type { TripDateSnapshot } from "@/features/trip/tripDates";
 import { tripDateRange } from "@/features/trip/tripDates";
 import { calendarTrips, tripsOnDate } from "../tripCalendar";
 import { useDialogFocus } from "@/components/shared/useDialogFocus";
+import { keyDateEvents, type CoupleKeyDates } from "../keyDateEvents";
+import { usePublicHolidays } from "../usePublicHolidays";
+import styles from "./CalendarBoard.module.css";
+
+const EMPTY_KEY_DATES: CoupleKeyDates = { relationshipStartedOn: null, birthdays: [] };
 
 type MemoryMark = { id: string; title: string; happenedOn: string };
 
@@ -31,6 +36,7 @@ export function CalendarBoard({
   drafts: initialDrafts,
   tripDrafts: initialTripDrafts = [],
   archives: initialArchives = [],
+  keyDates: initialKeyDates = EMPTY_KEY_DATES,
 }: {
   trip: CouplePlan;
   date: CouplePlan;
@@ -38,6 +44,7 @@ export function CalendarBoard({
   drafts: DateDaySnapshot[];
   tripDrafts?: TripDateSnapshot[];
   archives?: ArchivedTripPlan[];
+  keyDates?: CoupleKeyDates;
 }) {
   const [cursor, setCursor] = useState<Date | null>(null);
   const [todayIso, setTodayIso] = useState("");
@@ -51,18 +58,36 @@ export function CalendarBoard({
   const [tripArchives, setTripArchives] = useState(initialArchives);
   const [modalOpen, setModalOpen] = useState(false);
   const [syncError, setSyncError] = useState("");
+  const [sharedKeyDates, setSharedKeyDates] = useState(initialKeyDates);
+  useEffect(() => setSharedKeyDates(initialKeyDates), [initialKeyDates]);
+  const cells = useMemo(() => {
+    if (!cursor) return [];
+    const first = startOfMonth(cursor);
+    const pad = first.getDay();
+    const total = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+    return Array.from({ length: Math.ceil((pad + total) / 7) * 7 }, (_, index) => {
+      const date = new Date(cursor.getFullYear(), cursor.getMonth(), 1 - pad + index);
+      return { date, day: date.getDate(), iso: toIsoDate(date), outside: date.getMonth() !== cursor.getMonth() };
+    });
+  }, [cursor]);
+  const visibleYears = useMemo(() => [...new Set(cells.map(cell => cell.date.getFullYear()))], [cells]);
+  const holidays = usePublicHolidays(visibleYears);
+  const specialDays = useMemo(() => visibleYears.flatMap(year => keyDateEvents(sharedKeyDates, year)), [sharedKeyDates, visibleYears]);
+  const selectedSpecialDays = specialDays.filter(event => event.date === selected);
+  const selectedHolidays = holidays.holidays.filter(event => event.date === selected);
   const retrySync = useSharedRefresh(async ({ isCurrent }) => {
     try {
-      const { trip: nextTrip, date: nextDate, drafts: nextDrafts, memories: nextMemories, tripDrafts: nextTripDrafts, archives } = await readCalendarWorkspace();
+      const { trip: nextTrip, date: nextDate, drafts: nextDrafts, memories: nextMemories, tripDrafts: nextTripDrafts, archives, keyDates } = await readCalendarWorkspace();
       if (!isCurrent()) return;
       setTripPlan(nextTrip); setTripDrafts(nextTripDrafts); setTripArchives(archives);
       setDatePlan(nextDate); setDateStart(nextDate.startDate ?? "");
       setDrafts(nextDrafts); setMemories(nextMemories);
+      if (keyDates) setSharedKeyDates(keyDates);
       setSyncError("");
     } catch {
       if (isCurrent()) setSyncError("최신 약속을 불러오지 못했어요. 표시 중인 캘린더는 그대로 있어요.");
     }
-  }, { tables: ["activities", "trip_drafts"], activityPrefixes: ["DATE_", "TRIP_", "MEMORY_", "PARTNER_"] });
+  }, { tables: ["activities", "trip_drafts", "couple_key_dates"], activityPrefixes: ["DATE_", "TRIP_", "MEMORY_", "PARTNER_", "COUPLE_DATES_"] });
   const dateDays = useMemo(() => {
     const current = { date: dateStart, title: datePlan.title, notes: datePlan.notes, items: datePlan.items };
     return (dateStart && hasDateContent(current) ? upsertDateDay(drafts, current) : drafts).filter(hasDateContent);
@@ -118,20 +143,6 @@ export function CalendarBoard({
   }
 
   const view = cursor;
-  const first = startOfMonth(view);
-  const pad = (first.getDay() + 6) % 7;
-  const total = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
-  const cellCount = Math.ceil((pad + total) / 7) * 7;
-  const gridStart = new Date(view.getFullYear(), view.getMonth(), 1 - pad);
-  const cells = Array.from({ length: cellCount }, (_, index) => {
-    const cellDate = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index);
-    return {
-      date: cellDate,
-      day: cellDate.getDate(),
-      iso: toIsoDate(cellDate),
-      outside: cellDate.getMonth() !== view.getMonth(),
-    };
-  });
   const monthLabel = view.toLocaleDateString("ko-KR", { year: "numeric", month: "long" });
 
   function goToday() {
@@ -144,23 +155,31 @@ export function CalendarBoard({
   return (
     <>
     <SyncNotice message={syncError} onRetry={retrySync} />
-    <div className="calendar-layout">
-      <div className="calendar-grid">
+    <div className={`calendar-layout ${styles.layout}`}>
+      <section className={styles.dateNote} aria-label="우리의 중요한 날짜">
+        <div><span>DATES TO REMEMBER</span><h2>둘의 날짜를 오래 기억해요</h2><p>{sharedKeyDates.birthdays.length || sharedKeyDates.relationshipStartedOn ? "생일과 주년, 100일마다 찾아오는 기념일을 함께 챙겨요." : "두 사람의 생일과 사귄 날짜를 남기면 이 달력에 자동으로 모여요."}</p></div>
+        <Link href="/invite#our-dates">{sharedKeyDates.birthdays.length || sharedKeyDates.relationshipStartedOn ? "우리의 날짜 수정" : "생일·기념일 입력"}<span aria-hidden="true">↗</span></Link>
+      </section>
+      <SyncNotice message={holidays.error} onRetry={holidays.retry} />
+      <div className={`calendar-grid ${styles.sheet}`}>
         <div className="calendar-month-nav">
           <div className="calendar-month-controls">
-            <button type="button" className="calendar-nav-button" onClick={() => setCursor(current => (current ? shiftMonth(current, -1) : current))} aria-label="이전 달">‹</button>
+            <button type="button" className="calendar-nav-button" onClick={() => setCursor(current => (current ? shiftMonth(current, -1) : current))} aria-label="이전 달" disabled={view.getFullYear() <= 1900 && view.getMonth() === 0}>‹</button>
             <strong>{monthLabel}</strong>
-            <button type="button" className="calendar-nav-button" onClick={() => setCursor(current => (current ? shiftMonth(current, 1) : current))} aria-label="다음 달">›</button>
+            <button type="button" className="calendar-nav-button" onClick={() => setCursor(current => (current ? shiftMonth(current, 1) : current))} aria-label="다음 달" disabled={view.getFullYear() >= 2100 && view.getMonth() === 11}>›</button>
           </div>
           <button type="button" className="calendar-today-button" onClick={goToday}>오늘</button>
         </div>
-        <div className="week labels">{["월", "화", "수", "목", "금", "토", "일"].map(day => <span key={day}>{day}</span>)}</div>
+        <div className="week labels">{["일", "월", "화", "수", "목", "금", "토"].map(day => <span key={day}>{day}</span>)}</div>
         <div className="week dates calendar-dates">
           {cells.map(cell => {
             const iso = cell.iso;
             const isToday = iso === todayIso;
             const isSelected = iso === selected;
+            const dayHolidays = holidays.holidays.filter(event => event.date === iso);
             const marks = [
+              ...dayHolidays.map(holiday => ({ label: holiday.name, className: "is-holiday" })),
+              ...specialDays.filter(event => event.date === iso).map(event => ({ label: event.title, className: "is-special" })),
               tripsOnDate(trips, iso).length ? { label: "여행", className: "is-trip" } : null,
               dateDays.some(day => day.date === iso) ? { label: "데이트", className: "is-date" } : null,
               memories.some(item => item.happenedOn === iso) ? { label: "추억", className: "is-memory" } : null,
@@ -168,7 +187,7 @@ export function CalendarBoard({
             return (
               <button
                 type="button"
-                className={`${isToday ? "today-cell" : ""} ${isSelected ? "is-selected" : ""} ${cell.outside ? "is-outside" : ""}`}
+                className={`${isToday ? "today-cell" : ""} ${isSelected ? "is-selected" : ""} ${cell.outside ? "is-outside" : ""} ${dayHolidays.length ? "is-holiday" : ""}`}
                 key={iso}
                 aria-label={`${formatKoDate(iso)}${marks.length ? ` · ${marks.map(mark => mark?.label).join(", ")}` : " · 일정 없음"}`}
                 aria-current={isToday ? "date" : undefined}
@@ -189,6 +208,8 @@ export function CalendarBoard({
           })}
         </div>
       </div>
+      <div className={styles.legend} aria-label="캘린더 표시 안내"><span><i />공휴일</span><span><i />생일·기념일</span><span><i />우리의 약속과 기록</span></div>
+      <p className={styles.source} role="status">{holidays.loading ? "공식 공휴일 정보를 가져오고 있어요." : <>{holidays.source && <a href={holidays.source} target="_blank" rel="noreferrer">공휴일 출처 · 한국천문연구원 ↗</a>}{holidays.message ? ` · ${holidays.message}` : ""}</>}</p>
       {modalOpen && (
         <div className="calendar-modal-backdrop" role="presentation" onMouseDown={event => {
           if (event.target === event.currentTarget) setModalOpen(false);
@@ -198,6 +219,10 @@ export function CalendarBoard({
             <span className="eyebrow">DAY DETAILS</span>
             <h2 id="calendar-modal-title">{selected ? formatKoDate(selected) : "선택한 날짜"}</h2>
 
+            {(selectedSpecialDays.length > 0 || selectedHolidays.length > 0) && <div className={styles.specialList}>
+              {selectedHolidays.map(holiday => <article className={styles.isHoliday} key={`holiday:${holiday.name}`}><span>대한민국 공휴일</span><b>{holiday.name}</b><p>공식 달력에 등록된 쉬는 날이에요.</p></article>)}
+              {selectedSpecialDays.map(event => <article key={event.id}><span>{event.kind === "birthday" ? "소중한 생일" : "우리의 기념일"}</span><b>{event.title}</b><p>{event.detail}</p></article>)}
+            </div>}
             {selectedEvents.length > 0 ? (
               <div className="calendar-event-list">
                 {selectedEvents.map(event => (
@@ -209,7 +234,7 @@ export function CalendarBoard({
                   </Link>
                 ))}
               </div>
-            ) : (
+            ) : selectedSpecialDays.length || selectedHolidays.length ? null : (
               <div className="calendar-modal-empty">
                 <b>아직 일정이 없는 날이에요.</b>
                 <p>함께 보낼 하루를 계획해 볼까요?</p>

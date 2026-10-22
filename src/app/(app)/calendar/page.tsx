@@ -14,7 +14,7 @@ export default function CalendarPage() {
 }
 
 async function CalendarPageContent() {
-  const { trip, date, memories, drafts, tripDrafts, archives } = await readCalendarWorkspace();
+  const { trip, date, memories, drafts, tripDrafts, archives, keyDates } = await readCalendarWorkspace();
   return (
     <>
       <div className="page-title-row">
@@ -24,7 +24,7 @@ async function CalendarPageContent() {
           <p>함께할 약속과 함께한 기억을 한 달씩 펼쳐 보세요.</p>
         </div>
       </div>
-      <CalendarBoard trip={trip} date={date} memories={memories} drafts={drafts} tripDrafts={tripDrafts} archives={archives} />
+      <CalendarBoard trip={trip} date={date} memories={memories} drafts={drafts} tripDrafts={tripDrafts} archives={archives} keyDates={keyDates} />
     </>
   );
 }
