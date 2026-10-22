@@ -206,14 +206,17 @@ export function CalendarBoard({
       </div>
       <div className={styles.legend} aria-label="캘린더 표시 안내"><span><i />공휴일</span><span><i />생일·기념일</span><span><i />우리의 약속과 기록</span></div>
       {modalOpen && (
-        <div className="calendar-modal-backdrop" role="presentation" onMouseDown={event => {
+        <div className={`calendar-modal-backdrop ${styles.backdrop}`} role="presentation" onMouseDown={event => {
           if (event.target === event.currentTarget) setModalOpen(false);
         }}>
-          <section ref={modalRef} tabIndex={-1} className="calendar-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-modal-title">
+          <section ref={modalRef} tabIndex={-1} className={`calendar-modal ${styles.dayNote}`} role="dialog" aria-modal="true" aria-labelledby="calendar-modal-title">
             <button data-dialog-autofocus className="calendar-modal-close" type="button" aria-label="닫기" onClick={() => setModalOpen(false)}>×</button>
-            <span className="eyebrow">DAY DETAILS</span>
-            <h2 id="calendar-modal-title">{selected ? formatKoDate(selected) : "선택한 날짜"}</h2>
+            <header className={styles.noteHeader}>
+              <div className={styles.dateStamp} aria-hidden="true"><span>{selected ? `${Number(selected.slice(5, 7))}월` : ""}</span><b>{selected ? Number(selected.slice(8, 10)) : "♡"}</b></div>
+              <div><span className={styles.noteEyebrow}>A DAY FOR US</span><h2 id="calendar-modal-title">{selected ? formatKoDate(selected) : "선택한 날짜"}</h2><p>함께할 약속과 오래 간직할 순간들</p></div>
+            </header>
 
+            <div className={styles.noteBody}>
             {(selectedSpecialDays.length > 0 || selectedHolidays.length > 0) && <div className={styles.specialList}>
               {selectedHolidays.map(holiday => <article className={styles.isHoliday} key={`holiday:${holiday.name}`}><span>대한민국 공휴일</span><b>{holiday.name}</b><p>공식 달력에 등록된 쉬는 날이에요.</p></article>)}
               {selectedSpecialDays.map(event => <article key={event.id}><span>{event.kind === "birthday" ? "소중한 생일" : "우리의 기념일"}</span><b>{event.title}</b><p>{event.detail}</p></article>)}
@@ -235,7 +238,8 @@ export function CalendarBoard({
                 <p>함께 보낼 하루를 계획해 볼까요?</p>
               </div>
             )}
-            {selectedStops.length > 0 && <ol className="calendar-day-agenda" aria-label="이날의 장소 순서">{selectedStops.map((item, index) => <li key={`${item.sourceId}-${item.id}`}><time>{index + 1}</time><span><b>{item.placeName}</b><small>{item.source}{item.memo ? ` · ${item.memo}` : ""}</small></span></li>)}</ol>}
+            {selectedStops.length > 0 && <section className={styles.agendaSection}><h3>이날의 발걸음 <span>{selectedStops.length}곳</span></h3><ol className="calendar-day-agenda" aria-label="이날의 장소 순서">{selectedStops.map((item, index) => <li key={`${item.sourceId}-${item.id}`}><time>{index + 1}</time><span><b>{item.placeName}</b><small>{item.source}{item.memo ? ` · ${item.memo}` : ""}</small></span></li>)}</ol></section>}
+            </div>
             <div className="calendar-assign"><Link className="primary-button" href={`/date?day=${selected}`}>이날의 데이트 계획하기</Link></div>
           </section>
         </div>
