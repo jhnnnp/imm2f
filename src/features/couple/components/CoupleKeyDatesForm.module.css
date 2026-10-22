@@ -1,6 +1,6 @@
-.letter { container: couple-dates / inline-size; position: relative; min-width: 0; margin: 28px 0; padding: clamp(22px, 3vw, 36px); border: 1px solid #e3dece; border-top: 3px solid #bac4aa; border-radius: 6px 18px 18px 6px; background: linear-gradient(90deg, #dfc7b52b 1px, transparent 1px) 18px 0 / 100% 100% no-repeat, #fffdf6; box-shadow: 0 4px 0 -1px #eee9da, 0 8px 0 -3px #dedacb, 0 12px 32px #55473107; font-family: var(--default); }
+.letter { container: couple-dates / inline-size; position: relative; min-width: 0; margin: 28px 0; padding: clamp(22px, 3vw, 36px); border: 1px solid #e3dece; border-top: 3px solid #bac4aa; border-radius: 16px; background: linear-gradient(90deg, #dfc7b52b 1px, transparent 1px) 18px 0 / 100% 100% no-repeat, #fffdf6; box-shadow: 0 4px 0 -1px #eee9da, 0 8px 0 -3px #dedacb, 0 12px 32px #55473107; font-family: var(--default); }
 .heading { display: flex; align-items: center; gap: 20px; padding-bottom: 26px; border-bottom: 1px solid #e9e5d8; }
-.seal { flex: 0 0 62px; display: grid; place-items: center; height: 68px; border: 1px solid #d8dfcb; border-radius: 7px; background: #f0f3e5; color: #8d9c7d; font: 400 36px/1 var(--default); transform: rotate(-5deg); }
+.seal { flex: 0 0 62px; display: grid; place-items: center; height: 68px; border: 1px solid #d8dfcb; border-radius: 8px; background: #f0f3e5; color: #8d9c7d; font: 400 36px/1 var(--default); transform: rotate(-5deg); }
 .eyebrow { color: #8b977e; font-size: 11px; letter-spacing: .14em; }
 .letter h2 { margin: 7px 0 5px; color: #40513f; font: 700 clamp(24px, 3cqi, 29px)/1.4 var(--default); }
 .letter p { margin: 8px 0; color: #8b9080; font: 400 14px/1.7 var(--default); word-break: keep-all; overflow-wrap: anywhere; }
@@ -18,7 +18,7 @@
 .beginning p { margin: 4px 0 0; font-size: 13px; }
 .started { width: 100%; }
 .birthdays { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-.birthday { display: grid; grid-template-columns: minmax(0, 1fr) minmax(145px, 1fr); gap: 16px 12px; padding: 22px; border: 1px solid #e7dfd2; border-radius: 4px 12px 12px 4px; background: repeating-linear-gradient(transparent, transparent 31px, #ece4d329 31px, #ece4d329 32px), #fcf9f0; }
+.birthday { display: grid; grid-template-columns: minmax(0, 1fr) minmax(145px, 1fr); gap: 16px 12px; padding: 22px; border: 1px solid #e7dfd2; border-radius: 12px; background: repeating-linear-gradient(transparent, transparent 31px, #ece4d329 31px, #ece4d329 32px), #fcf9f0; }
 .birthday:nth-child(2) { background-color: #faf6f0; border-color: #e9dfd6; }
 .birthdayHeading { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding-bottom: 13px; border-bottom: 1px dashed #dfd9c9; }
 .birthdayHeading > span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: #9f916f; background: #eee8d9; font-size: 13px; }
@@ -26,14 +26,14 @@
 .birthdayHeading i { margin-left: auto; color: #c4b29a; font: 400 23px/1 var(--default); }
 .letter .note { margin: 18px 2px 0; color: #999c8e; font-size: 12px; }
 .letter footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 22px; padding-top: 20px; border-top: 1px solid #e9e5d8; }
-.letter button { min-height: 44px; padding: 11px 20px; border: 1px solid #d6dece; border-radius: 9px; background: #fffefa; color: #526b52; font: 700 15px/1.4 var(--default); cursor: pointer; }
+.letter button { min-height: 44px; padding: 11px 20px; border: 1px solid #d6dece; border-radius: 8px; background: #fffefa; color: #526b52; font: 700 15px/1.4 var(--default); cursor: pointer; }
 .letter button[type=submit] { background: #58705a; color: #fffefa; border-color: transparent; box-shadow: 0 3px 8px #52644812; }
 .letter button[type=submit]:hover { background: #49624b; }
 .letter a { padding: 10px 0; color: #7c8e71; font-size: 14px; text-decoration: none; }
 .letter a:hover { color: #4e6947; }
 .letter button:disabled { opacity: .55; cursor: default; }
 .letter :is(input,button,a):focus-visible { outline: 2px solid #71886f; outline-offset: 3px; }
-.conflict { margin-top: 18px; padding: 14px; border-radius: 10px; background: #f2ead9; }
+.conflict { margin-top: 18px; padding: 14px; border-radius: 12px; background: #f2ead9; }
 .letter .error { color: #a45045; }
 .letter .feedback { color: #4c7651; }
 @container couple-dates (max-width: 760px) { .birthdays { grid-template-columns: minmax(0, 1fr); } }

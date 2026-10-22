@@ -3,7 +3,7 @@
 .trigger svg { width: 19px; height: 19px; flex: none; stroke: #8d9d7f; stroke-width: 1.5; }
 .placeholder { color: #a1a691; }
 .backdrop { position: fixed; z-index: 100; inset: 0; padding: 20px; display: grid; place-items: center; background: #343d3540; backdrop-filter: blur(4px); }
-.picker { box-sizing: border-box; width: min(350px, 100%); max-height: calc(100dvh - 40px); overflow: auto; padding: 24px; border: 1px solid #e1ddce; border-top: 3px solid #a4b393; border-radius: 6px 16px 16px 6px; background: #fffdf5; box-shadow: 0 4px 0 -1px #eae5d6, 0 22px 70px #26342a30; font-family: var(--default); }
+.picker { box-sizing: border-box; width: min(350px, 100%); max-height: calc(100dvh - 40px); overflow: auto; padding: 24px; border: 1px solid #e1ddce; border-top: 3px solid #a4b393; border-radius: 16px; background: #fffdf5; box-shadow: 0 4px 0 -1px #eae5d6, 0 22px 70px #26342a30; font-family: var(--default); }
 .picker header { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid #e8e4d5; }
 .picker header span { color: #9aa68a; font-size: 10px; letter-spacing: .12em; }
 .picker h2 { margin: 7px 0 0; color: #52664a; font: 700 22px/1.4 var(--default); }
@@ -24,6 +24,6 @@
 .picker button:disabled { opacity: .3; cursor: default; }
 .picker footer { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 14px; border-top: 1px solid #e8e4d5; }
 .picker footer button { min-height: 36px; padding: 6px 10px; font-size: 13px; }
-.picker footer button:last-child { background: #edf1e3; border-radius: 7px; }
+.picker footer button:last-child { background: #edf1e3; border-radius: 8px; }
 .picker p { margin: 14px 0 0; text-align: center; color: #b0ad99; font-size: 12px; }
 .picker :is(button,select):focus-visible, .trigger:focus-visible { outline: 2px solid #8b9f75; outline-offset: 2px; }
