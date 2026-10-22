@@ -22,6 +22,7 @@ import { getDateTurnInterpreterMode, runDateTurnShadow, type DateTurnShadowResul
 import { loadTasteBoard } from "@/features/taste/actions";
 import { applyTasteHarshAllow, seedFromProfile, violatesTasteAvoid } from "@/features/taste/compare";
 import { applyPlannerTasteHints } from "./plannerPersonalization";
+import { allowsCoupleVenue, applyCouplePersonalization, buildCouplePersonalization, coupleVenueAffinity } from "./couplePersonalization";
 import { applyRanking } from "@/lib/openai/rank";
 import { searchKakaoPlacesRemote } from "@/lib/kakao/local";
 import { isShoppingSearch } from "@/lib/kakao/placeClassification";
@@ -61,7 +62,7 @@ import {
   missingWantedSlots,
   fitsWantedActivities,
   isExclusiveCrawl,
-  extractAreasFromText,
+  extractRequestedAreasFromText,
   extractStay,
 } from "@/features/ai/dateBrief";
 import { allowsHarshDateMeal, applyCourseDelta, bothWantNames, candidateActivitySlot, dateCandidateKey, isOffDateVenue, preferredSavedNames, recentPlaceNames, toDateRanking } from "@/features/ai/dateCourse";
@@ -70,6 +71,12 @@ import { hydrateDateCandidates } from "@/lib/places/detailCache";
 import { routeDateChat } from "@/lib/openai/routeDateChat";
 import { editCurrentCourse } from "./editCurrentCourse";
 import { designDateDiscovery } from "@/lib/openai/designDateDiscovery";
+import { normalizeProviderSearchQuery } from "@/lib/openai/venueSearchQueries";
+import { plannerEntryIntake } from "./chatEntry";
+import type { DateQualityAssessment } from "./dateQualityCritic";
+import { qualityRepairSearches } from "./qualityRepairSearch";
+import { dateDesignRuntime } from "@/lib/openai/dateDesignRuntime";
+import { deduplicateVenueBranches } from "./venueIdentity";
 import { readVenueEvidence } from "@/lib/openai/venueEvidenceStore";
 import { candidateFoodConflict, toDateIntent } from "@/features/ai/dateIntent";
 import { dateTaskObjectives, runDateTaskPlanner } from "@/lib/openai/dateTaskPlanner";
@@ -441,12 +448,13 @@ async function recommendPlacesForChat(input: {
   // must not replace a shopping/event search with unrelated tourist places.
   const typedRequest = ["shopping", "festival", "activity"].includes(ask.kind);
   const researchSearches = researchPlan && !typedRequest ? researchSearchIntents(researchPlan, area)
-    .filter(intent => intent.category && researchCategories.includes(intent.category)) : [];
+    .filter(intent => intent.category && researchCategories.includes(intent.category))
+    .map(intent => ({ ...intent, query: normalizeProviderSearchQuery(intent.query, intent.category) })) : [];
   const activeResearch = researchSearches.length > 0;
   let researchFallback = false;
   const continuing = Boolean(input.state.placeAsk && input.state.placeAsk.kind === ask.kind && input.state.placeAsk.area === area && isMoreRequest(input.message));
   const alreadyShown = continuing ? (input.state.seenPlaces ?? input.state.shownPlaces ?? []) : [];
-  const requestedAreas = extractAreasFromText(input.message);
+  const requestedAreas = extractRequestedAreasFromText(input.message);
   const baseState = withAreas(noteTurn(input.state, input.message), requestedAreas.length
     ? requestedAreas : uniqueStrings([area, ...selectedAreas(input.state)], 3));
 
@@ -543,10 +551,10 @@ async function recommendPlacesForChat(input: {
   }
   const hardEligible = hardPool?.eligible ?? pool;
   const filtered = filterPlaceCandidates(hardEligible, ask, filterContext)
-    .filter(candidate => !excludedIds.has(dateCandidateKey(candidate)));
+    .filter(candidate => !excludedIds.has(dateCandidateKey(candidate)) && allowsCoupleVenue(candidate, saved, baseState));
   const rankContext = {
-    savedPositive: preferredSavedNames(saved),
-    savedBoth: bothWantNames(saved),
+    savedPositive: new Set(buildCouplePersonalization(input.tasteBoard, saved).savedFeedback.preferredIds),
+    savedBoth: new Set(buildCouplePersonalization(input.tasteBoard, saved).savedFeedback.bothWantIds),
     recentlyVisited: new Set<string>(),
     commonTastes: coupleTasteBrief(input.tasteBoard, insight, input.avoidFoods).commonTastes,
     activities: [],
@@ -554,7 +562,9 @@ async function recommendPlacesForChat(input: {
   };
   const researchGrounded = activeResearch && !input.skipSearch && researchPlan
     ? await enrichResearchNeedEvidence(filtered, baseState, researchPlan.needs).catch(() => filtered) : filtered;
-  const ranked = rankPlaceCandidates(researchGrounded, ask, rankContext);
+  const ranked = rankPlaceCandidates(researchGrounded, ask, rankContext)
+    .map((candidate, index) => ({ candidate, score: coupleVenueAffinity(candidate, saved) - index }))
+    .sort((a, b) => b.score - a.score).map(item => item.candidate);
   if (ranked.length < 1) {
     const suggestions = nearbyAreaSuggestions(baseState);
     const card: AIChatCard = {
@@ -568,7 +578,7 @@ async function recommendPlacesForChat(input: {
     };
     return chatResult(card, { ...baseState, placeAsk: ask });
   }
-  const hydrated = await hydrateDateCandidates(ranked, saved);
+  const hydrated = deduplicateVenueBranches(await hydrateDateCandidates(ranked, saved));
   const hydratedPool = input.requireHardEligibility
     ? buildDateCandidatePool(hydrated, baseState, undefined,
       candidate => isDateCourseCandidate(candidate, baseState.requiredPlaces)) : null;
@@ -576,9 +586,8 @@ async function recommendPlacesForChat(input: {
     try { input.observeCandidates(hydratedPool?.records ?? buildDateCandidatePool(hydrated, baseState).records); }
     catch { /* Candidate session observation must not change place selection. */ }
   }
-  const finalCandidates = hydratedPool
-    ? filterPlaceCandidates(hydratedPool.eligible, ask, filterContext)
-      .filter(candidate => !excludedIds.has(dateCandidateKey(candidate))) : hydrated;
+  const finalCandidates = rankPlaceCandidates(filterPlaceCandidates(hydratedPool?.eligible ?? hydrated, ask, filterContext)
+    .filter(candidate => !excludedIds.has(dateCandidateKey(candidate)) && allowsCoupleVenue(candidate, saved, baseState)), ask, rankContext);
   if (input.requireHardEligibility && !finalCandidates.length) return chatResult({ headline: `${area}에서 ${label}을 더 찾지 못했어요`,
     lines: ["현재 조건에 맞는 장소를 확인하지 못했어요."] }, { ...baseState, placeAsk: ask });
   const hydrateDoneAt = performance.now();
@@ -673,10 +682,18 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     || selectedCandidateIds.some(id => typeof id !== "string")
     || rejectedCandidateIdList.some(id => typeof id !== "string")))
     return { error: "장소 탐색 정보를 확인하지 못했어요. 후보를 다시 찾아 주세요." };
-  const previousState = input.previousState;
+  const previousState = input.previousState ?? emptyDateBrief();
   const previousStops = input.previousStops?.length
     ? input.previousStops
     : (input.previousPlaceNames ?? []).map(name => ({ name, category: "" }));
+  const intake = message && !planningInput && !input.currentPlan?.items.length && !previousStops.length
+    ? plannerEntryIntake({ kind: input.planKind ?? "date", message, state: previousState,
+      dateLabel: input.dateLabel, today: new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" }) }) : null;
+  if (intake) {
+    const state = noteTurn(intake.state, message);
+    return intake.slot === "area" || intake.slot === "span"
+      ? clarificationReply(intake.slot, state, intake.card) : chatResult(intake.card, state);
+  }
   const shadowSnapshot: { current: DateTurnShadowResult | null } = { current: null };
   const executionPlanSnapshot: { current: NonNullable<ReturnType<typeof observeDateExecutionPlan>> | null } = { current: null };
   const observedContextSnapshot: { current: DateContext | null } = { current: null };
@@ -1085,18 +1102,20 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   const researchActive = researchAuthority.active;
   let researchFallbackReason: string | null = researchAuthority.fallbackReason;
   let researchCoverage: ResearchCoverage[] = [];
-  const researchIntents = researchActive ? researchSearchIntents(researchPlan!, selectedRegions[0]) : [];
+  const researchIntents = researchActive ? researchSearchIntents(researchPlan!, selectedRegions[0])
+    .map(intent => ({ ...intent, query: normalizeProviderSearchQuery(intent.query, intent.category) })) : [];
   const searchedResearchNeeds = new Set(researchIntents.flatMap(intent => intent.needIds));
   const retainedPlaces = state.preserveExistingPlaces ? previousStops.map(stop => stop.name.trim()).filter(Boolean) : [];
   const directQueries = uniqueStrings([...state.requiredPlaces, ...retainedPlaces], 500).filter(name => !state.excludedPlaces.includes(name));
   const prefetchedKeywords = new Map<string, ReturnType<typeof searchKakaoPlacesRemote>>();
   const keywordSearch = (intent: DateSearchIntent, page: number) => {
-    const key = JSON.stringify([intent.region, intent.category, intent.query, page]);
+    const query = normalizeProviderSearchQuery(intent.query ?? "", intent.category);
+    const key = JSON.stringify([intent.region, intent.category, query, page]);
     let pending = prefetchedKeywords.get(key);
     if (!pending) {
       pending = searchKakaoPlacesRemote({ region: intent.region,
         category: researchActive ? providerCategoryForResearchIntent(intent) : intent.category,
-        query: intent.query, page, includeShopping: isShoppingSearch(intent.query) });
+        query, page, includeShopping: isShoppingSearch(query) });
       prefetchedKeywords.set(key, pending);
     }
     return pending;
@@ -1123,14 +1142,17 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   // Venue design only needs the brief. Account context can be fetched during
   // that model call instead of extending the critical path afterward.
   const [discoveryBrief, [{ places: saved }, insight, archives]] = await Promise.all([
-    designDateDiscovery({ message, state, conversation: input.conversation, taste: tasteBoard.compare?.overlaps ?? [],
+    designDateDiscovery({ message, state: applyCouplePersonalization(state, buildCouplePersonalization(tasteBoard)),
+      conversation: input.conversation, taste: tasteBoard.compare?.overlaps ?? [],
+      couplePersonalization: buildCouplePersonalization(tasteBoard),
       useExistingBrief: Boolean(planningInput) }),
     Promise.all([listPlaces(), loadLatestCoupleInsight(), listArchivedDatePlans()]),
   ]);
   state.discovery = discoveryBrief;
   const memory = collectDateMemory({ taste: tasteBoard, archives: archives.dates,
     userRequests: state.userRequests ?? [], currentPlaces: previousStops.map(stop => stop.name) });
-  state = applyDateMemory(state, memory);
+  const couplePersonalization = buildCouplePersonalization(tasteBoard, saved);
+  state = applyDateMemory(applyCouplePersonalization(state, couplePersonalization), memory);
   const discoveryDone = performance.now();
   const radius = areaScopeMeters(state);
   const time = assumedTimeWindow(state);
@@ -1146,6 +1168,10 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   const recentlyVisited = [...recentPlaceNames(archives.dates)];
   const keywordIntents: DateSearchIntent[] = primarySearchIntents(researchActive, researchPlan,
     selectedRegions[0], [...discoveryBrief.queries, ...searchIntents(state)])
+    // Quality-specific source phrases must survive the conceptual research
+    // plan's coarser categories ("카페 방문 경험" alone loses 한옥/오션뷰).
+    .concat(researchActive ? discoveryBrief.queries : [])
+    .map(intent => ({ ...intent, query: normalizeProviderSearchQuery(intent.query ?? "", intent.category) }))
     .filter((intent, index, all) => all.findIndex(other => other.region === intent.region && other.query === intent.query && ("category" in other ? other.category : undefined) === ("category" in intent ? intent.category : undefined)) === index)
     .slice(0, 20);
   const researchComparison = researchPlan ? compareResearchSearches(researchPlan, selectedRegions[0],
@@ -1370,6 +1396,7 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     const required = selectedAnchorIds.includes(dateCandidateKey(candidate))
       || state.requiredPlaces.some(name => matchesTerm(candidate, name));
     return (required || isDateCourseCandidate(candidate, state.requiredPlaces))
+      && allowsCoupleVenue(candidate, saved, state, selectedAnchorIds)
       && !isRejectedVenue(candidate)
       && !state.excludedPlaces.some(name => matchesTerm(candidate, name))
       && !candidateFoodConflict(`${candidate.name} ${candidate.detailedCategory ?? ""} ${candidate.dishes ?? ""}`, state.excludedFoods ?? [])
@@ -1490,8 +1517,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   }
   const poolReady = performance.now();
   const rankContext = {
-    savedPositive: preferredSavedNames(saved),
-    savedBoth: bothWantNames(saved),
+    savedPositive: new Set(couplePersonalization.savedFeedback.preferredIds),
+    savedBoth: new Set(couplePersonalization.savedFeedback.bothWantIds),
     recentlyVisited: new Set(recentlyVisited),
     commonTastes: [...(tasteBoard.compare?.overlaps ?? []), ...(insight?.commonTastes ?? []).map(item => item.label)].filter(Boolean),
     activities: discoveryBrief.requiredActivities,
@@ -1513,9 +1540,13 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
       .map(fact => [`${fact.url}:${fact.text}`, fact])).values()];
     return { ...candidate, evidence };
   });
-  const catalog = [...evidencePool.filter(candidate => selectedAnchorIds.includes(dateCandidateKey(candidate))),
-    ...discoveryCatalog(evidencePool, state, rankContext.savedPositive, 72)
-      .filter(candidate => !selectedAnchorIds.includes(dateCandidateKey(candidate)))];
+  const selectedCatalog = evidencePool.filter(candidate => selectedAnchorIds.includes(dateCandidateKey(candidate)));
+  const officialMeals = evidencePool.filter(candidate => candidate.externalSource === "tourapi"
+    && candidate.tourContentTypeId === "39" && candidate.category === "restaurant").slice(0, 4);
+  const catalog = [...new Map([...selectedCatalog, ...officialMeals,
+    ...discoveryCatalog(evidencePool, state, rankContext.savedPositive, 72)]
+    .map(candidate => [dateCandidateKey(candidate), candidate])).values()]
+    .slice(0, Math.max(72, selectedCatalog.length));
   const earlyResearchCandidates = catalog.filter(candidate => candidate.externalSource === "kakao");
   const [hydrated, withPerformances, researched] = await Promise.all([
     hydrateDateCandidates(catalog, saved),
@@ -1526,11 +1557,11 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   const evidenceById = new Map(researched.map(candidate => [dateCandidateKey(candidate), candidate.evidence ?? []]));
   const performanceById = new Map(withPerformances.filter(candidate => candidate.performanceEvent)
     .map(candidate => [`${candidate.externalSource}:${candidate.externalPlaceId}`, candidate.performanceEvent]));
-  const candidates = hydrated.map(candidate => ({ ...candidate,
+  const candidates = deduplicateVenueBranches(hydrated.map(candidate => ({ ...candidate,
     performanceEvent: performanceById.get(`${candidate.externalSource}:${candidate.externalPlaceId}`) ?? candidate.performanceEvent,
     evidence: [...new Map([...(candidate.evidence ?? []), ...(evidenceById.get(dateCandidateKey(candidate)) ?? [])]
       .map(fact => [`${fact.url}:${fact.text}`, fact])).values()],
-  }));
+  })), selectedAnchorIds);
   const dateContext = buildDateContext({
     state, conversation: input.conversation, tasteBoard, archives: archives.dates, memory,
     currentPlan: input.currentPlan, currentUnderstanding: turnUnderstanding, goals: taskPlan.objectives,
@@ -1609,7 +1640,8 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     }), state);
   }
   const semanticPlanningHints = semanticPlanningHintsForContext(dateContext);
-  const proposeCourse = (courseCandidates: DiscoverCandidate[]) => recommendDatePlanWithOpenAi({
+  const designRuntime = dateDesignRuntime(undefined, { timeoutMs: 35000 });
+  const proposeCourse = (courseCandidates: DiscoverCandidate[], repairAssessment?: DateQualityAssessment) => recommendDatePlanWithOpenAi({
     traceId,
     prompt: message || `${condition.region}에서 ${state.activities.join(", ") || "하루"} 데이트`,
     condition,
@@ -1622,6 +1654,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     state,
     recentlyVisited,
     memory,
+    couplePersonalization,
+    qualityRepairAssessment: repairAssessment,
+    designTimeoutMs: Math.max(1, designRuntime.remainingMs()),
     researchPlanActive: Boolean(planningInput) || (researchActive && !researchFallbackReason),
     experiencePlan: handoffExperiencePlan,
     researchPlan: planningInput?.researchPlan ?? null,
@@ -1642,40 +1677,65 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
   });
   const agentRun = await runDateAgentCourse({
     candidates, propose: proposeCourse,
-    allowResearchRepair: !state.foodAllergy && (!researchActive || Boolean(researchFallbackReason)),
-    researchAfterFailure: async (issues, existing) => {
-      const calls = (await planNextDateResearch({ state, candidates: existing,
+    qualityContext: { state, message, experiencePlan: handoffExperiencePlan ?? observedContextSnapshot.current?.experiencePlan,
+      explorationPreferences: planningInput?.preferences, semanticPlanningHints },
+    allowResearchRepair: !state.foodAllergy,
+    researchAfterFailure: async (issues, existing, assessment) => {
+      if (designRuntime.remainingMs() < 12000) return [];
+      return designRuntime.untilDeadline((async () => {
+      const targetedCalls = assessment?.needsRepair
+        ? qualityRepairSearches(assessment, state, selectedRegions, attemptedResearch) : null;
+      const calls = targetedCalls ?? (await planNextDateResearch({ state, candidates: existing,
         regions: selectedRegions, missing: missingWantedSlots(new Set(existing.map(candidateActivitySlot)), discoveryBrief.requiredActivities),
         attempted: attemptedResearch, verifierIssues: issues,
       })).filter(call => call.tool === "search_places").slice(0, 3);
       calls.forEach(call => attemptedResearch.add(dateResearchCallKey(call)));
       agentToolCalls += calls.length;
-      const results = await Promise.all(calls.map(call => searchKakaoPlacesRemote({ region: call.region, query: call.query, page: 1 })));
+      const results = await Promise.all(calls.map(call => searchKakaoPlacesRemote({ region: call.region,
+        query: normalizeProviderSearchQuery(call.query), page: 1 })));
       for (const [index, result] of results.entries()) {
         if (!result.ok) continue;
         for (const candidate of result.places.slice(0, 15)) remember(candidate, calls[index].region);
       }
       const seen = new Set(existing.map(dateCandidateKey));
       const additions = currentPool().filter(candidate => !seen.has(dateCandidateKey(candidate)));
-      if (!additions.length) return [];
+      if (!additions.length && !assessment?.needsRepair) return [];
       const rankedAdditions = applyRanking(additions, toDateRanking(additions, rankContext));
       const stored = await readVenueEvidence(rankedAdditions);
       const withEvidence = rankedAdditions.map(candidate => {
         const observations = stored.get(dateCandidateKey(candidate)) ?? [];
         return observations.length ? { ...candidate, evidence: [...(candidate.evidence ?? []), ...observations] } : candidate;
       });
-      const catalog = discoveryCatalog(withEvidence, state, rankContext.savedPositive, 20);
+      const selectedQualityIds = new Set(assessment?.requirements.filter(item => item.status !== "supported")
+        .flatMap(item => item.candidateIds) ?? []);
+      const catalog = [...new Map([
+        ...existing.filter(candidate => selectedQualityIds.has(dateCandidateKey(candidate))),
+        ...discoveryCatalog(withEvidence, state, rankContext.savedPositive, 20),
+      ].map(candidate => [dateCandidateKey(candidate), candidate])).values()];
       const [details, events] = await Promise.all([
-        hydrateDateCandidates(catalog, saved),
+        hydrateDateCandidates(catalog, saved).then(venues => assessment?.researchNeeds.length
+          ? enrichResearchNeedEvidence(venues, state, assessment.researchNeeds, 2, designRuntime.signal, true) : venues),
         attachKopisPerformances(catalog, state.dateLabel, courseSize(state).days),
       ]);
       const eventsById = new Map(events.filter(candidate => candidate.performanceEvent)
         .map(candidate => [dateCandidateKey(candidate), candidate.performanceEvent]));
       return details.map(candidate => ({ ...candidate,
         performanceEvent: eventsById.get(dateCandidateKey(candidate)) ?? candidate.performanceEvent }));
+      })(), [] as DiscoverCandidate[]);
     },
   });
   const recommendation = agentRun.reply;
+  const contradictoryRequirements = agentRun.quality?.requirements.filter(item =>
+    item.origin === "explicit_constraint" && item.status === "contradicted") ?? [];
+  if (recommendation.items.length && contradictoryRequirements.length) {
+    const card: AIChatCard = { headline: "요청과 맞지 않는 장소를 확인했어요",
+      lines: ["선택한 장소의 자료에 요청하신 조건과 반대되는 설명이 있어 이 코스를 확정 추천하지 않았어요.",
+        ...contradictoryRequirements.slice(0, 2).map(item => item.message),
+        "다른 후보를 찾아보거나 원하는 지역·조건을 조금 조정해 주세요."],
+      suggestions: ["조건에 맞는 다른 장소 찾아줘", "인근 지역까지 넓혀줘"] };
+    return withLimitedTasks(() => chatResult(card,
+      state.preserveExistingPlaces && input.currentPlan ? input.currentPlan.state : state), state);
+  }
   if (sessionCapture) {
     try {
       const allRecords = new Map(sessionCapture.records.map(record => [record.id, record]));
@@ -1721,6 +1781,9 @@ async function recommendDatePlanCore(input: RecommendDatePlanInput,
     candidateCount: agentRun.candidates.length, cachedEvidenceCandidates: evidencePool.filter(candidate => candidate.evidence?.length).length,
     candidateObservations: dateContext.observations.length,
     agentToolCalls,
+    qualityRequirements: agentRun.quality?.requirements.length ?? 0,
+    qualitySupported: agentRun.quality?.requirements.filter(item => item.status === "supported").length ?? 0,
+    qualityUnresolved: agentRun.quality?.requirements.filter(item => item.status !== "supported").length ?? 0,
     researchMode, researchNeedCount: researchPlan?.needs.length ?? 0,
     researchCoverage: researchCoverage.map(item => ({ needId: item.needId, status: item.status,
       candidateCount: item.candidateCount, evidenceCoverage: item.evidenceCoverage })),

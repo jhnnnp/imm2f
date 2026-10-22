@@ -335,6 +335,47 @@ describe("OpenAI search completion integrity", () => {
       .toEqual({ reply: "checked" });
     expect(onSources).toHaveBeenCalledWith(["https://example.com/facts", "https://example.com/menu"]);
   });
+  it("retains exact URLs of completed open-page and find-in-page source actions", async () => {
+    fetchMock.mockResolvedValue(Response.json({ status: "completed", output: [
+      { type: "web_search_call", status: "completed", action: { type: "open_page", url: "https://example.com/exact-venue" } },
+      { type: "web_search_call", status: "completed", action: { type: "find_in_page", url: "https://example.com/exact-menu", pattern: "파스타" } },
+      { type: "web_search_call", status: "completed", action: { type: "unknown", url: "https://example.com/untrusted" } },
+      { type: "web_search_call", status: "completed", action: { type: "open_page", url: "https://user:secret@example.com/private" } },
+      { type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: '{"reply":"checked"}' }] },
+    ] }));
+    const onSources = vi.fn();
+    expect(await completeJsonWithWebSearch({ instructions: "JSON", payload: {}, requireSearch: true, onSources }))
+      .toEqual({ reply: "checked" });
+    expect(onSources).toHaveBeenCalledWith(["https://example.com/exact-venue", "https://example.com/exact-menu"]);
+  });
+  it("parses an otherwise valid search JSON object with external citation markers without another model call", async () => {
+    fetchMock.mockResolvedValue(completedSearch('{"reply":"checked","sourceUrl":"https://example.com/facts"} citeturn0search0'));
+    expect(await completeJsonWithWebSearch({ instructions: "JSON", payload: {}, requireSearch: true }))
+      .toEqual({ reply: "checked", sourceUrl: "https://example.com/facts" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("preserves citation-like source text inside JSON strings", async () => {
+    fetchMock.mockResolvedValue(completedSearch('{"reply":"literal citesource and \\\"quoted\\\" text"} citeturn0search0'));
+    expect(await completeJsonWithWebSearch({ instructions: "JSON", payload: {}, requireSearch: true }))
+      .toEqual({ reply: 'literal citesource and "quoted" text' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("does not treat an incomplete page action as a visited citation source", async () => {
+    fetchMock.mockResolvedValue(Response.json({ status: "completed", output: [
+      { type: "web_search_call", status: "incomplete", action: { type: "open_page", url: "https://example.com/unopened" } },
+      { type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: '{"reply":"unchecked"}' }] },
+    ] }));
+    const onSources = vi.fn();
+    expect(await completeJsonWithWebSearch({ instructions: "JSON", payload: {}, requireSearch: true, onSources })).toBeNull();
+    expect(onSources).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("does not join numeric tokens when removing an external citation marker", async () => {
+    fetchMock.mockResolvedValueOnce(completedSearch('{"count":1citeturn0search00}'))
+      .mockResolvedValueOnce(completion('null'));
+    expect(await completeJsonWithWebSearch({ instructions: "JSON", payload: {}, requireSearch: true })).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
   it("uses one deadline for search and its JSON repair", async () => {
     fetchMock.mockResolvedValueOnce(completedSearch("Reply with checked facts."))
       .mockResolvedValueOnce(completion('{"reply":"checked"}'));

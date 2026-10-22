@@ -1,5 +1,6 @@
 import type { KakaoPlaceCandidate } from "@/features/places/types/place";
 import { classifyKakaoPlace } from "./placeClassification";
+import { validKoreanVenueCoordinates } from "@/features/places/regionScope";
 
 const DATE_GROUP_CODES = new Set(["CE7", "FD6", "AT4", "CT1"]);
 
@@ -37,6 +38,11 @@ function isExplicitParkAccess(candidate: KakaoPlaceCandidate, requiredPlaces: st
 }
 
 export function isDateCourseCandidate(candidate: KakaoPlaceCandidate, requiredPlaces: string[]) {
+  if (candidate.externalSource === "tourapi" && candidate.tourContentTypeId === "39")
+    return candidate.category === "restaurant" && Boolean(candidate.address.trim())
+      && !looksLikeNonVenue(candidate)
+      && !/주차장|주유소|정류장|지하철역/.test(candidate.detailedCategory ?? "")
+      && validKoreanVenueCoordinates(candidate.coordinates);
   if (isRequiredNamedPlace(candidate, requiredPlaces)) return true;
   if (looksLikeNonVenue(candidate) && !isExplicitParkAccess(candidate, requiredPlaces)) return false;
   if (candidate.externalSource === "tourapi" && candidate.category === "festival") return true;

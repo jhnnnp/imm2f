@@ -77,6 +77,8 @@ const AREA_STOPWORDS = new Set([
   "장소", "지역", "도시", "동네", "여행지", "목적지", "출발지", "근처", "주변",
   "분위기", "느낌", "취향", "기분", "스타일", "테마", "방향", "시간", "날짜", "주말", "평일",
   "안녕", "안녕하세요", "고마워", "감사해", "모르겠어", "아무데나", "아무거나", "어디든", "미정", "미정이야", "상관없어", "상관없음",
+  "대중교통", "자가용", "도보", "렌터카", "택시", "지하철", "버스", "운전",
+  "조용한", "한적한", "여유로운", "아늑한", "편안한", "특별한", "색다른", "로맨틱한", "예쁜", "좋은", "가까운", "어울리는", "맛있는", "짧은", "느긋한",
 ]);
 
 /** Grammatical destination markers also attach to preferences ("분위기로").
@@ -713,13 +715,19 @@ export function extractAreasFromText(message: string) {
 
 /** Places mentioned as rejected destinations are references, not search areas. */
 export function extractRequestedAreasFromText(message: string) {
+  const departureRanges = [...message.matchAll(/(?:^|[\s,，;\n])((?:(?:[가-힣]{2,12}(?:시|도|구|군)|서울|부산|대전|인천|광주|대구|울산|세종)\s+){0,2}[가-힣A-Za-z0-9·-]{2,25})(?:에서|부터)\s*출발/g)]
+    .map(match => ({ start: match.index + match[0].indexOf(match[1]), end: match.index + match[0].length }));
+  const labelledDepartures = [...message.matchAll(/출발(?:지|하는\s*곳)(?:는|은|:)?\s*([가-힣A-Za-z0-9·-]{2,25})/g)]
+    .map(match => ({ start: match.index, end: match.index + match[0].length }));
+  const departures = [...departureRanges, ...labelledDepartures];
   return extractAreasFromText(message).filter(area => {
     if (/말고|제외하고|빼고|대신|아니라|아니고/.test(area)) return false;
     const aliases = uniqueStrings([area, ...KNOWN_AREAS.filter(name => canonicalizeArea(name) === area)], Infinity)
       .sort((a, b) => b.length - a.length).map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
     const pattern = new RegExp(`(?:${aliases.join("|")})(?:역|시)?`, "g");
-    return [...message.matchAll(pattern)].some(match => !/^\s*(?:은|는|을|를|이|가|도)?\s*(?:말고|대신|제외|빼|가지\s*마|안\s*가|취소|아니라|아니고)/
-      .test(message.slice(match.index + match[0].length)));
+    return [...message.matchAll(pattern)].some(match => !departures.some(range => match.index >= range.start && match.index < range.end)
+      && !/^\s*(?:은|는|을|를|이|가|도)?\s*(?:말고|대신|제외|빼|가지\s*마|안\s*가|취소|아니라|아니고)/
+        .test(message.slice(match.index + match[0].length)));
   });
 }
 
@@ -889,7 +897,7 @@ export function matchesActivity(candidate: DiscoverCandidate, activity: DateActi
 
 export function matchesCuisine(candidate: DiscoverCandidate, cuisine: DateCuisineChoice | null) {
   if (!cuisine || cuisine === "any") return true;
-  const details = `${candidate.name} ${candidate.categoryLabel} ${candidate.detailedCategory ?? ""}`;
+  const details = `${candidate.name} ${candidate.categoryLabel} ${candidate.detailedCategory ?? ""} ${candidate.factSourceUrl ? candidate.dishes ?? "" : ""}`;
   return details.includes(cuisine) || CUISINE_REGEX[cuisine].test(details);
 }
 

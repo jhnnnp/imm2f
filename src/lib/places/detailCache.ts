@@ -136,7 +136,14 @@ export async function writePlaceDetailCache(candidates: DiscoverCandidate[]) {
 export async function hydrateDateCandidates(candidates: DiscoverCandidate[], saved: Place[]) {
   const cache = await readPlaceDetailCache(candidates);
   const merged = candidates.map(candidate => mergePlaceFacts(candidate, cache, saved));
-  const targets = officialTourEvidenceTargets(merged, 6);
+  // Reserve space for exact official menus even when food listings already
+  // have an image and opening hours. Attractions keep the remaining slots.
+  const meals = merged.filter(candidate => candidate.externalSource === "tourapi"
+    && candidate.tourContentTypeId === "39" && candidate.category === "restaurant"
+    && !(candidate.evidence ?? []).some(fact => fact.venueId === cacheKey(candidate)
+      && fact.attribute === "menu" && fact.verification === "source_checked"
+      && Date.now() - Date.parse(fact.checkedAt) >= 0 && Date.now() - Date.parse(fact.checkedAt) < DAY_MS)).slice(0, 4);
+  const targets = [...meals, ...officialTourEvidenceTargets(merged, Math.min(6, 8 - meals.length))];
   for (const candidate of merged) {
     if (targets.length >= 8) break;
     if (candidate.externalSource === "tourapi" && !candidate.openingHours
@@ -153,17 +160,27 @@ export async function hydrateDateCandidates(candidates: DiscoverCandidate[], sav
       if (!detail || signal.aborted) return;
       candidate.image = candidate.image || detail.image;
       candidate.openingHours = candidate.openingHours || detail.openingHours || undefined;
+      const evidence: NonNullable<DiscoverCandidate["evidence"]> = [];
+      const source = { venueId: cacheKey(candidate), branchName: candidate.name,
+        sourceVenueName: candidate.name, sourceAddress: candidate.roadAddress || candidate.address,
+        url: "https://www.data.go.kr/data/15101578/openapi.do", checkedAt: new Date().toISOString(),
+        verification: "source_checked" as const };
+      if (candidate.tourContentTypeId === "39" && candidate.category === "restaurant" && detail.dishes) {
+        candidate.dishes = candidate.dishes || detail.dishes;
+        candidate.factSourceUrl = candidate.factSourceUrl || source.url;
+        const menu = detail.facts.filter(fact => fact.label === "대표 메뉴" || fact.label === "취급 메뉴")
+          .map(fact => `${fact.label}: ${fact.value}`).join(" · ") || `취급 메뉴: ${detail.dishes}`;
+        evidence.push({ ...source, id: `tourapi:${candidate.externalPlaceId}:menu`, attribute: "menu",
+          text: menu, sourceExcerpt: menu });
+      }
       const overview = detail.overview.trim();
-      if (!overview) return;
-      const excerpt = overview.length > 250
-        ? overview.slice(0, 250).replace(/\s+\S*$/, "").trim() : overview;
-      candidate.evidence = [...(candidate.evidence ?? []), {
-        id: `tourapi:${candidate.externalPlaceId}:overview`, venueId: cacheKey(candidate),
-        branchName: candidate.name, attribute: "experience", text: excerpt, sourceExcerpt: excerpt,
-        sourceVenueName: candidate.name, sourceAddress: candidate.address,
-        url: "https://www.data.go.kr/data/15101578/openapi.do",
-        checkedAt: new Date().toISOString(), verification: "source_checked",
-      }];
+      if (overview) {
+        const excerpt = overview.length > 250
+          ? overview.slice(0, 250).replace(/\s+\S*$/, "").trim() : overview;
+        evidence.push({ ...source, id: `tourapi:${candidate.externalPlaceId}:overview`,
+          attribute: "experience", text: excerpt, sourceExcerpt: excerpt });
+      }
+      if (evidence.length) candidate.evidence = [...(candidate.evidence ?? []), ...evidence];
     } catch {
       // Optional provider enrichment must not discard otherwise valid venues.
     }

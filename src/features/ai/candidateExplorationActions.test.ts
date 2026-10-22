@@ -13,6 +13,7 @@ vi.mock("@/lib/tourapi/client", () => ({ searchTourPlacesRemote: vi.fn() }));
 vi.mock("@/lib/tourapi/env", () => ({ isTourApiConfigured: vi.fn(() => false) }));
 vi.mock("@/lib/openai/experiencePlan", () => ({ observeExperiencePlan: vi.fn(async () => null) }));
 vi.mock("@/lib/openai/enrichDateVenues", () => ({ enrichResearchNeedEvidence: vi.fn(async (rows: DiscoverCandidate[]) => rows) }));
+vi.mock("@/lib/places/detailCache", () => ({ hydrateDateCandidates: vi.fn(async (rows: DiscoverCandidate[]) => rows) }));
 vi.mock("@/features/places/actions", () => ({ listPlaces: vi.fn(async () => ({ places: [] })) }));
 
 import { interpretDateRequest } from "@/lib/openai/interpretDateRequest";
@@ -21,6 +22,9 @@ import { searchTourPlacesRemote } from "@/lib/tourapi/client";
 import { isTourApiConfigured } from "@/lib/tourapi/env";
 import { observeExperiencePlan } from "@/lib/openai/experiencePlan";
 import { enrichResearchNeedEvidence } from "@/lib/openai/enrichDateVenues";
+import { hydrateDateCandidates } from "@/lib/places/detailCache";
+import { listPlaces } from "@/features/places/actions";
+import { candidateToPlace } from "@/features/places/discover";
 import { exploreCandidateGroups, prepareCandidateExploration,
   replaceRejectedCandidateFromSession, updateCandidateExplorationChoices } from "./candidateExplorationActions";
 import { candidateExplorationMode } from "./candidateExplorationMode";
@@ -38,6 +42,8 @@ const venue = (id: number): DiscoverCandidate => ({ externalSource: "kakao", ext
 beforeEach(() => {
   vi.mocked(isTourApiConfigured).mockReturnValue(false);
   vi.mocked(searchTourPlacesRemote).mockReset();
+  vi.mocked(hydrateDateCandidates).mockImplementation(async rows => rows);
+  vi.mocked(listPlaces).mockResolvedValue({ places: [] });
   process.env.DATE_CANDIDATE_EXPLORATION_MODE = "active";
   process.env.SESSION_CANDIDATE_SIGNING_KEY = "candidate-exploration-test-secret";
   vi.mocked(interpretDateRequest).mockResolvedValue({ state, slot: null, reply: "" });
@@ -113,6 +119,108 @@ it("requests distinguishing restaurant evidence even when no atmosphere filter w
   expect(enrichResearchNeedEvidence).toHaveBeenCalledWith(expect.any(Array), expect.any(Object),
     expect.arrayContaining([expect.objectContaining({ kind: "venue", id: "explore-meal" })]), 4);
   expect(result.groups[0].cards[0].reason).toContain("대표 메뉴와 가격");
+});
+
+it("hydrates official menus inside the meal shortlist before filtering cuisine and food exclusions", async () => {
+  vi.mocked(isTourApiConfigured).mockReturnValue(true);
+  vi.mocked(searchKakaoPlacesRemote).mockResolvedValue({ ok: true, places: [], isEnd: true, page: 1, totalCount: 0 });
+  const official = Array.from({ length: 7 }, (_, index): DiscoverCandidate => ({ ...venue(850 + index),
+    externalSource: "tourapi", name: `공식 음식점 ${index}`, category: "restaurant", categoryLabel: "음식점",
+    detailedCategory: "음식점", kakaoCategoryGroupCode: undefined, tourContentTypeId: "39" }));
+  vi.mocked(searchTourPlacesRemote).mockResolvedValue({ ok: true, places: official, isEnd: true, page: 1, totalCount: official.length });
+  vi.mocked(hydrateDateCandidates).mockImplementation(async rows => rows.map((row, index) => ({ ...row,
+    dishes: index === 0 ? "파스타" : index === 1 ? "국밥" : "해산물 파스타",
+    factSourceUrl: "https://www.data.go.kr/data/15101578/openapi.do" })));
+  const preferences = { ...prefs, activities: ["meal" as const], cuisines: ["양식"], provenance: { meal: "user_selected" as const } };
+  const result = await exploreCandidateGroups({ message: "부산 파스타", state: { ...state, excludedFoods: ["해산물"] },
+    preferences, planningSessionId: sessionId });
+  if ("error" in result) throw new Error(result.error);
+  expect(searchTourPlacesRemote).toHaveBeenCalledWith(expect.objectContaining({ category: "restaurant", tourContentTypeId: "39", query: "" }));
+  expect(hydrateDateCandidates).toHaveBeenCalledOnce();
+  expect(vi.mocked(hydrateDateCandidates).mock.calls[0][0]).toHaveLength(4);
+  expect(enrichResearchNeedEvidence).toHaveBeenCalledWith(expect.arrayContaining([
+    expect.objectContaining({ externalSource: "tourapi", dishes: "파스타" }),
+  ]), expect.any(Object), expect.any(Array), 4);
+  expect(result.groups[0].cards.map(card => card.name)).toEqual(["공식 음식점 0"]);
+  expect(result.sessionCandidates.records.some(record => record.rejectedReasons.includes("excluded_food"))).toBe(true);
+});
+
+it("starts the typed meal provider request while Kakao searches are still pending", async () => {
+  vi.mocked(isTourApiConfigured).mockReturnValue(true);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  vi.mocked(searchKakaoPlacesRemote).mockImplementation(async () => {
+    await pending;
+    return { ok: true, places: [], isEnd: true, page: 1, totalCount: 0 };
+  });
+  vi.mocked(searchTourPlacesRemote).mockResolvedValue({ ok: true, places: [], isEnd: true, page: 1, totalCount: 0 });
+  const preferences = { ...prefs, activities: ["meal" as const], provenance: { meal: "user_selected" as const } };
+  const resultPromise = exploreCandidateGroups({ message: "부산 식당", state, preferences, planningSessionId: sessionId });
+  await vi.waitFor(() => expect(searchTourPlacesRemote).toHaveBeenCalled());
+  expect(searchKakaoPlacesRemote).toHaveBeenCalled();
+  release();
+  expect("error" in await resultPromise).toBe(false);
+});
+
+it("never uses official food type 39 as an inferred cafe source", async () => {
+  vi.mocked(isTourApiConfigured).mockReturnValue(true);
+  const result = await exploreCandidateGroups({ message: "부산 카페", state, preferences: prefs, planningSessionId: sessionId });
+  if ("error" in result) throw new Error(result.error);
+  expect(searchTourPlacesRemote).not.toHaveBeenCalled();
+  expect(hydrateDateCandidates).not.toHaveBeenCalled();
+});
+
+it("removes a branch disliked by either partner even when TourAPI rediscovers it", async () => {
+  vi.mocked(isTourApiConfigured).mockReturnValue(true);
+  const disliked = { ...venue(880), name: "부산 파스타집", category: "restaurant" as const,
+    categoryLabel: "음식점", detailedCategory: "음식점 > 양식", kakaoCategoryGroupCode: "FD6" };
+  const allowed = { ...disliked, externalPlaceId: "881", name: "다른 파스타집", address: "부산 해운대구 881번지" };
+  const official = { ...disliked, externalSource: "tourapi" as const, externalPlaceId: "official880",
+    tourContentTypeId: "39", kakaoCategoryGroupCode: undefined };
+  vi.mocked(listPlaces).mockResolvedValue({ places: [{ ...candidateToPlace(disliked),
+    userStatus: "want", partnerStatus: "dislike" }] });
+  vi.mocked(searchKakaoPlacesRemote).mockResolvedValue({ ok: true, places: [disliked, allowed], isEnd: true, page: 1, totalCount: 2 });
+  vi.mocked(searchTourPlacesRemote).mockResolvedValue({ ok: true, places: [official], isEnd: true, page: 1, totalCount: 1 });
+  const preferences = { ...prefs, activities: ["meal" as const], provenance: { meal: "user_selected" as const } };
+  const result = await exploreCandidateGroups({ message: "부산 식당", state, preferences, planningSessionId: sessionId });
+  if ("error" in result) throw new Error(result.error);
+  expect(result.groups[0].cards.map(card => card.name)).toEqual([allowed.name]);
+  expect(result.sessionCandidates.records.map(row => row.candidateId)).not.toContain("tourapi:official880");
+});
+
+it("merges exact cross-provider meal branches after hydration while retaining the official menu", async () => {
+  vi.mocked(isTourApiConfigured).mockReturnValue(true);
+  const restaurant = { ...venue(890), name: "부산 파스타집", category: "restaurant" as const,
+    categoryLabel: "음식점", detailedCategory: "음식점 > 양식", kakaoCategoryGroupCode: "FD6" };
+  const official = { ...restaurant, externalSource: "tourapi" as const, externalPlaceId: "official890",
+    tourContentTypeId: "39", kakaoCategoryGroupCode: undefined };
+  vi.mocked(searchKakaoPlacesRemote).mockResolvedValue({ ok: true, places: [restaurant], isEnd: true, page: 1, totalCount: 1 });
+  vi.mocked(searchTourPlacesRemote).mockResolvedValue({ ok: true, places: [official], isEnd: true, page: 1, totalCount: 1 });
+  vi.mocked(hydrateDateCandidates).mockImplementation(async rows => rows.map(row => ({ ...row,
+    dishes: "파스타", factSourceUrl: "https://www.data.go.kr/data/15101578/openapi.do" })));
+  const preferences = { ...prefs, activities: ["meal" as const], provenance: { meal: "user_selected" as const } };
+  const result = await exploreCandidateGroups({ message: "부산 식당", state, preferences, planningSessionId: sessionId });
+  if ("error" in result) throw new Error(result.error);
+  expect(result.groups[0].cards).toHaveLength(1);
+  expect(result.groups[0].cards[0].candidateId).toBe("tourapi:official890");
+  expect(result.sessionCandidates.records).toHaveLength(1);
+  expect(result.sessionCandidates.records[0].venue).toMatchObject({ dishes: "파스타",
+    factSourceUrl: "https://www.data.go.kr/data/15101578/openapi.do" });
+});
+
+it("respects an explicitly selected ID despite saved dislike", async () => {
+  const selected = venue(899);
+  const observedAt = new Date().toISOString();
+  const previous = markExplorationCandidates(mergeSessionCandidates(null,
+    buildDateCandidatePool([selected], state).records, { sessionId, observedAt, turnId: "initial" }),
+    { shownIds: ["kakao:899"], observedAt, turnId: "shown" });
+  vi.mocked(listPlaces).mockResolvedValue({ places: [{ ...candidateToPlace(selected), partnerStatus: "dislike" }] });
+  vi.mocked(searchKakaoPlacesRemote).mockResolvedValue({ ok: true, places: [selected], isEnd: true, page: 1, totalCount: 1 });
+  const result = await exploreCandidateGroups({ message: "부산 카페", state, preferences: prefs,
+    selectedIds: ["kakao:899"], planningSessionId: sessionId,
+    sessionCandidates: sealSessionCandidates(previous, { actorId: "user", coupleId: "couple" }) });
+  if ("error" in result) throw new Error(result.error);
+  expect(result.sessionCandidates.records.find(row => row.candidateId === "kakao:899")?.currentState).toBe("selected");
 });
 
 it("keeps more than thirty-two authenticated selections without truncating their IDs", async () => {

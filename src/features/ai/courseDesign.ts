@@ -12,6 +12,7 @@ import { festivalPeriodCoversYmd } from "@/lib/tourapi/festivalSchedule";
 import { candidateActivitySlot, dateCandidateKey, defaultDuration, assignStartTimes, performanceVisitDate, type DateCourseRow, type DateOpeningCache } from "./dateCourse";
 import { candidateFoodConflict } from "./dateIntent";
 import { evidenceConfidence } from "./dateEvidence";
+import { evaluateQualityEvidence } from "./dateQualityCritic";
 import { buildCandidateGraph, repeatedComplexDays, type CandidateGraph } from "./candidateGraph";
 
 export type CourseConstraints = { anchorIds?: readonly string[]; candidateGraph?: CandidateGraph };
@@ -131,13 +132,14 @@ export function venueScoreBreakdown(candidate: DiscoverCandidate, state: AIPlann
     .map(fact => fact.text).join(" ");
   const preferenceText = `${candidate.name} ${candidate.detailedCategory ?? ""} ${evidenceText}`;
   const softPreferences = state.preferences;
-  const quietEvidence = /조용|한적|프라이빗|독립된\s*좌석|대화하기\s*좋/.test(evidenceText);
+  const quietStatus = evaluateQualityEvidence(candidate, "quiet").status;
+  const quietEvidence = quietStatus === "supported";
   const crowdEvidence = /혼잡|붐비|북적|시끄럽|대기\s*줄|웨이팅/.test(preferenceText);
-  const scenicEvidence = /전망|한강|야경|정원|테라스|통창|산책로|풍경/.test(evidenceText);
+  const scenicEvidence = evaluateQualityEvidence(candidate, "scenic").status === "supported";
   const preferenceFit = (softPreferences?.vibe ?? []).reduce((score, vibe) =>
     score + Number(evidenceText.includes(vibe)) * 3, 0)
     + (quietEvidence ? (1 - (softPreferences?.crowdTolerance ?? 0.5)) * 8 : 0)
-    - (crowdEvidence ? (1 - (softPreferences?.crowdTolerance ?? 0.5)) * 12 : 0)
+    - (crowdEvidence || quietStatus === "contradicted" ? (1 - (softPreferences?.crowdTolerance ?? 0.5)) * 12 : 0)
     + (scenicEvidence ? (softPreferences?.scenicPreference ?? 0) * 8 : 0)
     + (state.memorySuggestions?.activities.some(activity => matchesActivity(candidate, activity)) ? 3 : 0)
     + (!state.cuisine && state.memorySuggestions?.cuisine && candidateActivitySlot(candidate) === "meal"
@@ -150,7 +152,7 @@ export function venueScoreBreakdown(candidate: DiscoverCandidate, state: AIPlann
     + (candidateActivitySlot(candidate) === "performance" && candidate.performanceEvent ? 20 : 0)
     + (candidate.factSourceUrl && candidate.factNote ? 3 : 0);
   const remembered = state.memorySignals?.filter(signal => compact(signal.placeName) === compact(candidate.name)) ?? [];
-  const context = (saved.has(candidate.name) ? 7 : 0) + remembered.reduce((score, signal) =>
+  const context = (saved.has(dateCandidateKey(candidate)) || saved.has(candidate.name) ? 7 : 0) + remembered.reduce((score, signal) =>
     score + signal.confidence * (signal.reaction === "liked" ? 5 : signal.reaction === "disliked" ? -16
       : -8 * (1 - (softPreferences?.crowdTolerance ?? 0.5))), 0);
   const novelty = genericChainCafe(candidate) && !state.requiredPlaces.some(name => matchesTerm(candidate, name))

@@ -33,6 +33,15 @@ it("does not launch a repair with too little time left", () => {
   time = 3600;
   expect(runtime.claimRepair()).toBe(false);
 });
+
+it("uses the remaining orchestration budget instead of restarting the full design timer", () => {
+  let time = 0;
+  const runtime = dateDesignRuntime(() => time, { timeoutMs: 2300 });
+  expect(runtime.timeoutMs).toBe(2300);
+  time = 1800;
+  expect(runtime.canGenerate()).toBe(false);
+  expect(runtime.claimRepair()).toBe(false);
+});
 it("preserves a large provider whitelist within per-enum schema limits", () => {
   const ids = Array.from({ length: 500 }, (_, index) => `kakao:${String(index).padStart(6, "0")}-${"x".repeat(35)}`);
   const schema = courseProposalSchema(ids, 7, 500);

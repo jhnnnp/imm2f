@@ -14,12 +14,16 @@ import { placeToCandidate } from "@/features/places/discover";
 import { isTourApiConfigured } from "@/lib/tourapi/env";
 import { observeExperiencePlan } from "@/lib/openai/experiencePlan";
 import { enrichResearchNeedEvidence } from "@/lib/openai/enrichDateVenues";
+import { hydrateDateCandidates } from "@/lib/places/detailCache";
 import { applyDateDefaults, courseSize, extractRequestedAreasFromText, extractStay, selectedAreas, tripDayYmd, withAreas } from "./dateBrief";
 import { explicitDateConstraints } from "./dateConstraints";
 import { explicitFoodExclusions } from "./dateIntent";
 import { buildDateContext } from "./dateContext";
 import { buildDateCandidatePool } from "./dateCandidatePool";
 import { dateCandidateKey } from "./dateCourse";
+import { reserveOfficialRestaurantCandidates } from "./placeRecommend";
+import { allowsCoupleVenue } from "./couplePersonalization";
+import { deduplicateVenueBranches } from "./venueIdentity";
 import { currentSessionVenue } from "./datePlaceRecommendationExecution";
 import { isDateCourseCandidate, looksLikeNonVenue } from "@/lib/kakao/dateCandidate";
 import { groupExplorationCandidates, initialExplorationPreferences,
@@ -291,7 +295,7 @@ export async function exploreCandidateGroups(input: {
       const intents = researchSearchIntents({ needs: [need], unresolved: [], source: researchPlan.source }, area);
       const tourType = tourContentTypeForIntent({ category: need.category, query: need.purpose });
       const tourEligible = isTourApiConfigured() && tourType != null
-        && !["nightview", "meal", "cafe"].includes(groupId);
+        && !["nightview", "cafe"].includes(groupId);
       // Reserve one typed TourAPI request even if Kakao already has eight hits.
       // The two sources describe different venue inventories.
       const tourBudget = tourEligible ? Math.min(2, Math.max(0, providerBudgetPerGroup - 2)) : 0;
@@ -302,7 +306,14 @@ export async function exploreCandidateGroups(input: {
         return [...queries.map((query, index) => ({ intent, query, primary: index === 0, page: 1 })),
           ...(queries[0] ? [{ intent, query: queries[0], primary: true, page: 2 }] : [])];
       }).slice(0, kakaoBudget);
-      const responses = await Promise.all(searches.map(async search => ({ search,
+      const tourPromise = tourBudget && tourType ? Promise.all(Array.from({ length: tourBudget }, (_, index) => index + 1)
+        .map(page => limitedProviderCall(() => {
+          providerCalls++;
+          return searchTourPlacesRemote({ region: intents[0].region,
+            query: tourType === "39" ? "" : tourDiscoveryQuery(tourType, intents[0].query),
+            category: intents[0].category, tourContentTypeId: tourType, page });
+        }).catch(() => null))) : Promise.resolve([]);
+      const [responses, tour] = await Promise.all([Promise.all(searches.map(async search => ({ search,
         response: await limitedProviderCall(() => {
           providerCalls++;
           return searchKakaoPlacesRemote({
@@ -312,7 +323,7 @@ export async function exploreCandidateGroups(input: {
           includeShopping: groupId === "shopping", page: search.page,
           });
         }).catch(() => null),
-      })));
+      }))), tourPromise]);
       for (const { search, response } of responses) if (response?.ok)
         for (const [index, venue] of response.places.entries())
           if (explorationGroupMatch(venue, groupId, true)) {
@@ -322,14 +333,6 @@ export async function exploreCandidateGroups(input: {
           }
       if (tourBudget && tourType) {
         const tourIntent = intents[0];
-        const tour = await Promise.all(Array.from({ length: tourBudget }, (_, index) => index + 1)
-          .map(page => limitedProviderCall(() => {
-          providerCalls++;
-          return searchTourPlacesRemote({
-          region: tourIntent.region, query: tourDiscoveryQuery(tourType, tourIntent.query),
-          category: tourIntent.category, tourContentTypeId: tourType, page,
-          });
-        }).catch(() => null)));
         for (const [pageIndex, response] of tour.entries()) if (response?.ok)
           for (const [index, venue] of response.places.entries())
             if (explorationGroupMatch(venue, groupId, true)) {
@@ -344,18 +347,26 @@ export async function exploreCandidateGroups(input: {
       || !tripDays.length || !venue.openingHours || tripDays.some(day => festivalPeriodCoversYmd(venue.openingHours, day)));
     // Choose a small evidence shortlist from several search variants before
     // quality facts can affect final ranking.
-    const evidenceShortlist = [...fresh].sort((a, b) => {
+    const rankedForEvidence = [...fresh].sort((a, b) => {
       const left = retrieval.get(dateCandidateKey(a));
       const right = retrieval.get(dateCandidateKey(b));
       return (right?.queries.size ?? 0) - (left?.queries.size ?? 0)
         || (left?.primaryRank ?? Number.MAX_SAFE_INTEGER) - (right?.primaryRank ?? Number.MAX_SAFE_INTEGER)
         || (left?.bestRank ?? Number.MAX_SAFE_INTEGER) - (right?.bestRank ?? Number.MAX_SAFE_INTEGER);
-    }).slice(0, 12);
-    const enriched = await enrichResearchNeedEvidence(evidenceShortlist, state,
+    });
+    const evidenceShortlist = groupId === "meal" ? reserveOfficialRestaurantCandidates(rankedForEvidence, 12)
+      : rankedForEvidence.slice(0, 12);
+    const officialMeals = evidenceShortlist.filter(venue => venue.externalSource === "tourapi"
+      && venue.tourContentTypeId === "39" && venue.category === "restaurant").slice(0, 4);
+    const hydrated = officialMeals.length ? await hydrateDateCandidates(officialMeals, saved).catch(() => officialMeals) : [];
+    const officialById = new Map(hydrated.map(venue => [dateCandidateKey(venue), venue]));
+    const menuGrounded = evidenceShortlist.map(venue => officialById.get(dateCandidateKey(venue)) ?? venue);
+    const enriched = await enrichResearchNeedEvidence(menuGrounded, state,
       activeNeeds.filter(item => item.id === need.id || item.id === `${need.id}-evidence`), evidenceLimitPerGroup)
-      .catch(() => evidenceShortlist);
+      .catch(() => menuGrounded);
     const byId = new Map(enriched.map(venue => [dateCandidateKey(venue), venue]));
-    const checked = fresh.map(venue => byId.get(dateCandidateKey(venue)) ?? venue);
+    const checked = deduplicateVenueBranches(fresh.map(venue => byId.get(dateCandidateKey(venue)) ?? venue)
+      .filter(venue => allowsCoupleVenue(venue, saved, state, input.selectedIds)), input.selectedIds);
     const pool = buildDateCandidatePool(checked, state, undefined,
       venue => isDateCourseCandidate(venue, state.requiredPlaces)
         || groupId === "shopping" && venue.externalSource === "kakao"

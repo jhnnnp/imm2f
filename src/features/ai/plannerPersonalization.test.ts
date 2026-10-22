@@ -16,3 +16,9 @@ it("retains a destination explicitly selected for this trip", () => {
   expect(applyPlannerTasteHints(withAreas(emptyDateBrief(), ["부산"]), seed))
     .toMatchObject({ areas: ["부산"], regions: ["부산"], region: "부산" });
 });
+
+it("keeps the current balanced pace when the saved profile prefers slow dates", () => {
+  const state = { ...emptyDateBrief(), pace: "balanced" as const,
+    userRequests: ["이번엔 적당한 속도로 균형 있게 짜줘"] };
+  expect(applyPlannerTasteHints(state, seed).pace).toBe("balanced");
+});

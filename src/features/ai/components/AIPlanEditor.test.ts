@@ -99,6 +99,46 @@ it("collects trip duration locally and keeps the original region and request", a
   expect(request.previousState).toMatchObject({ areas: ["부산"], stayKind: "overnight", nights: 2 });
 });
 
+it("collects a missing performance date locally and sends that explicit date to the engine", async () => {
+  render(createElement(AIPlanEditor, editorProps({ startDate: undefined })));
+  send("성수에서 연극 보고 저녁 데이트 코스 짜줘");
+  expect(screen.getByText("언제 관람할 예정인가요?")).toBeTruthy();
+  expect(mocks.recommend).not.toHaveBeenCalled();
+  send("2026-10-24");
+  await waitFor(() => expect(mocks.recommend).toHaveBeenCalledTimes(1));
+  expect(mocks.recommend.mock.calls[0][0]).toMatchObject({ dateLabel: "2026-10-24",
+    previousState: { areas: ["성수"], dateLabel: "2026-10-24" } });
+  expect(mocks.recommend.mock.calls[0][0].message).toContain("연극 보고 저녁");
+});
+
+it("preserves all preferences through region, duration, transport and origin questions", async () => {
+  render(createElement(AIPlanEditor, editorProps({ kind: "trip" })));
+  send("해산물 빼고 조용한 여행 일정과 가는 법 알려줘");
+  fireEvent.click(screen.getByRole("button", { name: "부산", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "2박3일", exact: true }));
+  expect(screen.getByText("어떻게 이동하시나요?")).toBeTruthy();
+  expect(mocks.recommend).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "대중교통으로 갈게", exact: true }));
+  expect(screen.getByText("어디에서 출발하시나요?")).toBeTruthy();
+  send("서울역에서 출발");
+  await waitFor(() => expect(mocks.recommend).toHaveBeenCalledTimes(1));
+  const input = mocks.recommend.mock.calls[0][0];
+  expect(input.previousState).toMatchObject({ areas: ["부산"], nights: 2, stayKind: "overnight" });
+  expect(input.message).toBe("해산물 빼고 조용한 여행 일정과 가는 법 알려줘\n부산 쪽이 좋아\n2박3일로 짜줘\n대중교통으로 갈게\n서울역에서 출발");
+});
+
+it("keeps a pending request during a conversational detour and resumes its original question", async () => {
+  render(createElement(AIPlanEditor, editorProps({ kind: "trip" })));
+  send("조용한 부산 여행 일정 짜줘");
+  expect(screen.getByText("여행 기간을 알려 주세요")).toBeTruthy();
+  send("고마워");
+  await screen.findByText("새 답변", { exact: true });
+  expect(screen.getAllByText("여행 기간을 알려 주세요")).toHaveLength(2);
+  fireEvent.click(screen.getAllByRole("button", { name: "2박3일", exact: true }).at(-1)!);
+  await waitFor(() => expect(mocks.recommend).toHaveBeenCalledTimes(2));
+  expect(mocks.recommend.mock.calls[1][0].message).toBe("조용한 부산 여행 일정 짜줘\n2박3일로 짜줘");
+});
+
 it("retries a failed intake request with its custom region and original preferences exactly once", async () => {
   mocks.recommend.mockRejectedValueOnce(new Error("network"));
   render(createElement(AIPlanEditor, editorProps()));

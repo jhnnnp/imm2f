@@ -46,6 +46,20 @@ describe("dateCourseCandidate", () => {
     expect(isDateCourseCandidate(attraction, [])).toBe(true);
     expect(isDateCourseCandidate({ ...attraction, address: "" }, [])).toBe(false);
   });
+  it("admits only located official type-39 restaurant entities without treating them as cafes", () => {
+    const meal = candidate({ externalSource: "tourapi", name: "공식 음식점", category: "restaurant",
+      categoryLabel: "음식점", detailedCategory: "음식점", address: "서울 성동구 성수이로 1",
+      kakaoCategoryGroupCode: undefined, tourContentTypeId: "39" });
+    expect(isDateCourseCandidate(meal, [])).toBe(true);
+    expect(isDateCourseCandidate({ ...meal, category: "cafe" }, [])).toBe(false);
+    expect(isDateCourseCandidate({ ...meal, category: "cafe" }, [meal.name])).toBe(false);
+    expect(isDateCourseCandidate({ ...meal, address: " " }, [])).toBe(false);
+    expect(isDateCourseCandidate({ ...meal, coordinates: [0, 0] }, [])).toBe(false);
+    expect(isDateCourseCandidate({ ...meal, coordinates: [0, 0] }, [meal.name])).toBe(false);
+    expect(isDateCourseCandidate({ ...meal, coordinates: [37.5, 127] }, [])).toBe(false);
+    expect(isDateCourseCandidate({ ...meal, tourContentTypeId: "12" }, [])).toBe(false);
+    expect(isDateCourseCandidate({ ...meal, name: "공식 음식점 주차장", detailedCategory: "주차장" }, [])).toBe(false);
+  });
 
   it("does not treat a longer name as the exact requested venue", () => {
     const other = candidate({ name: "소월아트홀 주차장", category: "tourist", categoryLabel: "주차장", kakaoCategoryGroupCode: undefined });

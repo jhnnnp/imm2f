@@ -10,6 +10,7 @@ import {
   placeSearchPlans,
   placeTourSearch,
   rankPlaceCandidates,
+  reserveOfficialRestaurantCandidates,
   sanitizePlacePicks,
 } from "./placeRecommend";
 
@@ -52,7 +53,11 @@ describe("placeRecommend", () => {
     });
     expect(placeTourSearch({ kind: "activity", query: "체험", area: "전주" })?.tourContentTypeId).toBe("28");
     expect(placeTourSearch({ kind: "exhibit", query: "전시", area: "전주" })?.tourContentTypeId).toBe("14");
-    expect(placeTourSearch(pastaAsk)).toBeNull();
+    expect(placeTourSearch(pastaAsk)).toMatchObject({ region: "성수", category: "restaurant",
+      tourContentTypeId: "39", query: "", page: 1 });
+    expect(placeTourSearch({ kind: "restaurant", query: "조용한 파스타 맛집", area: "성수" })?.query).toBe("");
+    expect(placeTourSearch({ kind: "cafe", query: "디저트", area: "성수" })).toBeNull();
+    expect(placeTourSearch({ kind: "dessert", query: "티라미수", area: "성수" })).toBeNull();
     expect(placeTourSearch({ kind: "exhibit", query: "현대미술", area: "서울" })?.query).toBe("현대미술");
     expect(placeTourSearch({ kind: "activity", query: "카약", area: "부산" })?.query).toBe("카약");
     expect(placeTourSearch({ kind: "shopping", query: "빈티지", area: "서울" })?.query).toBe("빈티지");
@@ -114,6 +119,34 @@ describe("placeRecommend", () => {
     const ranked = rankPlaceCandidates(pool, pastaAsk, ctx);
     expect(ranked[0].name).toBe("파스타 바 B");
     expect(ranked.at(-1)?.name).toBe("국밥집");
+  });
+  it("keeps a bounded official-menu shortlist before hydration without claiming a dish match", () => {
+    const kakao = Array.from({ length: 15 }, (_, index) => candidate({ externalPlaceId: `pasta-${index}`, name: `파스타 ${index}` }));
+    const official = Array.from({ length: 6 }, (_, index) => candidate({ externalSource: "tourapi",
+      externalPlaceId: `official-${index}`, name: `공식 음식점 ${index}`, detailedCategory: "음식점",
+      kakaoCategoryGroupCode: undefined, tourContentTypeId: "39" }));
+    const ranked = rankPlaceCandidates([...kakao, ...official], pastaAsk, ctx);
+    expect(ranked).toHaveLength(14);
+    expect(ranked.filter(item => item.externalSource === "tourapi")).toHaveLength(4);
+    expect(ranked.filter(item => item.externalSource === "tourapi").every(item => !item.dishes)).toBe(true);
+    expect(reserveOfficialRestaurantCandidates([...kakao, ...official], 3)).toHaveLength(3);
+    expect(reserveOfficialRestaurantCandidates([...kakao, ...official], 0)).toEqual([]);
+  });
+
+  it("uses freshly hydrated official menus for cuisine, exclusion and ranking checks", () => {
+    const official = (id: string, dishes?: string) => candidate({ externalSource: "tourapi", externalPlaceId: id,
+      name: `공식 음식점 ${id}`, detailedCategory: "음식점", kakaoCategoryGroupCode: undefined, tourContentTypeId: "39",
+      dishes, factSourceUrl: "https://www.data.go.kr/data/15101578/openapi.do" });
+    const unknown = official("unknown");
+    const pasta = official("pasta", "파스타 · 피자");
+    const soup = official("soup", "한식 · 국밥");
+    const shellfish = official("shellfish", "해산물 파스타");
+    const filtered = filterPlaceCandidates([unknown, pasta, soup, shellfish], pastaAsk,
+      { allowHarsh: noAllow, exclude: [], violatesAvoid: blob => /해산물/.test(blob) });
+    expect(filtered.map(item => item.externalPlaceId)).toEqual(["unknown", "pasta"]);
+    expect(rankPlaceCandidates(filtered, pastaAsk, ctx)[0].externalPlaceId).toBe("pasta");
+    expect(filterPlaceCandidates([pasta], { kind: "cafe", query: "카페", area: "성수" },
+      { allowHarsh: noAllow, exclude: [], violatesAvoid: () => false })).toEqual([]);
   });
 
   it("unlocks harsher venues only when the user asks", () => {

@@ -62,6 +62,14 @@ describe("exploration description research", () => {
     ]);
     expect(result.get("kakao:1")).toEqual(["noise", "crowd", "space", "menu"]);
   });
+
+  it("rechecks a contradicted quality when the final critic asks for targeted repair", () => {
+    const candidate = { ...venue("1", "cafe"), evidence: [{ id: "noise", venueId: "kakao:1",
+      text: "소음과 혼잡이 있어 조용하지 않은 공간입니다.", url: "https://example.com/noise",
+      checkedAt: new Date().toISOString(), verification: "source_checked" as const, attribute: "space" as const }] };
+    const requested = need({ kind: "evidence", category: "cafe", qualities: ["quiet"], evidenceNeeded: ["noise", "crowd"] });
+    expect(explorationVenueResearchFocus([candidate], [requested], 1, true).get("kakao:1")).toEqual(["noise", "crowd"]);
+  });
 });
 
 describe("mountain lot branch identity", () => {

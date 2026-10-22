@@ -77,6 +77,39 @@ describe("TourAPI discovery content types", () => {
 describe("current TourAPI request and detail contract", () => {
   const payload = (items: unknown[]) => JSON.stringify({ response: { header: { resultCode: "0000" },
     body: { totalCount: items.length, items: { item: items } } } });
+  it("browses official type-39 food listings as restaurants without guessing cafe categories", async () => {
+    vi.stubEnv("TOUR_API_SERVICE_KEY", "restaurant-test");
+    const fetcher = vi.fn(async () => new Response(payload([{ contentid: "food-39", contenttypeid: "39",
+      title: "군산 전통식당", addr1: "전북 군산시 중앙로", mapx: "126.7116", mapy: "35.9871" }])));
+    vi.stubGlobal("fetch", fetcher);
+    const result = await searchTourPlacesRemote({ region: "군산", category: "restaurant", query: "" });
+    expect(result.ok && result.places).toEqual([expect.objectContaining({ externalPlaceId: "food-39",
+      category: "restaurant", categoryLabel: "음식점", tourContentTypeId: "39" })]);
+    expect((fetcher.mock.calls[0][0] as URL).searchParams.get("contentTypeId")).toBe("39");
+  });
+  it("reads restaurant menus, official hours and closing days from the type-39 intro", async () => {
+    vi.stubEnv("TOUR_API_SERVICE_KEY", "restaurant-detail-test");
+    const fetcher = vi.fn(async (url: URL) => new Response(payload(url.pathname.includes("detailIntro2")
+      ? [{ contentid: "food-39", contenttypeid: "39", firstmenu: "한우 비빔밥", treatmenu: "한우 비빔밥<br>육회",
+        opentimefood: "11:00~20:00", restdatefood: "매주 월요일", parkingfood: "가능" }]
+      : [{ contentid: "food-39", overview: "지역 식재료로 음식을 내는 식당" }])));
+    vi.stubGlobal("fetch", fetcher);
+    const detail = await loadTourPlaceDetail("food-39", "restaurant", "39", { includeImages: false });
+    expect(detail).toMatchObject({ dishes: "한우 비빔밥 · 한우 비빔밥 · 육회",
+      openingHours: "11:00~20:00 · 휴무: 매주 월요일", facts: [
+        { label: "대표 메뉴", value: "한우 비빔밥" }, { label: "취급 메뉴", value: "한우 비빔밥 · 육회" },
+        { label: "휴무", value: "매주 월요일" }, { label: "주차", value: "가능" },
+      ] });
+    const intro = fetcher.mock.calls.find(([url]) => url.pathname.includes("detailIntro2"))![0] as URL;
+    expect(intro.searchParams.get("contentTypeId")).toBe("39");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it("does not transfer an intro response from a different food venue", async () => {
+    vi.stubEnv("TOUR_API_SERVICE_KEY", "wrong-restaurant-detail-test");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(payload([{ contentid: "another-food", contenttypeid: "39",
+      firstmenu: "다른 지점의 메뉴", opentimefood: "24시간" }]))));
+    expect(await loadTourPlaceDetail("food-39", "restaurant", "39", { includeImages: false })).toBeNull();
+  });
   it("uses legal-dong province codes rather than retired area filters", async () => {
     vi.stubEnv("TOUR_API_SERVICE_KEY", "legal-dong-test");
     const fetcher = vi.fn(async () => new Response(payload([])));

@@ -294,11 +294,41 @@ function sourceUrl(value: unknown) {
 }
 
 function extractSources(searchCalls: Record<string, unknown>[], content: Record<string, unknown>[]) {
-  const sources = searchCalls.flatMap(item => isRecord(item.action) && Array.isArray(item.action.sources)
+  const sources = searchCalls.flatMap(item => item.status === "completed" && isRecord(item.action) && Array.isArray(item.action.sources)
     ? item.action.sources.filter(isRecord).map(source => source.url) : []);
+  // Reasoning search also returns completed page-open/find actions. These have
+  // action.url rather than action.sources and may be the only provenance for
+  // an exact page used in JSON output without inline citation annotations.
+  const visited = searchCalls.flatMap(item => item.status === "completed" && isRecord(item.action)
+    && ["open_page", "find_in_page"].includes(String(item.action.type)) ? [item.action.url] : []);
   const citations = content.flatMap(part => Array.isArray(part.annotations)
     ? part.annotations.filter(isRecord).filter(annotation => annotation.type === "url_citation").map(annotation => annotation.url) : []);
-  return [...new Set([...sources, ...citations].map(sourceUrl).filter((url): url is string => url !== null))];
+  return [...new Set([...sources, ...visited, ...citations].map(sourceUrl).filter((url): url is string => url !== null))];
+}
+
+/** Hosted search may attach citation markers beside a valid JSON object. The
+ * source annotations are collected separately; removing only those markers
+ * outside strings avoids an unnecessary second model call to format JSON. */
+function parseSearchJson<T>(text: string): T | null {
+  const direct = parseJsonObject<T>(text);
+  if (direct) return direct;
+  let quoted = false;
+  let escaped = false;
+  let cleaned = "";
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (!quoted && char === "") {
+      const citation = /^cite[^\n]+/.exec(text.slice(index));
+      // Preserve a token boundary: stripping a marker between two numbers
+      // must not turn invalid `1 <citation> 0` into an invented value `10`.
+      if (citation) { cleaned += " "; index += citation[0].length - 1; continue; }
+    }
+    cleaned += char;
+    if (escaped) { escaped = false; continue; }
+    if (quoted && char === "\\") { escaped = true; continue; }
+    if (char === '"') quoted = !quoted;
+  }
+  return cleaned === text ? null : parseJsonObject<T>(cleaned);
 }
 
 function parseJsonObject<T>(content: string): T | null {
@@ -360,7 +390,7 @@ export async function completeJsonWithWebSearch<T>(input: {
     const text = extractOutputText(payload, content);
     const sources = searchCalls.length ? extractSources(searchCalls, content) : [];
     input.onSources?.(sources);
-    const direct = parseJsonObject<T>(text);
+    const direct = parseSearchJson<T>(text);
     if (direct) return direct;
     if (!text.trim() || signal.aborted) return null;
     return requestJson<T>({

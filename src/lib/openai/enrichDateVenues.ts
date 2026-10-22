@@ -15,15 +15,16 @@ const INTERACTIVE_RESEARCH_BUDGET_MS = 7000;
 const evidenceCache = new Map<string, { expiresAt: number; observations: NonNullable<DiscoverCandidate["evidence"]> }>();
 
 function untilResearchAbort<T>(operation: Promise<T>, fallback: T, signal?: AbortSignal): Promise<T> {
-  if (!signal) return operation.catch(() => fallback);
+  const pending = Promise.resolve(operation);
+  if (!signal) return pending.catch(() => fallback);
   if (signal.aborted) {
-    void operation.catch(() => undefined);
+    void pending.catch(() => undefined);
     return Promise.resolve(fallback);
   }
   return new Promise(resolve => {
     const abort = () => resolve(fallback);
     signal.addEventListener("abort", abort, { once: true });
-    void operation.then(resolve, () => resolve(fallback))
+    void pending.then(resolve, () => resolve(fallback))
       .finally(() => signal.removeEventListener("abort", abort));
   });
 }
@@ -346,7 +347,7 @@ export async function enrichDateVenues(candidates: DiscoverCandidate[], state: A
 
 /** Requested qualities and basic visitor experiences both need evidence.
  * A category-only restaurant or lookout result must not silently skip research. */
-export function explorationVenueResearchFocus(candidates: DiscoverCandidate[], needs: ResearchNeed[], perNeedLimit = 3) {
+export function explorationVenueResearchFocus(candidates: DiscoverCandidate[], needs: ResearchNeed[], perNeedLimit = 3, forceRecheck = false) {
   const focus = new Map<string, string[]>();
   const limit = Math.max(1, Math.min(Number.isFinite(perNeedLimit) ? Math.trunc(perNeedLimit) : 3, 6));
   const requestedNeeds = needs.filter(item => item.kind === "venue" || item.kind === "evidence" && item.evidenceNeeded.length)
@@ -361,7 +362,7 @@ export function explorationVenueResearchFocus(candidates: DiscoverCandidate[], n
     let selected = 0;
     for (const candidate of matches) {
       if (need.kind === "evidence") {
-        if (evaluateResearchCoverage({ needs: [need], unresolved: [], source: "llm" },
+        if (!forceRecheck && evaluateResearchCoverage({ needs: [need], unresolved: [], source: "llm" },
           [candidate], new Set([need.id]))[0].status === "sufficient") continue;
       } else if ((candidate.evidence ?? []).some(fact => (!fact.venueId || fact.venueId === dateCandidateKey(candidate))
         && researchEvidenceFresh(fact) && ["source_checked", "search_report"].includes(fact.verification ?? "")
@@ -379,10 +380,10 @@ export function explorationVenueResearchFocus(candidates: DiscoverCandidate[], n
 /** Bounded research uses cited search and exact branch checks. Missing
  * descriptions remain explicit unknowns, rather than fabricated venue traits. */
 export async function enrichResearchNeedEvidence(candidates: DiscoverCandidate[], state: AIPlannerState,
-  needs: ResearchNeed[], perNeedLimit = 3): Promise<DiscoverCandidate[]> {
-  if (!candidates.length) return candidates;
+  needs: ResearchNeed[], perNeedLimit = 3, signal?: AbortSignal, forceRecheck = false): Promise<DiscoverCandidate[]> {
+  if (!candidates.length || signal?.aborted) return candidates;
   const fresh = candidates.map(freshResearchCandidateEvidence);
-  const stored = await readVenueEvidence(fresh);
+  const stored = await untilResearchAbort(readVenueEvidence(fresh), new Map<string, NonNullable<DiscoverCandidate["evidence"]>>(), signal);
   const grounded = fresh.map(candidate => {
     const evidence = [...new Map([...(candidate.evidence ?? []), ...(stored.get(dateCandidateKey(candidate)) ?? [])]
       .map(fact => [`${fact.url}:${fact.text}`, fact])).values()];
@@ -390,8 +391,8 @@ export async function enrichResearchNeedEvidence(candidates: DiscoverCandidate[]
   });
   // Previously checked venue facts can still improve cards when no new quality research was requested.
   if (!needs.some(need => need.kind === "venue" || need.kind === "evidence" && need.evidenceNeeded.length)) return grounded;
-  if (!isOpenAiConfigured()) return grounded;
-  const focus = explorationVenueResearchFocus(grounded, needs, perNeedLimit);
+  if (!isOpenAiConfigured() || signal?.aborted) return grounded;
+  const focus = explorationVenueResearchFocus(grounded, needs, perNeedLimit, forceRecheck);
   const perUnitLimit = Math.max(1, Math.min(Number.isFinite(perNeedLimit) ? Math.trunc(perNeedLimit) : 3, 6));
   const researchUnits = new Set(needs.filter(need => need.kind === "venue" || need.kind === "evidence")
     .map(need => need.id.replace(/-(?:venue|evidence)$/, ""))).size;
@@ -399,8 +400,8 @@ export async function enrichResearchNeedEvidence(candidates: DiscoverCandidate[]
   const byId = new Map(grounded.map(candidate => [dateCandidateKey(candidate), candidate]));
   const targets = [...focus.keys()].map(id => byId.get(id)!).slice(0, targetLimit);
   if (!targets.length) return grounded;
-  const researched = await researchVenueBatch(targets, state, targets.length, 9000, undefined, focus);
-  await writeVenueEvidence(researched);
+  const researched = await researchVenueBatch(targets, state, targets.length, 9000, undefined, focus, signal);
+  if (!signal?.aborted) await untilResearchAbort(writeVenueEvidence(researched), undefined, signal);
   const researchedById = new Map(researched.map(candidate => [dateCandidateKey(candidate), candidate]));
   return grounded.map(candidate => researchedById.get(dateCandidateKey(candidate)) ?? candidate);
 }

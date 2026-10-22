@@ -22,9 +22,17 @@ describe("conversational planner intake", () => {
     expect(plannerEntryIntake({ kind: "date", message, state: emptyDateBrief() })).toBeNull();
   });
 
-  it.each(["안녕", "왜 그 카페를 추천해?", "여행지 추천해줘", "아직 지역은 못 정했어"])
+  it.each(["안녕", "왜 그 카페를 추천해?"])
   ("keeps conversation and destination discovery in the engine: %s", message => {
     expect(plannerEntryIntake({ kind: "trip", message, state: emptyDateBrief() })).toBeNull();
+  });
+
+  it.each(["여행지 추천해줘", "아직 지역은 못 정했어"])("offers concrete unselected regions when the destination is undecided: %s", message => {
+    const result = plannerEntryIntake({ kind: "trip", message, state: emptyDateBrief(), suggestedAreas: ["증평"] });
+    expect(result?.slot).toBe("area");
+    expect(result?.state.areas).toEqual([]);
+    expect(result?.card.suggestions?.[0]).toBe("증평");
+    expect(result?.card.lines.join(" ")).toContain("직접 입력");
   });
 
   it("asks only the missing trip duration and preserves the explicit destination", () => {
@@ -38,5 +46,43 @@ describe("conversational planner intake", () => {
 
   it("does not turn a standalone venue request into trip duration intake", () => {
     expect(plannerEntryIntake({ kind: "trip", message: "카페 추천해줘", state: withAreas(emptyDateBrief(), ["제주"]) })).toBeNull();
+  });
+
+  it("asks an attendance date only for scheduled itinerary experiences without a selected date", () => {
+    const request = { kind: "date" as const, message: "성수에서 연극 보고 저녁 데이트 코스 짜줘", state: emptyDateBrief() };
+    expect(plannerEntryIntake(request)?.slot).toBe("date");
+    expect(plannerEntryIntake({ ...request, dateLabel: "2026-10-24" })).toBeNull();
+    expect(plannerEntryIntake({ ...request, message: `${request.message}\n2026-10-25` })).toBeNull();
+    expect(plannerEntryIntake({ ...request, message: "성수 조용한 카페 추천해줘" })).toBeNull();
+  });
+
+  it("collects only missing route details and permits a local-only course", () => {
+    const request = { kind: "trip" as const, message: "부산 1박2일 여행 일정과 가는 법 알려줘", state: emptyDateBrief() };
+    expect(plannerEntryIntake(request)?.slot).toBe("transport");
+    const transport = { ...request, message: `${request.message}\n대중교통으로 갈게` };
+    expect(plannerEntryIntake(transport)?.slot).toBe("origin");
+    const complete = { ...transport, message: `${transport.message}\n서울역에서 출발` };
+    expect(plannerEntryIntake(complete)).toBeNull();
+    expect(plannerEntryIntake({ ...transport, message: `${transport.message}\n현지 코스만 추천해줘` })).toBeNull();
+    expect(plannerEntryIntake({ ...request, message: "부산 1박2일 여행 일정 짜줘" })).toBeNull();
+    expect(plannerEntryIntake({ ...request, message: "부산 대중교통으로 1박2일 일정 짜줘" })).toBeNull();
+    expect(plannerEntryIntake({ ...request, message: "부산 1박2일 장소 사이 이동 경로도 고려해줘" })).toBeNull();
+  });
+
+  it("does not collect an attendance date for a rejected experience", () => {
+    expect(plannerEntryIntake({ kind: "date", message: "성수에서 공연은 빼고 카페 데이트 코스 짜줘", state: emptyDateBrief() })).toBeNull();
+  });
+
+  it.each(["출발지는 아직 미정", "출발지부터 고려한 경로로 짜줘", "출발지는 정해지지 않았어"])
+  ("still asks for a missing origin after route metadata: %s", detail => {
+    const message = `부산 1박2일 여행 일정과 가는 법 알려줘\n대중교통으로 갈게\n${detail}`;
+    const result = plannerEntryIntake({ kind: "trip", message, state: emptyDateBrief() });
+    expect(result?.slot).toBe("origin");
+    expect(result?.state.areas).toEqual(["부산"]);
+  });
+
+  it("completes route intake with a terminal answer without replacing the destination", () => {
+    const message = "부산 1박2일 여행 일정과 가는 법 알려줘\n대중교통으로 갈게\n서울고속버스터미널에서 출발";
+    expect(plannerEntryIntake({ kind: "trip", message, state: emptyDateBrief() })).toBeNull();
   });
 });

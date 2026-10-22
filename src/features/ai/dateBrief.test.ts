@@ -23,6 +23,7 @@ import {
   isTravelPlan,
   matchesIndoorType,
   matchesActivity,
+  matchesCuisine,
   matchesTerm,
   planDayYmd,
   missingSlot,
@@ -51,6 +52,28 @@ function candidate(overrides: Partial<DiscoverCandidate> = {}): DiscoverCandidat
 }
 
 describe("dateBrief", () => {
+  it("classifies an official restaurant's cuisine from its sourced menu even with a generic provider category", () => {
+    const meal = candidate({ externalSource: "tourapi", category: "restaurant", categoryLabel: "음식점",
+      name: "성수 식당", detailedCategory: "음식점", dishes: "대표 메뉴: 파스타, 리조또" });
+    expect(matchesCuisine(meal, "양식")).toBe(false);
+    expect(matchesCuisine({ ...meal, factSourceUrl: "https://www.data.go.kr/data/15101578/openapi.do" }, "양식")).toBe(true);
+    expect(matchesCuisine({ ...meal, factSourceUrl: "https://www.data.go.kr/data/15101578/openapi.do" }, "일식")).toBe(false);
+  });
+  it.each([
+    ["서울역에서 출발해서 부산 1박2일 여행", ["부산"]],
+    ["성수에서 출발해서 강릉 여행 갈래", ["강릉"]],
+    ["출발지는 홍대, 부산 2박3일", ["부산"]],
+    ["대전역에서 출발해 제주 여행", ["제주"]],
+    ["부산 여행은 서울역에서 출발", ["부산"]],
+    ["성수에서 출발해 홍대 갔다가 성수 카페도 들러줘", ["홍대", "성수"]],
+  ])("keeps departure locations separate from requested destinations: %s", (message, areas) => {
+    expect(extractRequestedAreasFromText(message as string)).toEqual(expect.arrayContaining(areas as string[]));
+    expect(extractRequestedAreasFromText(message as string)).toHaveLength(areas.length);
+  });
+  it.each(["조용한 여행 일정 짜줘", "대중교통으로 여행 갈래", "자가용으로 여행", "도보로 이동"])
+  ("does not treat route choices or adjectives as a destination: %s", message => {
+    expect(extractRequestedAreasFromText(message)).toEqual([]);
+  });
   it("removes rejected destinations from searches while retaining an explicitly added destination", () => {
     expect(extractRequestedAreasFromText("부산 말고 제주로 변경해줘")).toEqual(["제주"]);
     expect(extractRequestedAreasFromText("부산이 아니라 제주로 바꿔줘")).toEqual(["제주"]);

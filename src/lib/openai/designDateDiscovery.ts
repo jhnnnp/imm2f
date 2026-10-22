@@ -4,6 +4,8 @@ import { completeJson } from "./client";
 import { isOpenAiConfigured } from "./env";
 import { DATE_PLAYBOOK, datePlaybookTags, selectDatePlaybook } from "./datePlaybook";
 import { explicitlyDislikedActivities, toDateIntent } from "@/features/ai/dateIntent";
+import { buildVenueSearchBrief } from "./venueSearchQueries";
+import type { CouplePersonalizationContext } from "@/features/ai/couplePersonalization";
 
 type Discovery = NonNullable<AIPlannerState["discovery"]>;
 const activities = new Set<DateActivityId>(["meal", "cafe", "walk", "exhibit", "movie", "performance", "indoor", "nightview"]);
@@ -79,6 +81,7 @@ export function explicitDiscoveryTransport(input: { message: string; userRequest
 
 /** Plan the research before venue selection. A cuisine/category is not a complete date brief. */
 export async function designDateDiscovery(input: { message: string; state: AIPlannerState; conversation?: DateChatTurn[]; taste: string[];
+  couplePersonalization?: CouplePersonalizationContext;
   /** Exploration already supplies verified candidates; retain its brief without another model pass. */
   useExistingBrief?: boolean }): Promise<Discovery> {
   const areas = selectedAreas(input.state);
@@ -97,13 +100,13 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
   const swapping = input.state.intent === "modify" && input.state.pinOrder.some(name => input.state.excludedPlaces.includes(name));
   const additionCount = pinnedCount && (input.state.addStop || swapping) ? pinnedCount + (input.state.addStop ? 1 : 0) : 0;
   const queryLimit = Math.min(8, Math.max(4, areas.length * 3));
-  const defaults = trip ? ["대표 관광명소", "지역 음식 맛집", "전망 좋은 카페", "산책 명소"] : ["데이트 레스토랑", "디저트 카페", "독립서점", "전시 갤러리", "가볼만한곳"];
-  const queries = defaults.flatMap(query => areas.map(region => ({ region, query })));
+  const searchBrief = buildVenueSearchBrief({ ...input, limit: queryLimit });
   const transport = explicitDiscoveryTransport({ message: input.message,
     userRequests: input.state.userRequests, conversation: input.conversation, previous: previous?.transport });
   const fallback: Discovery = {
-    themes: previous?.themes ?? [trip ? "지역의 음식과 풍경을 함께 즐기는 코스" : "식사와 공간, 동네의 볼거리를 함께 즐기는 코스"],
-    priorities: previous?.priorities ?? [], queries: queries.slice(0, queryLimit),
+    themes: searchBrief.priorities.length ? [`${searchBrief.priorities.slice(0, 3).join(" · ")} 중심의 코스`]
+      : previous?.themes ?? [trip ? "지역의 문화와 풍경을 탐색하는 코스" : "관심 있는 공간과 동네 경험을 탐색하는 코스"],
+    priorities: searchBrief.priorities, queries: searchBrief.queries,
     transport,
     requiredActivities: [...new Set(lockedActivities)],
     activityOrder: userOrder.length >= 2 ? userOrder : retainedOrder,
@@ -126,7 +129,8 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
         "Honor latest corrections and previous brief. For a local date choose 2-4 worthwhile stops, never maximize count. For a trip allow 3-4 per day. Explicit cafe/food/exhibit tours may repeat the requested kind; otherwise diversify experiences. Do not add food to a cafe-only request.",
         "Transport comes from explicit wording, otherwise retain prior mode or allow transit. Choose walk only when the user explicitly wants a walkable course. Exact times are optional. Focus on venue appeal and coherent geography.",
       ].join(" ") },
-      { role: "user", content: JSON.stringify({ latestMessage: input.message, areas, trip, exclusiveTour: isExclusiveCrawl(input.state), days: input.state.nights + 1, previous, state: input.state, dateIntent: toDateIntent(input.state), taste: input.taste.slice(0, 10), recentTurns: (input.conversation ?? []).slice(-6),
+      { role: "user", content: JSON.stringify({ latestMessage: input.message, areas, trip, exclusiveTour: isExclusiveCrawl(input.state), days: input.state.nights + 1, previous, state: input.state, dateIntent: toDateIntent(input.state), taste: input.taste.slice(0, 10), couplePersonalization: input.couplePersonalization,
+        sourceSearchBrief: searchBrief, recentTurns: (input.conversation ?? []).slice(-6),
         planningPlaybook: playbook, playbookScope: "검색 전략과 비교 관점만 제공하며 장소·행사 사실이나 사용자 하드 제약을 만들지 않음" }) },
     ],
   });
@@ -144,9 +148,12 @@ export async function designDateDiscovery(input: { message: string; state: AIPla
   }).slice(0, queryLimit);
   const min = additionCount || Math.max(size.min, (typeof raw.minStops === "number" && Number.isFinite(raw.minStops) ? Math.max(2, Math.min(8, Math.round(raw.minStops))) : fallback.minStops));
   const max = Math.max(min, additionCount || (typeof raw.maxStops === "number" && Number.isFinite(raw.maxStops) ? Math.max(min, Math.min(size.max, Math.round(raw.maxStops))) : fallback.maxStops));
+  const groundedSearchBrief = buildVenueSearchBrief({ ...input, modelQueries, limit: queryLimit });
   return {
     themes: list(raw.themes, 3).length ? list(raw.themes, 3) : fallback.themes,
-    priorities: list(raw.priorities, 8), queries: modelQueries.length ? modelQueries : fallback.queries,
+    priorities: uniqueStrings([...groundedSearchBrief.priorities, ...list(raw.priorities, 8)
+      .filter(priority => !groundedSearchBrief.rejectedTerms.some(term => priority.includes(term.replace(/카페|식당|레스토랑/g, "").trim())))], 8),
+    queries: groundedSearchBrief.queries,
     transport: fallback.transport,
     requiredActivities: fallback.requiredActivities,
     activityOrder: userOrder.length >= 2 ? userOrder : retainedOrder,

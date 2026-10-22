@@ -17,7 +17,6 @@ import {
 } from "../courseKeep";
 import {
   emptyDateBrief,
-  extractRequestedAreasFromText,
   missingSlot,
   slotQuestion,
   withActivities,
@@ -28,8 +27,9 @@ import {
   withTimeWindow,
 } from "../dateBrief";
 import { isCourseQuickAction } from "../dateCourse";
-import { pendingLabelFor } from "../chatRoute";
-import { isExplorationConversationAside, plannerEntryIntake, plannerWelcomeCard, requestsCandidateExploration, requestsDirectPlanning } from "../chatEntry";
+import { isQuestion, pendingLabelFor } from "../chatRoute";
+import { isExplorationConversationAside, plannerEntryIntake, plannerEntryState, plannerWelcomeCard, requestsCandidateExploration, requestsDirectPlanning } from "../chatEntry";
+import { isPlannerOriginAnswer, resumePlannerDialogue, startsNewPlannerDialogue, type PendingPlannerDialogue, type PlannerDialogueSlot } from "../plannerDialogueState";
 import type { AIChatCard, AIChatStop, AIPlannerReply, AIPlannerState, DateIntakeSlot, PlanChange, PlanItem, PlanKind } from "@/features/planning/types/plan";
 import type { Place } from "@/features/places/types/place";
 import { plannerStateFromSeed } from "@/features/taste/compare";
@@ -99,14 +99,15 @@ type ChatTurn = {
 };
 
 type Mode = "edit" | "generate";
-type ChoicePrompt = { options: string[]; multiple: boolean; kind: DateIntakeSlot };
+type ChoicePrompt = { options: string[]; multiple: boolean; kind: DateIntakeSlot | PlannerDialogueSlot };
 
 function slotPrompt(slot: DateIntakeSlot, state?: AIPlannerState): ChoicePrompt {
   const question = slotQuestion(slot, state);
   return { options: question.options, multiple: question.multiple, kind: slot };
 }
 
-function applySlot(kind: DateIntakeSlot, choices: string[], state: AIPlannerState): AIPlannerState {
+function applySlot(kind: ChoicePrompt["kind"], choices: string[], state: AIPlannerState): AIPlannerState {
+  if (kind === "date" || kind === "origin" || kind === "transport") return { ...state, pendingSlot: null };
   if (kind === "activity") return { ...withActivities(state, choices.filter(choice => choice !== "추천에 맡기기")), intakeFocusDone: true };
   if (kind === "area") return withAreas(state, choices);
   if (kind === "scope") return withAreaScope(state, choices[0] ?? "");
@@ -116,7 +117,8 @@ function applySlot(kind: DateIntakeSlot, choices: string[], state: AIPlannerStat
   return { ...state, indoorPlay: choices[0] ?? null, pendingSlot: null };
 }
 
-function slotUserText(kind: DateIntakeSlot, choices: string[]) {
+function slotUserText(kind: ChoicePrompt["kind"], choices: string[]) {
+  if (kind === "date" || kind === "origin" || kind === "transport") return choices[0] ?? "";
   if (kind === "activity") return choices.includes("추천에 맡기기") ? "데이트 취향은 추천에 맡길게" : `${choices.join(", ")} 중심으로 데이트하고 싶어`;
   if (kind === "area") return `${choices.join(", ")} 쪽이 좋아`;
   if (kind === "scope") return choices[0] ?? "주변 범위를 정했어";
@@ -352,7 +354,7 @@ export function AIPlanEditor({
     },
   }] : []);
   const [choicePrompt, setChoicePrompt] = useState<ChoicePrompt | null>(() => tasteSeed ? null : slotPrompt("area"));
-  const pendingIntakeRequestRef = useRef("");
+  const pendingIntakeRequestRef = useRef<PendingPlannerDialogue | null>(null);
   const [selectedChoices, setSelectedChoices] = useState<string[]>([]);
   const [peek, setPeek] = useState<{ key: string; stop: AIChatStop } | null>(null);
   const [shownStops, setShownStops] = useState<AIChatStop[]>([]);
@@ -645,7 +647,7 @@ export function AIPlanEditor({
     sessionCandidatesRef.current = null;
     setConversation([]);
     setChoicePrompt(next === "generate" ? slotPrompt("area") : null);
-    pendingIntakeRequestRef.current = "";
+    pendingIntakeRequestRef.current = null;
     setSelectedChoices([]);
     setPeek(null);
     setShownStops([]);
@@ -777,7 +779,7 @@ export function AIPlanEditor({
 
   async function beginExploration(message: string, nextState: AIPlannerState) {
     if (requestBusyRef.current || keepingRef.current || explorationBusy) return;
-    pendingIntakeRequestRef.current = "";
+    pendingIntakeRequestRef.current = null;
     const ticket = beginRequest();
     setExplorationBusy(true);
     setLoadingSeconds(0);
@@ -919,12 +921,23 @@ export function AIPlanEditor({
     const submittedText = message.trim();
     const entryText = submittedText || displayText?.trim() || "";
     const displayedRequest = displayText || submittedText;
-    const resumingIntake = Boolean(pendingIntakeRequestRef.current && !isExplorationConversationAside(entryText));
-    const request = resumingIntake ? [pendingIntakeRequestRef.current, entryText].filter(Boolean).join("\n") : submittedText;
-    if (resumingIntake && nextState.pendingSlot === "area") {
-      const writtenAreas = extractRequestedAreasFromText(entryText);
-      if (writtenAreas.length) nextState = { ...withAreas(nextState, writtenAreas), pendingSlot: null };
+    const pendingDialogueSlot = pendingIntakeRequestRef.current?.slot;
+    const transportAnswer = pendingDialogueSlot === "transport"
+      && /^(?:대중교통|지하철|버스|자가용|렌터카|차|도보|걸어서|택시)(?:으로|로)?\s*(?:갈게|갈래|이동할게|갈\s*거야)?[.!~]*$/.test(entryText);
+    const originAnswer = pendingDialogueSlot === "origin" && isPlannerOriginAnswer(entryText);
+    const resumingIntake = Boolean(pendingIntakeRequestRef.current && !isExplorationConversationAside(entryText)
+      && !/^\s*왜/.test(entryText) && (!isQuestion(entryText, false) || transportAnswer || originAnswer));
+    const answerText = resumingIntake && pendingDialogueSlot === "origin" && /^[가-힣A-Za-z0-9· -]{2,35}$/.test(entryText)
+      && !/출발|현지|추천|코스|일정|모르|아직/.test(entryText)
+      ? `${entryText}${/(?:에서|부터)$/.test(entryText) ? "" : "에서"} 출발` : entryText;
+    const dialogue = resumePlannerDialogue(resumingIntake ? pendingIntakeRequestRef.current!.turns : [], answerText, nextState);
+    const request = resumingIntake ? dialogue.request : submittedText;
+    const intakeContext = dialogue.turns.join("\n");
+    if (resumingIntake || startsNewPlannerDialogue(entryText)) nextState = dialogue.state;
+    if (resumingIntake && pendingIntakeRequestRef.current?.slot === "area") {
+      nextState = plannerEntryState({ message: entryText, state: nextState, dateLabel: startDate });
     }
+    if (!recommendation && !planningInput && !exploration) nextState = plannerEntryState({ message: intakeContext, state: nextState, dateLabel: startDate });
     if (!request && !displayText && !planningInput) return;
     const directPlanning = Boolean(exploration && requestsDirectPlanning(request));
     const explorationIntent = candidateExplorationActive && exploration && !planningInput && request && !directPlanning
@@ -1001,14 +1014,14 @@ export function AIPlanEditor({
     }
     if (keepStep !== "idle") resetKeep();
     const entryIntake = !recommendation && !planningInput && !exploration
-      ? plannerEntryIntake({ kind, message: request || entryText, state: nextState }) : null;
+      ? plannerEntryIntake({ kind, message: intakeContext, state: nextState, dateLabel: startDate }) : null;
     if (entryIntake) {
-      pendingIntakeRequestRef.current = request || entryText;
-      setPlannerState({ ...entryIntake.state, pendingSlot: entryIntake.slot });
+      pendingIntakeRequestRef.current = { turns: dialogue.turns, slot: entryIntake.slot };
+      setPlannerState({ ...entryIntake.state, pendingSlot: entryIntake.slot === "area" || entryIntake.slot === "span" ? entryIntake.slot : null });
       setConversation(current => [...current,
         ...(entryText ? [{ role: "user" as const, text: displayedRequest }] : []),
         { role: "assistant", text: entryIntake.card.lines.join("\n"), card: entryIntake.card }]);
-      setChoicePrompt({ ...slotPrompt(entryIntake.slot, entryIntake.state), options: entryIntake.card.suggestions ?? [] });
+      setChoicePrompt({ kind: entryIntake.slot, multiple: false, options: entryIntake.card.suggestions ?? [] });
       setSelectedChoices([]);
       setGeneratePrompt("");
       setError("");
@@ -1026,7 +1039,7 @@ export function AIPlanEditor({
       setChoicePrompt(slotPrompt(pending, nextState));
       return;
     }
-    if (resumingIntake) pendingIntakeRequestRef.current = "";
+    if (resumingIntake) pendingIntakeRequestRef.current = null;
     const ticket = beginRequest();
     setError("");
     setPhase("loading");
@@ -1060,7 +1073,7 @@ export function AIPlanEditor({
             mapUrl: card.mapUrl, reason: card.reason, image: card.image, factSourceUrl: card.evidenceUrls[0],
           })) : shownStops,
         previousState: questionCandidates ? { ...nextState, shownPlaces: questionCandidates.map(card => card.name) } : nextState,
-        dateLabel: startDate || undefined,
+        dateLabel: nextState.dateLabel || startDate || undefined,
         conversation: nextTurns.map(turn => ({ role: turn.role, text: turn.text })),
         planningSessionId, sessionCandidates: sessionCandidatesRef.current,
         planningInput,
@@ -1093,6 +1106,15 @@ export function AIPlanEditor({
         setConversation(current => [...current, { role: "assistant", text: result.message,
           card: result.options?.length ? { ...result.card, suggestions: result.options } : result.card }]);
         if (result.card.stops?.length) setShownStops(result.card.stops);
+        const pendingDialogue = pendingIntakeRequestRef.current;
+        const resumeQuestion = !resumingIntake && pendingDialogue
+          ? plannerEntryIntake({ kind, message: pendingDialogue.turns.join("\n"), state: nextState, dateLabel: startDate }) : null;
+        if (resumeQuestion) {
+          setPlannerState(nextState);
+          setConversation(current => [...current, { role: "assistant", text: resumeQuestion.card.lines.join("\n"), card: resumeQuestion.card }]);
+          setChoicePrompt({ kind: resumeQuestion.slot, multiple: false, options: resumeQuestion.card.suggestions ?? [] });
+          return;
+        }
         if (result.slot && result.options?.length) {
           setChoicePrompt({ options: result.options, multiple: Boolean(result.multiple), kind: result.slot });
         }

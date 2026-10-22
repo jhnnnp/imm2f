@@ -13,13 +13,13 @@ const FESTIVAL_SKIP_EMPTY_PAGES = 2;
 
 /** KorService2 content types. Keep this identity on each candidate instead of
  * flattening every non-festival result into a generic tourist attraction. */
-export type TourContentTypeId = "12" | "14" | "15" | "28" | "32" | "38";
-const CONTENT_TYPE: Record<"tourist" | "festival" | "stay", TourContentTypeId> = {
-  tourist: "12", festival: "15", stay: "32",
+export type TourContentTypeId = "12" | "14" | "15" | "28" | "32" | "38" | "39";
+const CONTENT_TYPE: Record<"tourist" | "festival" | "stay" | "restaurant", TourContentTypeId> = {
+  tourist: "12", festival: "15", stay: "32", restaurant: "39",
 };
 export type TourSearchInput = KakaoSearchInput & { tourContentTypeId?: TourContentTypeId };
 function supportedContentType(value: string | undefined): value is TourContentTypeId {
-  return ["12", "14", "15", "28", "32", "38"].includes(value ?? "");
+  return ["12", "14", "15", "28", "32", "38", "39"].includes(value ?? "");
 }
 
 type TourItem = {
@@ -68,6 +68,12 @@ type TourItem = {
   chkpetshopping?: string;
   eventhomepage?: string;
   progresstype?: string;
+  firstmenu?: string;
+  treatmenu?: string;
+  opentimefood?: string;
+  restdatefood?: string;
+  parkingfood?: string;
+  reservationfood?: string;
 };
 
 type TourResponse = {
@@ -87,6 +93,7 @@ export type TourPlaceDetail = {
   image?: string;
   openingHours?: string;
   homepage?: string;
+  dishes?: string;
   facts: Array<{ label: string; value: string }>;
 };
 
@@ -125,6 +132,11 @@ function detailFacts(item: TourItem | undefined, category: PlaceCategoryId) {
     add("체크인", item.checkintime);
     add("체크아웃", item.checkouttime);
     add("주차", item.parkinglodging);
+  } else if (category === "restaurant") {
+    add("대표 메뉴", item.firstmenu);
+    add("취급 메뉴", item.treatmenu);
+    add("휴무", item.restdatefood);
+    add("주차", item.parkingfood);
   } else {
     add("휴무", item.restdate || item.restdateculture || item.restdateleports || item.restdateshopping);
     add("주차", item.parking || item.parkingculture || item.parkingleports || item.parkingshopping);
@@ -154,6 +166,7 @@ function serviceKey() {
 function contentTypeId(category: PlaceCategoryId | "all" | undefined): TourContentTypeId {
   if (category === "festival") return CONTENT_TYPE.festival;
   if (category === "stay") return CONTENT_TYPE.stay;
+  if (category === "restaurant") return CONTENT_TYPE.restaurant;
   return CONTENT_TYPE.tourist;
 }
 
@@ -161,6 +174,7 @@ function mappedCategory(typeId: TourContentTypeId): PlaceCategoryId {
   if (typeId === "15") return "festival";
   if (typeId === "32") return "stay";
   if (typeId === "14") return "photo";
+  if (typeId === "39") return "restaurant";
   return "tourist";
 }
 
@@ -176,7 +190,7 @@ function toCandidate(item: TourItem, typeId: TourContentTypeId, requireReportedT
   const address = item.addr1 ?? "";
   const category = mappedCategory(typeId);
   const label = { "12": "관광지", "14": "문화시설", "15": "축제·행사", "28": "레포츠",
-    "32": "숙박", "38": "쇼핑" }[typeId];
+    "32": "숙박", "38": "쇼핑", "39": "음식점" }[typeId];
   const period = category === "festival" ? formatEventPeriod(festivalStart(item), festivalEnd(item)) : "";
   return {
     externalSource: "tourapi",
@@ -451,17 +465,25 @@ export async function loadTourPlaceDetail(contentId: string, category: PlaceCate
     tourFetch("detailIntro2", { contentId: id, contentTypeId: typeId }, options.signal),
     options.includeImages === false ? Promise.resolve(null) : tourFetch("detailImage2", { contentId: id }, options.signal),
   ]);
-  const commonItem = common.ok ? asItems(common.payload.response)[0] : undefined;
-  const introItem = intro.ok ? asItems(intro.payload.response)[0] : undefined;
+  const belongsToRequestedVenue = (item: TourItem) => {
+    const reportedId = String(item.contentid ?? item.contentId ?? "").trim();
+    const reportedType = String(item.contenttypeid ?? item.contentTypeId ?? "").trim();
+    return (!reportedId || reportedId === id) && (!reportedType || reportedType === typeId);
+  };
+  const commonItem = common.ok ? asItems(common.payload.response).find(belongsToRequestedVenue) : undefined;
+  const introItem = intro.ok ? asItems(intro.payload.response).find(belongsToRequestedVenue) : undefined;
   const imageItem = images?.ok ? asItems(images.payload.response)[0] : undefined;
   const overview = cleanText(commonItem?.overview);
   const image = commonItem?.firstimage || commonItem?.firstimage2 || imageItem?.originimgurl || imageItem?.firstimage;
-  const openingHours = cleanText(introItem?.usetime || introItem?.usetimeculture || introItem?.usetimeleports
-    || introItem?.opentime || introItem?.playtime || ([introItem?.checkintime, introItem?.checkouttime].filter(Boolean).join(" – ")));
+  const sourceHours = cleanText(introItem?.usetime || introItem?.usetimeculture || introItem?.usetimeleports
+    || introItem?.opentimefood || introItem?.opentime || introItem?.playtime || ([introItem?.checkintime, introItem?.checkouttime].filter(Boolean).join(" – ")));
+  const closedDays = typeId === "39" ? cleanText(introItem?.restdatefood) : "";
+  const openingHours = [sourceHours, closedDays ? `휴무: ${closedDays}` : ""].filter(Boolean).join(" · ");
   const homepage = extractUrl(commonItem?.homepage) || extractUrl(introItem?.reservationurl) || extractUrl(introItem?.eventhomepage);
   const facts = detailFacts(introItem, category);
-  if (!overview && !image && !openingHours && !homepage && !facts.length) return null;
-  return { overview, image, openingHours, homepage, facts };
+  const dishes = typeId === "39" ? [...new Set([cleanText(introItem?.firstmenu), cleanText(introItem?.treatmenu)].filter(Boolean))].join(" · ") || undefined : undefined;
+  if (!overview && !image && !openingHours && !homepage && !dishes && !facts.length) return null;
+  return { overview, image, openingHours, homepage, dishes, facts };
 }
 
 /** One request per attraction for planning evidence; images and facilities are

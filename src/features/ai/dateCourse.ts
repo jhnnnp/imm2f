@@ -718,7 +718,7 @@ export function diversifyDateCatalog(candidates: DiscoverCandidate[], limit = 30
 export function scoreDateCandidate(candidate: DiscoverCandidate, ctx: DateRankContext) {
   let score = 0;
   if (candidate.category === "festival") score += candidate.image ? 24 : 16;
-  if (ctx.savedPositive.has(candidate.name)) score += 40;
+  if (ctx.savedPositive.has(dateCandidateKey(candidate)) || ctx.savedPositive.has(candidate.name)) score += 40;
   if (ctx.recentlyVisited.has(candidate.name)) score -= 35;
   if (isOffDateVenue(candidate, { allowHarsh: ctx.allowHarsh, allowKaraoke: ctx.activities.includes("indoor") })) score -= 48;
   else score += dateVenueBonus(candidate);
@@ -728,7 +728,7 @@ export function scoreDateCandidate(candidate: DiscoverCandidate, ctx: DateRankCo
   }
   if (candidate.distanceMeters != null) score += proximityToAreaScore(candidate.distanceMeters);
   if (ctx.trip && (candidate.category === "tourist" || candidate.category === "nature" || candidate.category === "festival")) score += 12;
-  if (ctx.savedBoth?.has(candidate.name)) score += 12;
+  if (ctx.savedBoth?.has(dateCandidateKey(candidate)) || ctx.savedBoth?.has(candidate.name)) score += 12;
   if (ctx.activities.length) {
     if (ctx.activities.some(activity => matchesActivity(candidate, activity))) score += 8;
     else score -= 12;
@@ -744,7 +744,7 @@ export function toDateRanking(candidates: DiscoverCandidate[], ctx: DateRankCont
   return rankDateCandidates(candidates, ctx).map(candidate => {
     const score = scoreDateCandidate(candidate, ctx);
     const fit = Math.max(0, Math.min(100, Math.round(50 + score)));
-    const reason = ctx.savedPositive.has(candidate.name)
+    const reason = ctx.savedPositive.has(dateCandidateKey(candidate)) || ctx.savedPositive.has(candidate.name)
       ? "둘이 저장해 둔 곳이라 우선했어요."
       : ctx.recentlyVisited.has(candidate.name)
         ? "최근에 다녀온 곳이라 뒤로 미뤘어요."
@@ -1322,7 +1322,7 @@ export function courseSuggestions(_state: AIPlannerState, _stops: Array<{ name: 
 }
 
 export function tasteReason(candidate: DiscoverCandidate, ctx: DateRankContext, fallback: string) {
-  if (ctx.savedPositive.has(candidate.name)) return "둘이 저장해 둔 곳이라 골랐어요.";
+  if (ctx.savedPositive.has(dateCandidateKey(candidate)) || ctx.savedPositive.has(candidate.name)) return "둘이 저장해 둔 곳이라 골랐어요.";
   const taste = ctx.commonTastes.find(label => `${candidate.categoryLabel} ${candidate.detailedCategory ?? ""} ${candidate.name}`.includes(label));
   if (taste) return `${taste} 취향이랑 잘 맞아요.`;
   return fallback;

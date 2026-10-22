@@ -99,16 +99,18 @@ export function placeSearchPlans(ask: PlaceAsk): PlaceSearchPlan[] {
 
 /** A direct chat request uses the same TourAPI source taxonomy as candidate exploration. */
 export function placeTourSearch(ask: PlaceAsk): TourSearchInput | null {
-  const typeId = ask.kind === "shopping" ? "38"
+  const typeId = ask.kind === "restaurant" ? "39" : ask.kind === "shopping" ? "38"
     : ask.kind === "festival" ? "15"
       : ask.kind === "activity" ? "28"
         : ask.kind === "exhibit" ? "14" : null;
   if (!typeId) return null;
   return {
     region: ask.area,
-    category: ask.kind === "festival" ? "festival" : ask.kind === "exhibit" ? "photo" : "tourist",
+    category: ask.kind === "restaurant" ? "restaurant" : ask.kind === "festival" ? "festival" : ask.kind === "exhibit" ? "photo" : "tourist",
     tourContentTypeId: typeId,
-    query: tourDiscoveryQuery(typeId, ask.query),
+    // Dish words live in detailIntro2 menus, not searchKeyword2 titles.
+    // Browse the local official food inventory, then hydrate and check menus.
+    query: typeId === "39" ? "" : tourDiscoveryQuery(typeId, ask.query),
     page: 1,
   };
 }
@@ -138,7 +140,7 @@ export function matchesPlaceKind(candidate: DiscoverCandidate, kind: PlaceAskKin
 }
 
 function queryMatchBonus(candidate: DiscoverCandidate, ask: PlaceAsk) {
-  const blob = venueBlob(candidate).replace(/\s/g, "");
+  const blob = `${venueBlob(candidate)} ${candidate.dishes ?? ""}`.replace(/\s/g, "");
   let bonus = 0;
   for (const word of splitQuery(ask.query)) {
     if (blob.includes(word.replace(/\s/g, ""))) {
@@ -174,20 +176,36 @@ export function filterPlaceCandidates(
     seen.add(key);
     if (!matchesPlaceKind(candidate, ask.kind)) return false;
     const requestedCuisine = ask.kind === "restaurant" ? extractCuisine(ask.query) : null;
-    const candidateCuisine = extractCuisine(`${venueBlob(candidate)} ${candidate.dishes ?? ""}`);
+    const menu = (candidate.evidence ?? []).filter(fact => fact.attribute === "menu"
+      && fact.venueId === dateCandidateKey(candidate)).map(fact => fact.text).join(" ");
+    const details = `${venueBlob(candidate)} ${candidate.dishes ?? ""} ${menu}`;
+    const candidateCuisine = extractCuisine(details);
     if (requestedCuisine && requestedCuisine !== "any" && candidateCuisine
-      && !matchesCuisine(candidate, requestedCuisine)) return false;
+      && !matchesCuisine({ ...candidate, detailedCategory: details }, requestedCuisine)) return false;
     if (ctx.exclude.some(name => matchesTerm(candidate, name))) return false;
     if (isOffDateVenue(candidate, { allowHarsh: ctx.allowHarsh, allowKaraoke: ask.kind === "activity" })) return false;
-    if (ctx.violatesAvoid(venueBlob(candidate))) return false;
+    if (ctx.violatesAvoid(details)) return false;
     return true;
   });
 }
 
 export function rankPlaceCandidates(candidates: DiscoverCandidate[], ask: PlaceAsk, ctx: DateRankContext, limit = PLACE_CATALOG_SIZE) {
-  return [...candidates]
-    .sort((a, b) => scorePlaceCandidate(b, ask, ctx) - scorePlaceCandidate(a, ask, ctx) || a.name.localeCompare(b.name))
-    .slice(0, limit);
+  const ranked = [...candidates]
+    .sort((a, b) => scorePlaceCandidate(b, ask, ctx) - scorePlaceCandidate(a, ask, ctx) || a.name.localeCompare(b.name));
+  return ask.kind === "restaurant" ? reserveOfficialRestaurantCandidates(ranked, limit) : ranked.slice(0, limit);
+}
+
+/** Reserve a few real menu lookups inside the existing shortlist, before
+ * Kakao-only category matches fill every slot. This is evidence retrieval,
+ * not a claim that a broad food listing matches the requested dish. */
+export function reserveOfficialRestaurantCandidates(ranked: DiscoverCandidate[], limit: number) {
+  const size = Math.max(0, Math.floor(limit));
+  const officialMeal = (candidate: DiscoverCandidate) => candidate.externalSource === "tourapi"
+    && candidate.tourContentTypeId === "39" && candidate.category === "restaurant";
+  const official = ranked.filter(officialMeal).slice(0, Math.min(4, size));
+  const selected = new Set([...official, ...ranked.filter(candidate => !officialMeal(candidate))
+    .slice(0, size - official.length)].map(dateCandidateKey));
+  return ranked.filter(candidate => selected.has(dateCandidateKey(candidate))).slice(0, size);
 }
 
 function cleanText(value: unknown, max: number) {
