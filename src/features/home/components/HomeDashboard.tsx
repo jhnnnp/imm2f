@@ -7,9 +7,10 @@ import type { PlanItem } from "@/features/planning/types/plan";
 import type { PlaceCategoryId } from "@/features/places/types/place";
 import { PLACE_CATEGORIES } from "@/features/places/config/placeCategories";
 import { PlaceCategoryIcon } from "@/features/places/components/PlaceCategoryIcon";
-import { addDays, formatKoDate, formatKoShort, toIsoDate } from "@/lib/dates";
+import { addDays, formatKoDate, formatKoShort } from "@/lib/dates";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { withSubjectParticle } from "@/features/auth/koreanName";
+import { buildJourneyCalendar } from "../journeyCalendar";
 import styles from "./HomeDashboard.module.css";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
@@ -57,41 +58,11 @@ function journeyHeadline(title: string, items: PlanItem[], places: Place[], dayC
   return dayCount <= 1 ? `${district}에서의 하루` : `${district}에서 머문 ${stayWord(dayCount)}`;
 }
 
-function tripRange(startDate: string | null, dayCount: number) {
-  if (!startDate || dayCount < 1) return [];
-  return Array.from({ length: Math.max(1, dayCount) }, (_, index) => addDays(startDate, index));
-}
-
 function MiniCal({ startDate, dayCount }: { startDate: string | null; dayCount: number }) {
-  const focus = startDate || seoulDateIso();
-  const focusDate = new Date(`${focus}T12:00:00`);
-  if (Number.isNaN(focusDate.getTime())) return null;
-  const year = focusDate.getFullYear();
-  const month = focusDate.getMonth();
-  const first = new Date(year, month, 1);
-  const gridStart = new Date(first);
-  gridStart.setDate(1 - first.getDay());
-  const selected = new Set(tripRange(startDate, dayCount));
-  const today = seoulDateIso();
-  const cells = Array.from({ length: 42 }, (_, index) => {
-    const date = new Date(gridStart);
-    date.setDate(gridStart.getDate() + index);
-    const iso = toIsoDate(date);
-    return {
-      iso,
-      day: date.getDate(),
-      outside: date.getMonth() !== month,
-      trip: selected.has(iso),
-      start: iso === startDate,
-      today: iso === today,
-    };
-  });
-  const lastWeek = cells.slice(35);
-  const days = lastWeek.every(cell => cell.outside) ? cells.slice(0, 35) : cells;
-  const monthLabel = `${year}년 ${month + 1}월`;
+  const { monthLabel, cells: days } = buildJourneyCalendar(startDate, dayCount, seoulDateIso());
   return (
     <div className="home-mini-cal" aria-hidden="true">
-      <p className="home-mini-cal-month">{monthLabel}</p>
+      <div className="home-mini-cal-heading"><p className="home-mini-cal-month">{monthLabel}</p>{dayCount > 0 && startDate && <span className="home-mini-cal-legend"><i />여행 기간</span>}</div>
       <div className="home-mini-cal-weekdays">
         {WEEKDAYS.map(day => <span key={day}>{day}</span>)}
       </div>
@@ -485,6 +456,10 @@ export function HomeDashboard({
   const today = seoulDateIso();
   const tripEnded = Boolean(liveTrip.startDate && addDays(liveTrip.startDate, Math.max(0, liveTrip.dayCount - 1)) < today);
   const tripUnderway = Boolean(liveTrip.startDate && liveTrip.startDate <= today && !tripEnded);
+  const tripLastDate = liveTrip.startDate ? addDays(liveTrip.startDate, Math.max(0, liveTrip.dayCount - 1)) : null;
+  const tripPeriod = liveTrip.startDate
+    ? `${liveTrip.startDate.slice(0, 4)}년 ${formatKoShort(liveTrip.startDate)}${tripLastDate && tripLastDate !== liveTrip.startDate ? ` — ${tripLastDate.slice(0, 4) !== liveTrip.startDate.slice(0, 4) ? `${tripLastDate.slice(0, 4)}년 ` : ""}${formatKoShort(tripLastDate)}` : ""}`
+    : "날짜를 정해 주세요";
   const journeyLabel = tripEnded ? "지난 여행" : tripUnderway ? "함께하는 여행" : "다가오는 여행";
   const journeyEyebrow = tripEnded ? "JOURNEY NOTES" : tripUnderway ? "OUR JOURNEY" : "NEXT JOURNEY";
 
@@ -503,14 +478,15 @@ export function HomeDashboard({
               <>
                 <h2>{heading}</h2>
                 <div className="home-pass-dday">
-                  <b>{dayLabel(liveTrip.startDate)}</b>
-                  <small>{liveTrip.startDate ? formatKoShort(liveTrip.startDate) : "날짜 미정"}</small>
+                  <b>{tripEnded ? "함께 다녀온 날" : tripUnderway ? "지금, 여행 중" : dayLabel(liveTrip.startDate)}</b>
+                  <small>{tripPeriod}</small>
                 </div>
                 <div className="home-pass-cal-wrap">
                   <MiniCal startDate={liveTrip.startDate} dayCount={liveTrip.dayCount} />
                 </div>
                 <div className="home-pass-stub-foot">
                   <span className="home-pass-count">{liveTrip.dayCount > 1 ? `${liveTrip.dayCount}일 · ${liveTrip.items.length}곳` : `${liveTrip.items.length}곳으로 떠난 하루`}</span>
+                  <span className="home-pass-cover-link">{tripEnded ? "여행 기록 열기" : "여행 일정 열기"}<span aria-hidden="true">↗</span></span>
                 </div>
               </>
             ) : (
@@ -518,10 +494,10 @@ export function HomeDashboard({
                 <h2>아직 잡아 둔 여행이 없어요</h2>
                 <p>저장한 장소로 첫날을 만들어 보세요.</p>
                 <div className="home-pass-cal-wrap">
-                  <MiniCal startDate={seoulDateIso()} dayCount={0} />
+                  <MiniCal startDate={null} dayCount={0} />
                 </div>
                 <div className="home-pass-stub-foot">
-                  <span className="home-pass-count">일정 없음</span>
+                  <span className="home-pass-count">일정 없음</span><span className="home-pass-cover-link">첫 여행 만들기 <span aria-hidden="true">↗</span></span>
                 </div>
               </>
             )}

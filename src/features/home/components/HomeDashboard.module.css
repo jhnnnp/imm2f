@@ -90,55 +90,40 @@
   white-space: nowrap;
 }
 
-.journey :global(.home-pass) {
-  max-width: 100%;
-  min-width: 0;
+.journey :global(.home-pass), .journey :global(.home-pass.is-empty) {
+  max-width: 100%; min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "stub route";
+  min-height: 480px;
 }
 
-.journey :global(.home-pass-stub) {
-  padding: clamp(22px, 4cqi, 30px);
-}
-
-.journey :global(.home-pass .light-label) {
-  display: grid;
-  gap: 6px;
-  line-height: 1.4;
-}
-
-.journey :global(.home-pass .light-label > span) {
-  font-size: 14px;
-  letter-spacing: .03em;
-  color: #fffaf2;
-}
-
-.journey :global(.home-pass .light-label small) {
-  font-size: 12px;
-  letter-spacing: .15em;
-}
-
-.journey :global(.home-pass-stub h2) {
-  font-size: clamp(1.35rem, 3.4cqi, 1.8rem);
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-  text-wrap: balance;
-}
-
+.journey :global(.home-pass-stub) { padding: clamp(22px, 3.5cqi, 30px); }
+.journey :global(.home-pass-route) { height: 100%; min-height: 0; }
+.journey :global(.home-pass .light-label) { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; line-height: 1.4; }
+.journey :global(.home-pass .light-label > span) { font-size: 13px; letter-spacing: .03em; color: #fffaf2; }
+.journey :global(.home-pass .light-label small) { font-size: 10px; letter-spacing: .14em; color: #d1d9ce; }
+.journey :global(.home-pass-stub h2) { margin: 16px 0 14px; font-size: clamp(26px, 3.6cqi, 32px); line-height: 1.35; overflow-wrap: anywhere; text-wrap: pretty; }
 .journey :global(.home-pass-stub p) { font-size: 14px; }
-
-.journey :global(.home-pass-cal-wrap) {
-  justify-content: center;
-}
-
-.journey :global(.home-mini-cal) {
-  max-width: 260px;
-}
-
-.journey :global(.home-mini-cal-month),
-.journey :global(.home-mini-cal-days span),
-.journey :global(.home-pass-dday small),
-.journey :global(.home-pass-count) { font-size: 13px; }
-.journey :global(.home-mini-cal-weekdays span) { font-size: 12px; }
-.journey :global(.home-pass-dday b) { font-size: 18px; }
+.journey :global(.home-pass-dday) { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0; width: 100%; }
+.journey :global(.home-pass-dday b) { display: inline-flex; padding: 4px 8px; border: 1px solid #d8e1cc35; border-radius: 8px; background: #e7edd00d; color: #eef1e4; font: 400 12px/1.5 var(--default); letter-spacing: 0; }
+.journey :global(.home-pass-dday small) { display: inline; margin: 0; color: #e1e6d8; font-size: 13px; line-height: 1.6; letter-spacing: 0; }
+.journey :global(.home-pass-cal-wrap) { display: block; flex: none; justify-content: start; width: 100%; box-sizing: border-box; margin: 22px 0 18px; padding: 14px 12px; border: 1px solid #d9e3ce2b; border-radius: 12px; background: #edf2d908; }
+.journey :global(.home-mini-cal) { width: 100%; max-width: none; gap: 10px; }
+.journey :global(.home-mini-cal-heading) { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 0 2px 8px; border-bottom: 1px solid #d9e3ce24; }
+.journey :global(.home-mini-cal-month) { margin: 0; color: #f1f2e7; font: 700 14px/1.4 var(--default); text-align: left; letter-spacing: .04em; }
+.journey :global(.home-mini-cal-legend) { display: inline-flex; align-items: center; gap: 5px; color: #cdd8c3; font: 400 10px/1.5 var(--default); }
+.journey :global(.home-mini-cal-legend i) { width: 6px; height: 6px; border-radius: 50%; background: #b7c2a8; }
+.journey :global(.home-mini-cal-weekdays), .journey :global(.home-mini-cal-days) { gap: 4px 2px; }
+.journey :global(.home-mini-cal-weekdays span) { color: #c7d1be; font-size: 11px; }
+.journey :global(.home-mini-cal-weekdays span:first-child) { color: #e7b6a8; }
+.journey :global(.home-mini-cal-days span) { width: 28px; max-width: 100%; height: auto; aspect-ratio: 1; margin: 0 auto; font-size: 14px; line-height: 1; color: #f1f2e7; }
+.journey :global(.home-mini-cal-days .is-trip) { background: #d5dfc13b; }
+.journey :global(.home-mini-cal-days .is-start) { color: #fffaf2; background: #b44f46; }
+.journey :global(.home-mini-cal-days .is-out.is-trip), .journey :global(.home-mini-cal-days .is-out.is-start) { opacity: 1; }
+.journey :global(.home-pass-stub-foot) { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 16px; border-top: 1px solid #d9e3ce2b; }
+.journey :global(.home-pass-count) { padding: 5px 10px; border: 1px solid #d8e1cc35; border-radius: 8px; background: transparent; color: #e8eddf; box-shadow: none; font-size: 12px; }
+.journey :global(.home-pass-cover-link) { display: inline-flex; align-items: center; gap: 10px; color: #e8eddf; font: 400 13px/1.5 var(--default); }
 
 .journey :global(.home-pass-page-face) {
   display: grid;
@@ -240,8 +225,8 @@
 
 /* The notebook folds when its own column narrows, including wide screens
    with both a navigation rail and a context panel. */
-@container home-journey (max-width: 560px) {
-  .journey :global(.home-pass) {
+@container home-journey (max-width: 680px) {
+  .journey :global(.home-pass), .journey :global(.home-pass.is-empty) {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto 18px 360px;
     grid-template-areas: "stub" "spine" "route";
@@ -250,19 +235,21 @@
 
   .journey :global(.home-pass-stub) {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(150px, .85fr);
-    grid-template-areas: "label calendar" "title calendar" "date calendar" "count calendar";
-    gap: 8px 20px;
-    align-content: center;
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-areas: "label calendar" "title calendar" "date calendar" "count count";
+    gap: 12px 20px;
+    align-content: start;
+    align-items: start;
     border-radius: var(--radius-outer) var(--radius-outer) 0 0;
   }
 
-  .journey :global(.home-pass .light-label) { grid-area: label; }
+  .journey :global(.home-pass .light-label) { grid-area: label; display: grid; gap: 4px; }
   .journey :global(.home-pass-stub h2) { grid-area: title; margin: 4px 0; }
   .journey :global(.home-pass-dday),
-  .journey :global(.home-pass-stub > p) { grid-area: date; margin: 0; }
+  .journey :global(.home-pass-stub > p) { grid-area: date; align-self: start; margin: 0; }
   .journey :global(.home-pass-cal-wrap) { grid-area: calendar; margin: 0; }
-  .journey :global(.home-pass-stub-foot) { grid-area: count; justify-content: start; padding-top: 4px; }
+  .journey :global(.home-pass-stub-foot) { grid-area: count; justify-content: space-between; margin-top: 4px; padding-top: 14px; }
 
   .journey :global(.home-pass-route) {
     height: 360px;
@@ -315,13 +302,28 @@
   .journey :global(.home-pass-spine-wire::after) { transform: rotate(72deg); }
 }
 
-@container home-journey (max-width: 400px) {
+@container home-journey (max-width: 520px) {
   .journey :global(.home-pass-stub) {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "label" "title" "date" "count";
+    grid-template-rows: none;
+    grid-template-areas: "label" "title" "date" "calendar" "count";
     padding: 22px;
   }
 
-  .journey :global(.home-pass-cal-wrap) { display: none; }
+  .journey :global(.home-pass-cal-wrap) { display: block; margin-top: 6px; }
   .journey :global(.home-pass-stub h2) { text-wrap: pretty; }
+}
+
+/* A wide notebook keeps a vertical spine even on a short/narrow browser window.
+   The sheet's own container, rather than the viewport, controls folding. */
+@container home-journey (min-width: 681px) {
+  .journey :global(.home-pass-spine) { position: absolute; left: 50%; top: 0; right: auto; bottom: 0; grid-area: auto; width: 32px; height: auto; margin: 0; padding: 14px 0; transform: translateX(-50%); flex-direction: column; perspective: 520px; }
+  .journey :global(.home-pass-spine::before) { top: 10px; bottom: 10px; left: 50%; right: auto; width: 4px; height: auto; margin: 0 0 0 -2px; }
+  .journey :global(.home-pass-spine-ring) { width: 28px; height: 14px; }
+  .journey :global(.home-pass-spine-wire) { width: 22px; height: 15px; }
+  .journey :global(.home-pass-spine-wire.is-rear) { transform: translate(-50%, -50%) translateZ(-3px); }
+  .journey :global(.home-pass-spine-wire.is-front) { transform: translate(-50%, -50%) translateZ(4px); }
+  .journey :global(.home-pass-spine-wire::before), .journey :global(.home-pass-spine-wire::after) { top: 1px; width: 9px; height: 13px; margin: 0; }
+  .journey :global(.home-pass-spine-wire::before) { left: 1px; right: auto; transform: rotate(-16deg); }
+  .journey :global(.home-pass-spine-wire::after) { left: auto; right: 1px; transform: rotate(16deg); }
 }
