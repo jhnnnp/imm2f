@@ -1,10 +1,10 @@
 import { Suspense } from "react";
 import { PageLoading } from "@/components/layout/PageLoading";
 import { HomeDashboard } from "@/features/home/components/HomeDashboard";
-import { HomeRecentMemory } from "@/features/home/components/HomeRecentMemory";
+import { MomentLoading } from "@/features/home/components/HomeMoments";
+import { HomeUpcomingDays, HomeBucketWish } from "@/features/home/components/HomeMomentsData";
+import momentStyles from "@/features/home/components/HomeMoments.module.css";
 import { HomeWorkspaceSync } from "@/features/home/components/HomeWorkspaceSync";
-import { RecentActivityPreview } from "@/features/collaboration/components/RecentActivityPreview";
-import { listMemories } from "@/features/memories/actions";
 import { listPlaces } from "@/features/places/actions";
 import { listDateDrafts, loadCouplePlan } from "@/features/planning/actions";
 import { nextUpcomingDate, upsertDateDay, type DateDaySnapshot } from "@/features/date/dateDays";
@@ -16,17 +16,6 @@ function seoulTodayIso() {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
-}
-
-function HomeMemoryLoading() {
-  return (
-    <section className="recent-memory paper-card" aria-busy="true">
-      <div className="section-heading compact">
-        <div><span className="eyebrow">RECENT MEMORY</span><h2>가장 가까운 장면</h2></div>
-      </div>
-      <p className="form-hint">기억을 불러오는 중이에요.</p>
-    </section>
-  );
 }
 
 export default function HomePage() {
@@ -43,16 +32,13 @@ export default function HomePage() {
       <Suspense fallback={<PageLoading />}>
         <HomePageContent />
       </Suspense>
-      <div className="home-bottom-grid">
-        <Suspense fallback={<HomeMemoryLoading />}>
-          <HomeMemoryContent />
+      <div className={momentStyles.grid}>
+        <Suspense fallback={<MomentLoading kind="dates" />}>
+          <HomeUpcomingDays />
         </Suspense>
-        <section className="activity-preview paper-card">
-          <div className="section-heading compact">
-            <div><span className="eyebrow">RECENT ACTIVITY</span><h2>우리의 최근 변화</h2></div>
-          </div>
-          <RecentActivityPreview />
-        </section>
+        <Suspense fallback={<MomentLoading kind="wish" />}>
+          <HomeBucketWish />
+        </Suspense>
       </div>
     </>
   );
@@ -89,9 +75,4 @@ async function HomePageContent() {
       dateStartDate={nextDate.date || null}
     />
   );
-}
-
-async function HomeMemoryContent() {
-  const result = await listMemories({ photos: "cover" });
-  return <HomeRecentMemory memories={result.persist ? result.memories : []} />;
 }

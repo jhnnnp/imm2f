@@ -1,0 +1,52 @@
+.grid { container: home-moments / inline-size; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 22px; margin: 32px 0 12px; min-width: 0; }
+.grid > :only-child { grid-column: 1 / -1; }
+.card { min-width: 0; padding: clamp(22px, 3cqi, 32px); border: 1px solid #e2dfd1; border-radius: 16px; background: #fffdf6; box-shadow: 0 3px 0 -1px #eee9da, 0 9px 28px #5b634b07; font-family: var(--default); }
+.dates { border-top: 3px solid #bac6ae; background: linear-gradient(155deg, #f5f7ed, #fffdf6 65%); }
+.wishes { border-top: 3px solid #d3c1a2; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.eyebrow { display: block; color: #68765d; font-size: 11px; line-height: 1.5; letter-spacing: .14em; }
+.wishes .eyebrow { color: #7f7055; }
+.card h2 { margin: 7px 0 0; color: #41523e; font: 700 clamp(23px, 3cqi, 28px)/1.4 var(--default); word-break: keep-all; }
+.wishes h2 { color: #695e49; }
+.cornerMark { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #dee4d3; border-radius: 50%; background: #eef2e4; color: #9eaf8b; font: 400 25px/1 var(--default); }
+.wishes .cornerMark { border-color: #e8dfce; background: #f5efe1; color: #b9a17c; }
+.dayFeature { display: flex; align-items: center; gap: 24px; min-height: 146px; padding: 8px 0 16px; }
+.calendarLeaf { position: relative; flex: 0 0 100px; display: flex; flex-direction: column; align-items: center; border: 1px solid #d8dfca; border-radius: 12px; background: #fffef8; box-shadow: 0 4px 0 -1px #e5e9d9, 0 9px 18px #6e7c5d09; transform: rotate(-4deg); }
+.calendarLeaf::before, .calendarLeaf::after { content: ""; position: absolute; top: -6px; width: 4px; height: 13px; border-radius: 8px; background: #a0ae8b; }
+.calendarLeaf::before { left: 22px; }.calendarLeaf::after { right: 22px; }
+.calendarLeaf > span { align-self: stretch; text-align: center; padding: 11px 6px 8px; border-bottom: 1px solid #dfe5d2; border-radius: 12px 12px 0 0; color: #68765d; background: #eef2e3; font-size: 14px; }
+.calendarLeaf b { padding: 7px 8px 0; color: #637c50; font: 700 48px/1.1 var(--default); }
+.calendarLeaf small { padding: 2px 8px 10px; color: #68765d; font-size: 11px; letter-spacing: .12em; }
+.dayCopy { min-width: 0; }
+.countdown { display: inline-flex; align-items: center; flex: none; min-height: 24px; padding: 3px 8px; border: 1px solid #dce4cf; border-radius: 8px; background: #eaf0dd; color: #5d714c; font: 700 12px/1.3 var(--default); white-space: nowrap; }
+.dayCopy h3 { margin: 10px 0 8px; color: #4d6341; font: 700 24px/1.5 var(--default); overflow-wrap: anywhere; word-break: keep-all; }
+.dayCopy p { margin: 0; max-width: 260px; color: #68765d; font-size: 14px; line-height: 1.7; word-break: keep-all; }
+.upcomingList { display: grid; gap: 0; margin: 18px 0 0; padding: 0; list-style: none; border-top: 1px dashed #dce2d0; }
+.upcomingList li { display: flex; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px dashed #dce2d0; }
+.upcomingList time { flex: 0 0 70px; color: #68765d; font-size: 13px; }
+.upcomingList time small { display: block; margin-bottom: 2px; color: #68765d; font-size: 10px; }
+.upcomingList li > span:not(.countdown) { min-width: 0; flex: 1; color: #68765d; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+.upcomingList .countdown { border: 0; background: transparent; color: #68765d; font-size: 12px; padding-right: 0; }
+.wishPaper { position: relative; min-width: 0; padding: 20px 24px 44px; border: 1px solid #e8dfcc; border-radius: 12px; background: repeating-linear-gradient(transparent, transparent 29px, #d8cdb633 29px, #d8cdb633 30px), #fbf7eb; box-shadow: 0 2px 0 -1px #e8dfca; }
+.wishPaper::before { content: ""; position: absolute; width: 70px; height: 15px; top: -8px; left: calc(50% - 35px); background: #d5c6a84d; border: 1px solid #e5d9bd40; transform: rotate(-3deg); pointer-events: none; }
+.wishMeta { display: flex; justify-content: space-between; gap: 16px; color: #7f7055; font-size: 12px; line-height: 1.5; }
+.wishMeta span:last-child { color: #c3b69b; }
+.wishPaper h3 { margin: 16px 0 10px; color: #655c45; font: 700 25px/1.5 var(--default); overflow-wrap: anywhere; word-break: keep-all; }
+.wishPaper p { margin: 0; color: #7f7055; font: 400 15px/1.9 var(--default); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.wishWhen { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; width: fit-content; margin-top: 14px; padding: 3px 8px; border: 1px dashed #d8c7a7; border-radius: 8px; background: #f2ead5; color: #735e3c; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; max-width: 100%; }
+.signature { display: block; margin-top: 18px; color: #b7ab90; font: 400 15px/1.4 var(--default); text-align: right; transform: rotate(-3deg); }
+.footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 16px; margin-top: 24px; padding-top: 18px; border-top: 1px solid #e6e5d7; }
+.primary { display: inline-flex; align-items: center; justify-content: center; gap: 18px; min-height: 44px; padding: 11px 16px; border: 1px solid #667d56; border-radius: 8px; background: #5e744f; color: #fffdf5; text-decoration: none; font: 700 14px/1.5 var(--default); transition: background .15s; }
+.primary:hover { background: #5d734e; }
+.wishes .primary { border-color: #8c704b; background: #8c704b; }
+.wishes .primary:hover { background: #7d6240; }
+.quiet { display: inline-flex; align-items: center; gap: 10px; min-height: 40px; color: #68765d; font: 400 13px/1.5 var(--default); text-decoration: none; }
+.quiet:hover { color: #697f57; }
+.wishes .quiet { color: #7a705b; }
+.card a:focus-visible { outline: 2px solid #8b9f75; outline-offset: 4px; }
+.unavailable { margin: 20px 0; color: #74735f; font-size: 14px; line-height: 1.7; }
+.loading > div { height: 24px; margin-top: 20px; border-radius: 8px; background: #eeeee3; }
+.loading > div:last-child { width: 65%; margin-bottom: 30px; }
+@container home-moments (max-width: 760px) { .card { grid-column: 1 / -1; } .dayFeature { min-height: 0; } }
+@container home-moments (max-width: 400px) { .dayFeature { gap: 18px; } .calendarLeaf { flex-basis: 80px; } .calendarLeaf b { font-size: 40px; } .dayCopy h3 { font-size: 21px; } .dayCopy p { font-size: 13px; } .wishPaper { padding: 20px 18px 24px; } .wishPaper h3 { font-size: 23px; } .upcomingList li { gap: 8px; } .upcomingList time { flex-basis: 62px; } }
+@media (prefers-reduced-motion: reduce) { .primary { transition: none; } }

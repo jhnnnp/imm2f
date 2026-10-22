@@ -94,6 +94,7 @@
 .board.board :global(.bucket-card-main > .bucket-check) { width: 40px; height: 40px; flex: none; margin-top: 1px; border: 1px solid #c3ba9e; border-radius: 4px; background: #fffdf5; color: #fff; }
 .board.board :global(.bucket-card.is-done .bucket-check) { background: #81956b; border-color: #81956b; }
 .board.board :global(.bucket-card.is-done) { background: rgb(233 237 217 / 38%); }
+.board.board :global(.bucket-card:target), .board.board :global(.bucket-card.is-linked) { outline: 2px solid #b6a27e; outline-offset: 4px; border-radius: 12px; background: #f7f1e1; }
 .board.board :global(.bucket-card-title-row) { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
 .board.board :global(.bucket-card-index) { font-size: .75rem; color: #a5ad97; }
 .board.board :global(.bucket-card-title-row h3) { margin: 0; font: 400 1.35rem/1.5 var(--default); letter-spacing: -.02em; }

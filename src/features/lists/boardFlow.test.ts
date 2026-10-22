@@ -31,15 +31,79 @@ function view(kind: NoteKind, notes = [entry(kind)], persist = true) {
     collaborators: { viewerId: "me", viewerName: "진", partnerName: "현" } }));
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { resolve, promise }; }
+const scrollIntoView = vi.fn();
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
 beforeEach(() => {
   vi.clearAllMocks();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
   mocks.shared.mockImplementation(() => mocks.retry);
   mocks.update.mockImplementation(async (id, patch) => ({ note: { ...entry("vault"), id, ...patch } }));
   mocks.status.mockResolvedValue({ ok: true, note: { ...entry("bucket"), status: "planning" } });
   mocks.create.mockResolvedValue({ note: { ...entry("bucket"), id: "new-note", title: "새 계획" } });
   mocks.remove.mockResolvedValue({ ok: true });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+  if (originalScrollIntoView) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+});
+
+it("reveals a decoded home wish anchor after the bucket board mounts", () => {
+  const note = { ...entry("bucket"), id: "saved / 바람" };
+  window.history.replaceState(null, "", `#bucket-note-${encodeURIComponent(note.id)}`);
+  view("bucket", [note]);
+  const card = document.getElementById(`bucket-note-${note.id}`);
+  expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: "center", behavior: "instant" });
+  expect(scrollIntoView.mock.instances[0]).toBe(card);
+  expect(document.activeElement).toBe(card);
+  expect(card?.classList.contains("is-linked")).toBe(true);
+  expect(mocks.update).not.toHaveBeenCalled();
+});
+
+it.each(["#bucket-note-missing", "#bucket-note-%E0%A4%A", "#another-section"])("ignores an unresolved or malformed wish anchor: %s", hash => {
+  window.history.replaceState(null, "", hash);
+  view("bucket");
+  expect(scrollIntoView).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(document.body);
+  expect(document.querySelector(".bucket-card.is-linked")).toBeNull();
+});
+
+it("responds to later hash navigation once and removes its listener on unmount", () => {
+  const addListener = vi.spyOn(window, "addEventListener");
+  const removeListener = vi.spyOn(window, "removeEventListener");
+  const { unmount } = view("bucket");
+  const hashListener = addListener.mock.calls.find(([name]) => name === "hashchange")?.[1];
+  expect(hashListener).toBeTypeOf("function");
+  expect(scrollIntoView).not.toHaveBeenCalled();
+  window.history.replaceState(null, "", "#bucket-note-note-1");
+  fireEvent(window, new HashChangeEvent("hashchange"));
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  expect(document.getElementById("bucket-note-note-1")?.classList.contains("is-linked")).toBe(true);
+  fireEvent(window, new HashChangeEvent("hashchange"));
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  window.history.replaceState(null, "", "#another-section");
+  fireEvent(window, new HashChangeEvent("hashchange"));
+  expect(document.querySelector(".bucket-card.is-linked")).toBeNull();
+  unmount();
+  expect(removeListener).toHaveBeenCalledWith("hashchange", hashListener);
+  window.history.replaceState(null, "", "#bucket-note-note-1");
+  fireEvent(window, new HashChangeEvent("hashchange"));
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  addListener.mockRestore();
+  removeListener.mockRestore();
+});
+
+it("retries a valid anchor when its note arrives in a delayed shared refresh", async () => {
+  window.history.replaceState(null, "", "#bucket-note-note-1");
+  view("bucket", []);
+  expect(scrollIntoView).not.toHaveBeenCalled();
+  const listener = mocks.shared.mock.calls.at(-1)![0];
+  mocks.read.mockResolvedValue({ notes: [entry("bucket")] });
+  await act(async () => listener({ isCurrent: () => true }));
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  expect(document.activeElement).toBe(document.getElementById("bucket-note-note-1"));
+});
 
 it("keeps one compact bucket heading and removes repeated overview/hero statistics", () => {
   view("bucket");

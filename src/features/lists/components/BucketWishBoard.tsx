@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type Dispatch, type DragEvent, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent, type SetStateAction } from "react";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
 import { formatKoDate } from "@/lib/dates";
 import { createNote, deleteNote, reorderNotes, updateNoteContent, updateNoteStatus } from "../actions";
@@ -51,6 +51,29 @@ export function BucketWishBoard({
   const draggedRef = useRef<string | null>(null);
   const editVersion = useRef<string | undefined>(undefined);
   const creationAttemptRef = useRef<NoteCreationAttempt | null>(null);
+  const revealedHash = useRef("");
+  const [linkedNoteId, setLinkedNoteId] = useState("");
+
+  // The board arrives through Suspense, after the router's initial hash scroll.
+  useEffect(() => {
+    const revealLinkedNote = () => {
+      const hash = window.location.hash;
+      if (!hash.startsWith("#bucket-note-")) { revealedHash.current = ""; setLinkedNoteId(""); return; }
+      if (revealedHash.current === hash) return;
+      let id: string;
+      try { id = decodeURIComponent(hash.slice("#bucket-note-".length)); } catch { return; }
+      if (!notes.some(note => note.id === id)) return;
+      const card = document.getElementById(`bucket-note-${id}`);
+      if (!card) return;
+      revealedHash.current = hash;
+      setLinkedNoteId(id);
+      card.scrollIntoView({ block: "center", behavior: "instant" });
+      card.focus({ preventScroll: true });
+    };
+    revealLinkedNote();
+    window.addEventListener("hashchange", revealLinkedNote);
+    return () => window.removeEventListener("hashchange", revealLinkedNote);
+  }, [notes]);
 
   const canReorder = persist && !busy && notes.length > 1 && visibleNotes.length === notes.length;
   const visibleIds = useMemo(() => new Set(visibleNotes.map(note => note.id)), [visibleNotes]);
@@ -223,7 +246,10 @@ export function BucketWishBoard({
     return (
       <li
         key={note.id}
-        className={`bucket-card status-${note.status}${done ? " is-done" : ""}${canReorder ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${dropTarget ? " is-drop-target" : ""}${expanded ? " is-expanded" : ""}`}
+        id={`bucket-note-${note.id}`}
+        tabIndex={-1}
+        style={{ scrollMarginTop: "24px" }}
+        className={`bucket-card status-${note.status}${linkedNoteId === note.id ? " is-linked" : ""}${done ? " is-done" : ""}${canReorder ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${dropTarget ? " is-drop-target" : ""}${expanded ? " is-expanded" : ""}`}
         draggable={canReorder}
         onDragStart={event => handleDragStart(event, note.id)}
         onDragEnd={() => {
