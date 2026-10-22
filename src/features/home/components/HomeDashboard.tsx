@@ -10,6 +10,7 @@ import { PlaceCategoryIcon } from "@/features/places/components/PlaceCategoryIco
 import { addDays, formatKoDate, formatKoShort, toIsoDate } from "@/lib/dates";
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import { withSubjectParticle } from "@/features/auth/koreanName";
+import styles from "./HomeDashboard.module.css";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 const CATEGORY_IDS = new Set(PLACE_CATEGORIES.map(item => item.id));
@@ -230,7 +231,6 @@ function RouteList({
             <span className="home-stop-copy">
               <span className="home-stop-head">
                 <b>{item.placeName}</b>
-                {item.startTime ? <time dateTime={item.startTime}>{item.startTime}</time> : null}
               </span>
               {meta ? <small>{meta}</small> : null}
             </span>
@@ -482,17 +482,23 @@ export function HomeDashboard({
   const shownPlacesLabel = shared.length ? "둘 다 가고 싶은 곳" : "내가 담아 둔 곳";
   const heading = journeyHeadline(liveTrip.title, liveTrip.items, livePlaces, liveTrip.dayCount);
   const dateStops = liveDate.items.map(item => item.placeName).slice(0, 3).join(" - ");
+  const today = seoulDateIso();
+  const tripEnded = Boolean(liveTrip.startDate && addDays(liveTrip.startDate, Math.max(0, liveTrip.dayCount - 1)) < today);
+  const tripUnderway = Boolean(liveTrip.startDate && liveTrip.startDate <= today && !tripEnded);
+  const journeyLabel = tripEnded ? "지난 여행" : tripUnderway ? "함께하는 여행" : "다가오는 여행";
+  const journeyEyebrow = tripEnded ? "JOURNEY NOTES" : tripUnderway ? "OUR JOURNEY" : "NEXT JOURNEY";
 
   return (
-    <>
+    <div className={styles.dashboard}>
       <div className="home-layout">
+        <div className={styles.journey}>
         <article className={`home-pass${liveTrip.items.length ? "" : " is-empty"}`}>
           <Link
             className="home-pass-stub"
             href="/trip"
-            aria-label={liveTrip.items.length ? `다음 여행, ${heading}` : "여행 일정 열기"}
+            aria-label={liveTrip.items.length ? `${journeyLabel}, ${heading}` : "여행 일정 열기"}
           >
-            <span className="light-label">NEXT JOURNEY</span>
+            <span className="light-label"><span>{liveTrip.items.length ? journeyLabel : "우리의 여행 노트"}</span><small>{liveTrip.items.length ? journeyEyebrow : "OUR JOURNEY"}</small></span>
             {liveTrip.items.length ? (
               <>
                 <h2>{heading}</h2>
@@ -547,6 +553,7 @@ export function HomeDashboard({
             </div>
           )}
         </article>
+        </div>
         <div className="home-side-stack">
           <Link
             className="home-date paper-card"
@@ -651,6 +658,6 @@ export function HomeDashboard({
         </section>
       )}
 
-    </>
+    </div>
   );
 }

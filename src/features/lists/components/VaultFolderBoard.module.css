@@ -41,7 +41,7 @@
   border-radius: 6px;
   background: #f0f3ef;
   color: #6d7d73;
-  font-size: .62rem;
+  font-size: .8125rem;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -65,7 +65,7 @@
   border-radius: 9px;
   background: rgba(255, 255, 255, .55);
   color: #62776c;
-  font-size: .7rem;
+  font-size: .875rem;
 }
 
 .selectionBar label {
@@ -77,7 +77,7 @@
 }
 
 .selectionBar > button {
-  min-height: 29px;
+  min-height: 40px;
   margin-left: auto;
   padding: 0 5px;
   border: 0;
@@ -96,7 +96,7 @@
 
 .dragHint {
   color: #9a9d94;
-  font-size: .64rem;
+  font-size: .8125rem;
   line-height: 1.6;
 }
 
@@ -125,7 +125,7 @@
   border-radius: 10px;
   background: #f4f7f2;
   color: #5c7364;
-  font-size: .73rem;
+  font-size: .9375rem;
 }
 
 .saveDestination > b {
@@ -135,7 +135,7 @@
 .saveDestination > small {
   grid-column: 1 / -1;
   color: #8b968b;
-  font-size: .64rem;
+  font-size: .8125rem;
   line-height: 1.5;
 }
 
@@ -150,7 +150,7 @@
   }
 
   .folderTag {
-    font-size: .68rem;
+    font-size: .8125rem;
   }
 }
 

@@ -5,10 +5,11 @@ import { ActivityPanel } from "@/features/collaboration/components/ActivityPanel
 import { PageStage } from "./PageStage";
 import { ContextPanelDrawer } from "./ContextPanelDrawer";
 import { WorkspaceCacheSync } from "./WorkspaceCacheSync";
+import styles from "./AppShell.module.css";
 
 export function AppShell({ children, context }: { children: ReactNode; context?: ReactNode }) {
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${styles.shell}`}>
       <WorkspaceCacheSync />
       <Sidebar />
       <main className="workspace">

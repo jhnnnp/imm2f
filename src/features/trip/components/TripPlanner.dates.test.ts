@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { createElement, type ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CouplePlan, PlanItem } from "@/features/planning/types/plan";
 import type { ArchivedTripPlan } from "@/features/planning/actions";
 import type { TripDateSnapshot } from "../tripDates";
-const mocks = vi.hoisted(() => ({ save: vi.fn(), read: vi.fn(), move: vi.fn(), archive: vi.fn(), archives: vi.fn(), active: vi.fn() }));
+const mocks = vi.hoisted(() => ({ save: vi.fn(), read: vi.fn(), move: vi.fn(), archive: vi.fn(), archives: vi.fn(), active: vi.fn(), updateRecord: vi.fn(), deleteRecord: vi.fn() }));
 vi.mock("@/features/planning/actions", () => ({ saveCouplePlan: mocks.save, rescheduleTripPlan: mocks.move, archiveTripPlan: mocks.archive, listArchivedTripPlans: mocks.archives, loadCouplePlan: mocks.active }));
+vi.mock("../archiveActions", () => ({ updateArchivedTripPlan: mocks.updateRecord, deleteArchivedTripPlan: mocks.deleteRecord }));
 vi.mock("@/features/collaboration/workspaceReads", () => ({ readTripWorkspace: mocks.read }));
 vi.mock("@/features/collaboration/useSharedRefresh", () => ({ useSharedRefresh: () => vi.fn() }));
 vi.mock("@/features/collaboration/activityClient", () => ({ emitCoupleActivitiesChanged: vi.fn() }));
@@ -35,6 +36,8 @@ beforeEach(() => {
   mocks.active.mockResolvedValue(plan);
   mocks.archive.mockResolvedValue({ ok: true, id: "new-record" });
   mocks.archives.mockResolvedValue([archived]);
+  mocks.updateRecord.mockResolvedValue({ ok: true, title: "수정한 제주 여행", notes: "새 여행 메모" });
+  mocks.deleteRecord.mockResolvedValue({ ok: true });
   Element.prototype.scrollIntoView = vi.fn();
 });
 afterEach(cleanup);
@@ -130,7 +133,7 @@ it("keeps a committed move successful if its subsequent refresh fails", async ()
   expect(screen.getByText(/날짜는 변경됐지만/)).toBeTruthy(); expect(mocks.move).toHaveBeenCalledTimes(1);
 });
 it("reopens a saved trip read-only without replacing or saving the active trip", async () => {
-  view(); fireEvent.click(screen.getByRole("button", { name: "지난 여행" })); fireEvent.click(screen.getByRole("button", { name: "여행기록 열기 →" }));
+  view(); fireEvent.click(screen.getByRole("button", { name: "지난 여행" })); fireEvent.click(screen.getByRole("button", { name: `${archived.title} 여행기록 열기` }));
   await waitFor(() => expect(screen.getByLabelText("여행 제목")).toHaveProperty("readOnly", true));
   expect(screen.getByRole("button", { name: "AI로 다듬기" })).toHaveProperty("disabled", true);
   expect(screen.queryByRole("button", { name: "여행 날짜 변경" })).toBeNull(); expect(screen.queryByRole("button", { name: "장소 제거" })).toBeNull();
@@ -157,4 +160,33 @@ it("saves a complete travel record with the renamed action", async () => {
   view(); fireEvent.click(screen.getByRole("button", { name: "여행기록 저장" }));
   await waitFor(() => expect(mocks.archive).toHaveBeenCalledWith({ title: plan.title, notes: plan.notes, startDate: plan.startDate, dayCount: 3, items: [item] }));
   expect(mocks.save).toHaveBeenCalledTimes(1); expect(screen.queryByText("이 여행 기록하기")).toBeNull();
+});
+
+it("updates record metadata without saving or replacing the active travel draft", async () => {
+  view(); fireEvent.click(screen.getByRole("button", { name: "지난 여행" }));
+  fireEvent.click(screen.getByRole("button", { name: `${archived.title} 수정` }));
+  fireEvent.change(within(screen.getByRole("dialog")).getByRole("textbox", { name: "여행 제목" }), { target: { value: "수정한 제주 여행" } });
+  fireEvent.change(screen.getByRole("textbox", { name: /여행 메모/ }), { target: { value: "새 여행 메모" } });
+  fireEvent.click(screen.getByRole("button", { name: "변경 사항 저장" }));
+  await screen.findByRole("heading", { name: "수정한 제주 여행" });
+  fireEvent.click(screen.getByRole("button", { name: "수정한 제주 여행 여행기록 열기" }));
+  await waitFor(() => expect(screen.getByLabelText("여행 제목")).toHaveProperty("value", "수정한 제주 여행"));
+  expect(screen.getByLabelText("여행 날짜 조회")).toHaveProperty("value", archived.startDate);
+  expect(screen.getByText(archived.items[0].placeName)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "여행 노트" }));
+  expect(screen.getByLabelText("여행 노트")).toHaveProperty("value", "새 여행 메모");
+  expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.archive).not.toHaveBeenCalled();
+});
+
+it("returns to the active draft when the viewed record is deleted and never deletes the draft", async () => {
+  view({ initialPlan: { ...plan, ...archived, notes: archived.notes ?? "" }, initialArchiveId: archived.id });
+  fireEvent.click(screen.getByRole("button", { name: "지난 여행" }));
+  fireEvent.click(screen.getByRole("button", { name: `${archived.title} 삭제` }));
+  expect(mocks.deleteRecord).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "여행기록 삭제" }));
+  await waitFor(() => expect(screen.getByLabelText("여행 제목")).toHaveProperty("value", plan.title));
+  expect(mocks.deleteRecord).toHaveBeenCalledWith(archived.id);
+  expect(screen.getByLabelText("여행 제목")).toHaveProperty("readOnly", false);
+  expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.move).not.toHaveBeenCalled();
+  expect(window.location.search).toBe("");
 });

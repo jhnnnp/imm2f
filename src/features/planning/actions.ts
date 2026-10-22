@@ -847,7 +847,7 @@ export const listArchivedTripPlans = cache(async (): Promise<ArchivedTripPlan[]>
   if (!supabase) return [];
   const { data: memories, error } = await supabase
     .from("memories")
-    .select("id, title, happened_on")
+    .select("id, title, happened_on, description")
     .eq("couple_id", session.coupleId)
     .eq("memory_type", "trip")
     .order("happened_on", { ascending: false });
@@ -876,7 +876,10 @@ export const listArchivedTripPlans = cache(async (): Promise<ArchivedTripPlan[]>
       title: memory.title,
       startDate: typeof snapshot?.startDate === "string" ? snapshot.startDate : memory.happened_on,
       dayCount: Math.max(1, Math.min(7, Number.isInteger(snapshot?.dayCount) ? snapshot!.dayCount! : maxDay), maxDay),
-      notes: typeof snapshot?.notes === "string" ? snapshot.notes : "",
+      // The memory is the canonical editable metadata. The itinerary snapshot
+      // keeps the historical places, day count and undated/date selection.
+      notes: typeof memory.description === "string" ? memory.description
+        : typeof snapshot?.notes === "string" ? snapshot.notes : "",
       status: "completed" as const,
       items,
     });

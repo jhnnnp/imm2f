@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useDialogFocus } from "@/components/shared/useDialogFocus";
 import { initialFromName } from "../types";
 import { pairLabel, withAndParticle } from "../koreanName";
 import { leaveCouple } from "../session";
+import styles from "./PartnerSpace.module.css";
 
 export function PartnerManage({
   youName,
@@ -18,26 +20,27 @@ export function PartnerManage({
   const [confirm, setConfirm] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const leaving = useRef(false);
+  const close = () => { if (!leaving.current) { setConfirm(false); setError(""); } };
+  const dialogRef = useDialogFocus<HTMLDivElement>({ open: confirm, onClose: close, initialFocus: "[data-dialog-cancel]" });
   const youInitial = initialFromName(youName);
   const partnerInitial = initialFromName(partnerName);
 
   async function leave() {
-    if (!confirm) {
-      setConfirm(true);
-      setError("");
-      return;
-    }
+    if (!confirm || leaving.current) return;
+    leaving.current = true;
     setPending(true);
     setError("");
     try {
       const result = await leaveCouple();
       if (result?.error) setError(result.error);
     } catch { setError("연결을 해제하지 못했어요. 다시 시도해 주세요."); }
-    finally { setPending(false); setConfirm(false); }
+    finally { leaving.current = false; setPending(false); }
   }
 
   return (
-    <section className="partner-manage">
+    <>
+    <section className={`partner-manage ${styles.space}`}>
       <article className="partner-manage-card">
         <span className="eyebrow">CONNECTED SPACE</span>
         <div className="partner-manage-avatars" aria-hidden="true">
@@ -65,18 +68,30 @@ export function PartnerManage({
           <span className="eyebrow">SPACE RESET</span>
           <h3>연결을 해제할까요?</h3>
           <p>내가 나가면 장소·일정·추억은 {partnerName}의 공간에 남아요. 나는 빈 공간으로 다시 시작해요.</p>
-          {error ? <p className="form-error" role="alert">{error}</p> : null}
           <button
-            className={`outline-button${confirm ? " is-confirm" : ""}`}
+            className="outline-button"
             type="button"
-            onClick={() => void leave()}
+            onClick={() => { setError(""); setConfirm(true); }}
             disabled={pending}
-            aria-label={confirm ? "연결 해제를 한 번 더 확인" : "파트너 연결 해제"}
+            aria-label="파트너 연결 해제"
           >
-            {pending ? "해제하는 중..." : confirm ? "정말 해제할까요?" : "연결 해제"}
+            연결 해제
           </button>
         </aside>
       </div>
     </section>
+      {confirm && <div className="dialog-backdrop" onClick={close}>
+        <div ref={dialogRef} tabIndex={-1} className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="partner-leave-title" onClick={event => event.stopPropagation()}>
+          <h2 id="partner-leave-title">파트너 연결을 해제할까요?</h2>
+          <p>장소·일정·추억은 {partnerName}의 공간에 남고, 나는 빈 공간에서 다시 시작해요.</p>
+          <p>함께 쓰던 기록을 보려면 다시 연결해야 합니다.</p>
+          {error && <p className="form-error" role="alert">{error}</p>}
+          <div className={styles.dialogActions}>
+            <button data-dialog-cancel type="button" disabled={pending} onClick={close}>취소</button>
+            <button type="button" disabled={pending} onClick={() => void leave()}>{pending ? "해제하는 중…" : "연결 해제하기"}</button>
+          </div>
+        </div>
+      </div>}
+    </>
   );
 }

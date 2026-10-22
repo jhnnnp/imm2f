@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import { formatKoDate } from "@/lib/dates";
-import { createNote, deleteNote, listNotes, reorderNotes, updateNoteStatus } from "../actions";
+import { createNote, deleteNote, listNotes, reorderNotes, updateNoteContent, updateNoteStatus } from "../actions";
 import { useSharedRefresh } from "@/features/collaboration/useSharedRefresh";
 import { SyncNotice } from "@/components/shared/SyncNotice";
 import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityClient";
@@ -18,6 +18,7 @@ import { useFolderWorkspace } from "@/features/folders/useFolderWorkspace";
 import { FolderShelf } from "@/features/folders/components/FolderShelf";
 import { FolderMoveMenu } from "@/features/folders/components/FolderMoveMenu";
 import styles from "./VaultFolderBoard.module.css";
+import boardStyles from "./NotesBoard.module.css";
 
 const KIND_META: Record<NoteKind, {
   kicker: string;
@@ -161,8 +162,8 @@ export function CoupleNotesBoard({
   const [status, setStatus] = useState(statuses[0].id);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
-  const [openStatusId, setOpenStatusId] = useState<string | null>(null);
   const [selectedNote, setSelectedNote] = useState<CoupleNote | null>(null);
+  const [editingNote, setEditingNote] = useState<CoupleNote | null>(null);
   const [vaultScanPreview, setVaultScanPreview] = useState(false);
   const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
   const [dropTargetNoteId, setDropTargetNoteId] = useState<string | null>(null);
@@ -246,9 +247,6 @@ export function CoupleNotesBoard({
   const canOrganizeNotes = kind === "vault" && persist && folders.workspace.persist && !pending && !folders.pending;
 
   const completedStatus = statuses.at(-1)?.id;
-  const highlightStatus = kind === "vault" ? statuses[0].id : completedStatus;
-  const highlightCount = notes.filter(note => note.status === highlightStatus).length;
-  const progress = notes.length ? Math.round((highlightCount / notes.length) * 100) : 0;
   const canReorderNotes = persist && !pending && !folders.pending && kind === "vault" && folders.selectedFolderId === "all" && filter === "all" && !query.trim() && notes.length > 1 && selectedIds.length < 2;
 
   function openNoteFolder(id: string) {
@@ -318,6 +316,16 @@ export function CoupleNotesBoard({
     if (!beginMutation()) return;
     setError("");
     const input = { title, detail, extra, status };
+    if (editingNote) {
+      const result = await updateNoteContent(editingNote.id, { title, detail, extra }, editingNote.updatedAt)
+        .catch(() => ({ error: "수정 내용을 저장하지 못했어요. 작성한 내용은 그대로 있으니 다시 시도해 주세요." }));
+      endMutation();
+      if ("error" in result) { setError(result.error); retrySync(); return; }
+      setNotes(current => current.map(note => note.id === editingNote.id ? result.note : note));
+      closeDialog(); setEditingNote(null); setTitle(""); setDetail(""); setExtra(""); setStatus(statuses[0].id);
+      refreshAfterMutation();
+      return;
+    }
     creationAttemptRef.current = noteCreationAttempt(creationAttemptRef.current, kind, input);
     const result = await createNote(kind, { ...input, attemptId: creationAttemptRef.current.id })
       .catch(() => ({ error: "저장 응답을 확인하지 못했어요. 목록을 확인한 뒤 다시 시도해 주세요." }));
@@ -343,14 +351,19 @@ export function CoupleNotesBoard({
     router.refresh();
   }
 
+  function openComposer(note?: CoupleNote) {
+    if (pendingRef.current) return;
+    setEditingNote(note ?? null);
+    setTitle(note?.title ?? ""); setDetail(note?.detail ?? ""); setExtra(note?.extra ?? "");
+    setStatus(note?.status ?? statuses[0].id); setError(""); setVaultScanPreview(false); setOpen(true);
+  }
+
   function changeStatus(note: CoupleNote, next: string) {
     if (next === note.status) {
-      setOpenStatusId(null);
       return;
     }
     if (!persist || !beginMutation()) return;
     const previous = note.status;
-    setOpenStatusId(null);
     setNotes(current => current.map(item => item.id === note.id ? { ...item, status: next } : item));
     void updateNoteStatus(note.id, next, note.updatedAt)
       .catch(() => ({ error: "상태를 저장하지 못했어요. 연결을 확인해 주세요." }))
@@ -390,7 +403,10 @@ export function CoupleNotesBoard({
             }} />
           </label>}
           <span className="note-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
-          <span className="note-state-dot">{statuses.find(item => item.id === note.status)?.label ?? note.status}</span>
+          <select className="note-status-select" aria-label={`${note.title} 상태 변경`} value={note.status}
+            disabled={pending || !persist} onChange={event => changeStatus(note, event.target.value)}>
+            {statuses.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+          </select>
           <small>{formatKoDate(note.createdAt.slice(0, 10))}</small>
         </div>
         <div className="note-card-body">
@@ -408,35 +424,18 @@ export function CoupleNotesBoard({
             : <p className="note-extra"><span>{copy.extra}</span>{note.extra}</p>)}
         </div>
         <div className="note-actions">
-          <div className={`note-status-picker ${openStatusId === note.id ? "is-open" : ""}`} onBlur={event => {
-            if (!event.currentTarget.contains(event.relatedTarget)) setOpenStatusId(null);
-          }}>
-            <button className="note-status-trigger" type="button" disabled={pending} aria-label={`${note.title} 상태 변경`} aria-haspopup="menu" aria-expanded={openStatusId === note.id} onClick={() => setOpenStatusId(current => current === note.id ? null : note.id)}>
-              <i className={`status-tone status-tone-${statuses.findIndex(item => item.id === note.status)}`} />
-              <span>{statuses.find(item => item.id === note.status)?.label ?? note.status}</span>
-              <svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="m3 4.5 3 3 3-3" /></svg>
-            </button>
-            {openStatusId === note.id && (
-              <div className="note-status-menu" role="menu" aria-label="상태 선택">
-                <header><span>상태 변경</span></header>
-                {statuses.map((item, statusIndex) => (
-                  <button type="button" disabled={pending} role="menuitemradio" aria-checked={note.status === item.id} className={note.status === item.id ? "is-selected" : ""} onClick={() => changeStatus(note, item.id)} key={item.id}>
-                    <i className={`status-tone status-tone-${statusIndex}`} />
-                    <span><b>{item.label}</b></span>
-                    <em>{note.status === item.id ? "✓" : ""}</em>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
           {kind === "vault" && <FolderMoveMenu
             folders={folders.workspace.folders}
             value={folders.folderFor(note.id)}
             disabled={!canOrganizeNotes}
             onMove={id => folders.moveItems([note.id], id)}
           />}
-          {kind === "vault" && note.extra && !isWebLink(note.extra) && <button className="note-copy-button" type="button" onClick={() => void navigator.clipboard.writeText(note.extra).catch(() => setError("복사하지 못했어요. 번호를 직접 선택해 주세요."))}>복사</button>}
+          {kind === "vault" && note.extra && !isWebLink(note.extra) && <button className="note-copy-button" type="button" onClick={() => {
+            if (!navigator.clipboard?.writeText) { setError("복사하지 못했어요. 번호를 직접 선택해 주세요."); return; }
+            void navigator.clipboard.writeText(note.extra).catch(() => setError("복사하지 못했어요. 번호를 직접 선택해 주세요."));
+          }}>복사</button>}
           {kind === "gift" && <button className="note-detail-button" type="button" disabled={pending} onClick={() => setSelectedNote(note)}>상세</button>}
+          <button className="note-edit-button" type="button" disabled={pending || !persist} aria-label={`${note.title} 수정`} onClick={() => openComposer(note)}>수정</button>
           <button className="text-link" type="button" disabled={pending} onClick={() => {
             if (!persist || !beginMutation()) return;
             const snapshot = notes;
@@ -455,33 +454,22 @@ export function CoupleNotesBoard({
   }
 
   return (
-    <div className={`notes-board notes-board-${kind}`}>
+    <div className={`notes-board notes-board-${kind} ${boardStyles.board}`}>
       <SyncNotice message={syncError} onRetry={retrySync} />
-      <section className={`notes-hero ${kind === "bucket" ? "is-no-action" : ""}`}>
-        <div className="notes-hero-copy">
-          <div className="notes-kind-mark"><NoteKindIcon kind={kind} /></div>
+      <div className={boardStyles.content}>
+      <section className={boardStyles.header}>
+        <div className={boardStyles.headerCopy}>
           <div>
             <span className="eyebrow">{copy.eyebrow} · {meta.kicker}</span>
             <h1>{copy.title}</h1>
             <p>{copy.lead}</p>
           </div>
         </div>
-        {kind !== "bucket" && (
-          <button className="date-action-button is-primary" type="button" onClick={() => setOpen(true)} disabled={pending}>
+        <div className={boardStyles.headerActions}>
+          <span className={boardStyles.sharedLabel}><i aria-hidden="true" />{collaborators ? `${collaborators.viewerName} · ${collaborators.partnerName}` : persist ? "둘이 함께 보는 목록" : "미리 보는 목록"}</span>
+          {kind !== "bucket" && <button className={`date-action-button is-primary ${boardStyles.addButton}`} type="button" onClick={() => openComposer()} disabled={pending}>
             <HeaderActionIcon name="plus" /><span>{meta.addLabel}</span>
-          </button>
-        )}
-        <div className="notes-overview" aria-label="목록 요약">
-          <div><span>전체 기록</span><strong>{notes.length}</strong><small>개</small></div>
-          <div><span>{statuses.find(item => item.id === highlightStatus)?.label}</span><strong>{highlightCount}</strong><small>개</small></div>
-          {kind === "vault" ? (
-            <div><span>사용 완료</span><strong>{notes.filter(note => note.status === "used").length}</strong><small>개 · 보관 종료 {notes.filter(note => note.status === "archived").length}개</small></div>
-          ) : (
-            <div className="notes-progress-card">
-              <span>{kind === "gift" ? "전달률" : "달성률"}</span><strong>{progress}<small>%</small></strong>
-              <i><b style={{ width: `${progress}%` }} /></i>
-            </div>
-          )}
+          </button>}
         </div>
       </section>
       {!persist && <p className="inline-notice" role="status">로그인하면 둘이 같은 목록을 봐요. <a href="/login">로그인</a></p>}
@@ -493,8 +481,8 @@ export function CoupleNotesBoard({
           <b>{visibleNotes.length}개</b>
         </div>
         <div className="notes-filter" role="group" aria-label="상태 필터">
-          <button type="button" className={filter === "all" ? "is-active" : ""} onClick={() => setFilter("all")}>전체</button>
-          {statuses.map(item => <button type="button" className={filter === item.id ? "is-active" : ""} onClick={() => setFilter(item.id)} key={item.id}>{item.label}</button>)}
+          <button type="button" className={filter === "all" ? "is-active" : ""} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>전체</button>
+          {statuses.map(item => <button type="button" className={filter === item.id ? "is-active" : ""} aria-pressed={filter === item.id} onClick={() => setFilter(item.id)} key={item.id}>{item.label}</button>)}
         </div>
         <label className="notes-search">
           <HeaderActionIcon name="search" />
@@ -519,28 +507,26 @@ export function CoupleNotesBoard({
           statuses={statuses}
           completedStatusId={completedStatus}
           collaborators={collaborators}
-          progress={progress}
-          doneCount={highlightCount}
           onError={setError}
           onRefresh={refreshAfterMutation}
           beginMutation={beginMutation}
           endMutation={endMutation}
           busy={pending}
-          onOpenDialog={() => setOpen(true)}
+          onOpenDialog={() => openComposer()}
         />
       ) : !notes.length && !(kind === "vault" && currentFolder) ? (
         <div className="notes-empty">
           <span><NoteKindIcon kind={kind} /></span>
           <h2>{meta.emptyTitle}</h2>
           <p>{meta.emptyDescription}</p>
-          <button className="primary-button" type="button" onClick={() => setOpen(true)}>{meta.addLabel}</button>
+          <button className="primary-button" type="button" onClick={() => openComposer()}>{meta.addLabel}</button>
         </div>
       ) : !visibleNotes.length ? (
         kind === "vault" && !folderNotes.length ? <div className={`notes-empty ${styles.folderEmpty}`}>
           <span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /><path d="M9 14h6M12 11v6" /></svg></span>
           <h2>{currentFolder ? `‘${currentFolder.name}’에 첫 기록을 담아볼까요?` : "정리가 끝났어요"}</h2>
           <p>{currentFolder ? "예약 정보, 편지, 작은 메모를 이 폴더에 차곡차곡 보관해요." : "폴더에 넣지 않은 기록이 없어요. 새 기록을 보관하거나 전체 기록을 둘러보세요."}</p>
-          <button className="primary-button" type="button" onClick={() => setOpen(true)}>{meta.addLabel}</button>
+          <button className="primary-button" type="button" onClick={() => openComposer()}>{meta.addLabel}</button>
           <button className="text-link" type="button" onClick={() => openNoteFolder("all")}>전체 기록 보기</button>
         </div> : <div className="notes-no-result"><b>조건에 맞는 기록이 없어요.</b><button type="button" onClick={() => { setFilter("all"); setQuery(""); }}>필터 초기화</button></div>
       ) : kind === "gift" ? (
@@ -562,20 +548,21 @@ export function CoupleNotesBoard({
       )}
       </>}
       {error && !open && <p className="notes-toast" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></p>}
+      </div>
       {open && (
         <div className="dialog-backdrop" role="presentation" onClick={closeDialog}>
           <form ref={createDialogRef} tabIndex={-1} className={`place-create-dialog note-create-dialog note-create-dialog-${kind}`} role="dialog" aria-modal="true" aria-labelledby="note-dialog-title" onClick={event => event.stopPropagation()} onSubmit={event => void submit(event)}>
             <div className="dialog-head">
               <div className="note-dialog-title">
                 <span className="notes-kind-mark"><NoteKindIcon kind={kind} /></span>
-                <div><span className="eyebrow">NEW · {copy.eyebrow}</span><h2 id="note-dialog-title">{meta.dialogTitle}</h2></div>
+                <div><span className="eyebrow">{editingNote ? "EDIT" : "NEW"} · {copy.eyebrow}</span><h2 id="note-dialog-title">{editingNote ? "기록 수정" : meta.dialogTitle}</h2></div>
               </div>
               <button className="icon-button" type="button" aria-label="닫기" disabled={pending} onClick={() => closeDialog()}>×</button>
             </div>
             <div className="note-dialog-content">
               <div className="note-dialog-fields">
-                {kind === "vault" && <div className={styles.saveDestination}><span>보관할 위치</span><b>{currentFolder?.name ?? "미분류 기록"}</b><small>{currentFolder ? "새 기록은 이 폴더에 함께 담겨요." : "저장한 뒤 원하는 폴더로 옮길 수 있어요."}</small></div>}
-                {kind === "vault" && (
+                {kind === "vault" && !editingNote && <div className={styles.saveDestination}><span>보관할 위치</span><b>{currentFolder?.name ?? "미분류 기록"}</b><small>{currentFolder ? "새 기록은 이 폴더에 함께 담겨요." : "저장한 뒤 원하는 폴더로 옮길 수 있어요."}</small></div>}
+                {kind === "vault" && !editingNote && (
                   <VaultScreenshotImport
                     persist={persist}
                     disabled={pending}
@@ -595,39 +582,39 @@ export function CoupleNotesBoard({
                     }}
                   />
                 )}
-                {kind === "vault" && !vaultScanPreview && <p className="vault-scan-divider" aria-hidden="true"><span>또는 직접 입력</span></p>}
+                {kind === "vault" && !editingNote && !vaultScanPreview && <p className="vault-scan-divider" aria-hidden="true"><span>또는 직접 입력</span></p>}
                 {!vaultScanPreview && (
                   <>
                 <label className="field">
                   <span>{meta.titleLabel}</span>
-                  <input data-dialog-autofocus value={title} onChange={event => setTitle(event.target.value)} placeholder={copy.placeholder} required disabled={pending} />
+                  <input data-dialog-autofocus value={title} maxLength={140} onChange={event => setTitle(event.target.value)} placeholder={copy.placeholder} required disabled={pending} />
                 </label>
                 {kind === "gift" && (
                   <label className="field gift-url-field">
                     <span>{copy.extra}</span>
-                    <div><span aria-hidden="true">↗</span><input type="url" value={extra} onChange={event => setExtra(event.target.value)} placeholder={copy.extraPh} disabled={pending} /></div>
+                    <div><span aria-hidden="true">↗</span><input type={editingNote && extra && !isWebLink(extra) ? "text" : "url"} inputMode="url" value={extra} maxLength={4096} onChange={event => setExtra(event.target.value)} placeholder={copy.extraPh} disabled={pending} /></div>
                     <small>구매를 고민 중인 상품 주소를 붙여 넣어 주세요.</small>
                   </label>
                 )}
                 <label className="field">
                   <span>{meta.detailLabel}</span>
-                  <textarea value={detail} onChange={event => setDetail(event.target.value)} rows={kind === "gift" ? 5 : 4} disabled={pending} />
+                  <textarea value={detail} maxLength={4000} onChange={event => setDetail(event.target.value)} rows={kind === "gift" ? 5 : 4} disabled={pending} />
                 </label>
                 {kind !== "gift" && (
                   <label className="field">
                     <span>{copy.extra}</span>
-                    <input value={extra} onChange={event => setExtra(event.target.value)} placeholder={copy.extraPh} disabled={pending} />
+                    <input value={extra} maxLength={4096} onChange={event => setExtra(event.target.value)} placeholder={copy.extraPh} disabled={pending} />
                   </label>
                 )}
-                <label className="field">
+                {!editingNote && <label className="field">
                   <span>진행 상태</span>
                   <select className="note-status-select" value={status} onChange={event => setStatus(event.target.value)} disabled={pending}>
                     {statuses.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}
                   </select>
-                </label>
+                </label>}
                 <div className="dialog-actions">
                   <button className="outline-button" type="button" onClick={() => closeDialog()} disabled={pending}>취소</button>
-                  <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : kind === "gift" ? "선물 플랜 저장" : "저장"}</button>
+                  <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending || !title.trim()} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : editingNote ? "수정 사항 저장" : kind === "gift" ? "선물 플랜 저장" : "저장"}</button>
                 </div>
                   </>
                 )}

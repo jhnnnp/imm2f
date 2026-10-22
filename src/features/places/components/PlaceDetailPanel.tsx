@@ -2,7 +2,7 @@
 
 import { useAppSession } from "@/features/auth/components/SessionProvider";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ExpandableText } from "@/components/shared/ExpandableText";
 import type { TripScheduleStop } from "../tripPlaceMatch";
 import type { Place, PlacePreferenceStatus } from "../types/place";
@@ -25,6 +25,7 @@ function ReadablePlaceText({ text, label = "설명" }: { text: string; label?: s
 
 function optionIsActive(current: PlacePreferenceStatus, option: PlacePreferenceStatus) {
   if (option === "want") return current === "want" || current === "must_visit";
+  if (option === "not_interested") return current === "not_interested" || current === "dislike";
   return current === option;
 }
 
@@ -66,10 +67,16 @@ export function PlaceDetailPanel({
   const [editing, setEditing] = useState(false);
   const [memoEditing, setMemoEditing] = useState(false);
   const [memoDraft, setMemoDraft] = useState(place.description);
+  const [addressDraft, setAddressDraft] = useState(place.roadAddress || place.address || "");
+  const [districtDraft, setDistrictDraft] = useState(place.district);
   const [pending, setPending] = useState(false);
   const [memoPending, setMemoPending] = useState(false);
   const [error, setError] = useState("");
   const [memoError, setMemoError] = useState("");
+  const locationSaving = useRef(false);
+  const memoSaving = useRef(false);
+  const statusLabelId = useId();
+  const partnerName = session.mode === "authenticated" ? session.partner?.displayName || "파트너" : "파트너";
 
   useEffect(() => {
     setEditing(false);
@@ -81,34 +88,47 @@ export function PlaceDetailPanel({
     setMemoError("");
   }, [place.id, place.description]);
 
+  useEffect(() => {
+    setAddressDraft(place.roadAddress || place.address || "");
+    setDistrictDraft(place.district);
+  }, [place.id, place.roadAddress, place.address, place.district]);
+
   async function saveLocation(formData: FormData) {
-    if (!onLocationSave) return;
+    if (!onLocationSave || locationSaving.current) return;
+    locationSaving.current = true;
     setPending(true);
     setError("");
-    const result = await onLocationSave({
-      address: String(formData.get("address") ?? ""),
-      district: String(formData.get("district") ?? ""),
-    });
-    setPending(false);
-    if (result && "error" in result && result.error) {
-      setError(result.error);
-      return;
+    try {
+      const result = await onLocationSave({
+        address: String(formData.get("address") ?? ""),
+        district: String(formData.get("district") ?? ""),
+      });
+      if (result && "error" in result && result.error) { setError(result.error); return; }
+      setEditing(false);
+    } catch {
+      setError("위치를 저장하지 못했어요. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      locationSaving.current = false;
+      setPending(false);
     }
-    setEditing(false);
   }
 
   async function saveMemo(event: React.FormEvent) {
     event.preventDefault();
-    if (!onDescriptionSave) return;
+    if (!onDescriptionSave || memoSaving.current) return;
+    memoSaving.current = true;
     setMemoPending(true);
     setMemoError("");
-    const result = await onDescriptionSave(memoDraft);
-    setMemoPending(false);
-    if (result && "error" in result && result.error) {
-      setMemoError(result.error);
-      return;
+    try {
+      const result = await onDescriptionSave(memoDraft);
+      if (result && "error" in result && result.error) { setMemoError(result.error); return; }
+      setMemoEditing(false);
+    } catch {
+      setMemoError("메모를 저장하지 못했어요. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      memoSaving.current = false;
+      setMemoPending(false);
     }
-    setMemoEditing(false);
   }
 
   const memoText = place.description.trim();
@@ -116,30 +136,34 @@ export function PlaceDetailPanel({
   const overview = place.sourceDescription?.trim() || (preview && memoText !== recommendation ? memoText : "");
   const canEditMemo = !preview && Boolean(onDescriptionSave);
 
-  return <div className="place-detail-panel" data-place-id={place.id}>
+  return <div className={`place-detail-panel ${styles.panel}`} data-place-id={place.id}>
     <div className={`detail-photo tone-${place.visualTone} ${place.image ? "" : "is-empty"}`}>{place.image ? <img src={place.image} alt={place.name} /> : <PlaceGraphicCover place={place} />}<span>{place.categoryLabel.toUpperCase()} · {preview ? "CANDIDATE" : "PLACE"}</span></div>
-    <div className="place-detail-head"><div><span className="eyebrow">{preview ? "PLACE PREVIEW" : "PLACE NOTE"}</span><h2 className="place-detail-title">{place.name}{!preview && tripScheduleStops.length > 0 ? <PlaceTripStamp compact /> : null}</h2>
+    <div className={`place-detail-head ${styles.head}`}><div><span className={styles.eyebrow}>{preview ? "발견한 장소" : "우리의 장소"}</span><h2 className="place-detail-title">{place.name}{!preview && tripScheduleStops.length > 0 ? <PlaceTripStamp compact /> : null}</h2>
       {!editing && (
         <p>
           {address}
-          {onLocationSave && <button className="place-edit-link" type="button" onClick={() => setEditing(true)}>수정</button>}
+          {onLocationSave && <button className="place-edit-link" type="button" onClick={() => {
+            setAddressDraft(place.roadAddress || place.address || "");
+            setDistrictDraft(place.district);
+            setEditing(true);
+          }}>수정</button>}
         </p>
       )}
-    </div>{!preview && <button className={`detail-heart ${saved ? "is-on" : ""} ${savePending ? "is-loading" : ""}`} type="button" aria-pressed={saved} aria-busy={savePending} disabled={savePending} aria-label={savePending ? "장소 상태 저장 중" : saved ? "가고 싶어요 해제" : "가고 싶어요"} onClick={() => onSave?.()}>{savePending ? <i className="button-spinner" aria-hidden="true" /> : saved ? "♥" : "♡"}</button>}</div>
+    </div>{!preview && onSave && <button className={`detail-heart ${styles.heart} ${saved ? "is-on" : ""} ${savePending ? "is-loading" : ""}`} type="button" aria-pressed={saved} aria-busy={savePending} disabled={savePending} aria-label={savePending ? "장소 상태 저장 중" : saved ? "가고 싶어요 해제" : "가고 싶어요"} onClick={() => onSave()}>{savePending ? <i className="button-spinner" aria-hidden="true" /> : saved ? "♥" : "♡"}</button>}</div>
     {editing && (
-      <form className="place-location-edit" action={formData => void saveLocation(formData)}>
+      <form className="place-location-edit" action={formData => void saveLocation(formData)} aria-busy={pending}>
         <label className="field">
           <span>주소</span>
-          <input name="address" required defaultValue={place.roadAddress || place.address || ""} placeholder="전북 군산시 경촌4길 14" />
+          <input name="address" required disabled={pending} value={addressDraft} onChange={event => setAddressDraft(event.target.value)} placeholder="전북 군산시 경촌4길 14" />
         </label>
         <label className="field">
           <span>동네</span>
-          <input name="district" defaultValue={place.district} placeholder="군산시 경암동" />
+          <input name="district" disabled={pending} value={districtDraft} onChange={event => setDistrictDraft(event.target.value)} placeholder="군산시 경암동" />
         </label>
         <p className="form-hint">수정한 주소로 지도 위치를 다시 확인해요.</p>
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="dialog-actions">
-          <button className="outline-button" type="button" onClick={() => { setEditing(false); setError(""); }}>취소</button>
+          <button className="outline-button" type="button" disabled={pending} onClick={() => { setEditing(false); setError(""); }}>취소</button>
           <button className={`primary-button${pending ? " is-loading" : ""}`} type="submit" disabled={pending} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "위치 확인 중..." : "위치 저장"}</button>
         </div>
       </form>
@@ -162,13 +186,14 @@ export function PlaceDetailPanel({
         ) : null}
       </div>
       {memoEditing ? (
-        <form className="place-memo-edit" onSubmit={event => void saveMemo(event)}>
+        <form className="place-memo-edit" onSubmit={event => void saveMemo(event)} aria-busy={memoPending}>
           <textarea
             value={memoDraft}
             onChange={event => setMemoDraft(event.target.value)}
             rows={4}
             placeholder="이 장소에서 하고 싶은 것, 기억하고 싶은 것"
             aria-label="우리 메모"
+            disabled={memoPending}
             autoFocus
           />
           {memoError ? <p className="form-error" role="alert">{memoError}</p> : null}
@@ -213,30 +238,49 @@ export function PlaceDetailPanel({
       {place.openingHours && <div><dt>{place.category === "festival" && !place.detailFacts?.some(fact => fact.label === "기간") ? "기간" : "이용시간"}</dt><dd>{place.openingHours}</dd></div>}
       {place.detailFacts?.map(fact => <div key={`${fact.label}-${fact.value}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
     </dl>}
-    <div className="external-place-links">
-      <span className="external-place-links-label">지도 앱으로 열기</span>
-      <div className="map-app-grid">
-        <button type="button" className="map-app-link is-kakao" onClick={() => openPlaceMiniWindow(kakaoUrl, "kakao")} aria-label="카카오맵에서 보기">
-          <span className="map-service-lockup"><b className="kakao-wordmark">kakao map</b><small>보기</small></span><em aria-hidden="true">↗</em>
+    <div className={`external-place-links ${styles.mapLinks}`}>
+      <span className={styles.sectionLabel}>지도에서 확인</span>
+      <div className={styles.mapGrid}>
+        <button type="button" className={styles.mapLink} onClick={() => openPlaceMiniWindow(kakaoUrl, "kakao")} aria-label="카카오맵에서 보기">
+          <span className={`${styles.mapMark} ${styles.kakaoMark}`} aria-hidden="true">K</span>
+          <span className={styles.mapService}><b>카카오맵</b><small>장소와 위치 보기</small></span><span className={styles.linkArrow} aria-hidden="true">↗</span>
         </button>
-        <button type="button" className="map-app-link is-naver" onClick={() => openPlaceMiniWindow(naverPlaceSearchUrl(place.name, address), "naver")} aria-label="네이버 지도에서 보기">
-          <span className="map-service-lockup"><b className="naver-wordmark">NAVER</b><small>보기</small></span><em aria-hidden="true">↗</em>
+        <button type="button" className={styles.mapLink} onClick={() => openPlaceMiniWindow(naverPlaceSearchUrl(place.name, address), "naver")} aria-label="네이버 지도에서 보기">
+          <span className={`${styles.mapMark} ${styles.naverMark}`} aria-hidden="true">N</span>
+          <span className={styles.mapService}><b>네이버 지도</b><small>장소와 위치 보기</small></span><span className={styles.linkArrow} aria-hidden="true">↗</span>
         </button>
       </div>
       {place.externalSource === "tourapi" && place.mapUrl && <a className="place-source-link" href={place.mapUrl} target="_blank" rel="noreferrer">대한민국 구석구석 상세정보 <span>↗</span></a>}
       {place.homepage && <a className="place-source-link" href={place.homepage} target="_blank" rel="noreferrer">공식 홈페이지 <span>↗</span></a>}
     </div>
     {preview ? (
-      <button className={preferredPlan ? "outline-button full" : "primary-button full"} type="button" onClick={onSave}>장소 저장하기</button>
+      <button className={`${preferredPlan ? "outline-button" : "primary-button"} ${styles.previewSave}`} type="button" onClick={onSave} disabled={savePending || !onSave} aria-busy={savePending}>{savePending ? "장소 저장 중…" : "장소 저장하기"}</button>
     ) : (
-      <div className="status-box"><span>내 마음</span>{onStatusChange ? <div className="status-picker" role="group" aria-label="이 장소에 대한 내 마음">{STATUS_OPTIONS.map(status => {
-        const active = optionIsActive(place.userStatus, status);
-        return <button type="button" className={`status-pill ${active ? "is-active" : ""}`} key={status} aria-pressed={active} disabled={savePending} onClick={() => onStatusChange(active ? "neutral" : status)}>{savePending && active ? <><i className="button-spinner" aria-hidden="true" /> 저장 중</> : STATUS_META[status].label}</button>;
-      })}</div> : <PlaceStatusBadge status={place.userStatus} />}<span>파트너</span><PlaceStatusBadge status={place.partnerStatus} /></div>
+      <section className={styles.statusSection} aria-labelledby={statusLabelId}>
+        <div className={styles.statusHeading}><h3 id={statusLabelId}>내 마음</h3><span>{savePending ? "저장 중…" : place.userStatus === "neutral" ? "아직 선택하지 않았어요" : "선택한 마음"}</span></div>
+        {onStatusChange ? <div className={styles.statusPicker} role="group" aria-label="이 장소에 대한 내 마음" aria-busy={savePending}>{STATUS_OPTIONS.map(status => {
+          const active = optionIsActive(place.userStatus, status);
+          return <button type="button" className={`${styles.statusOption} ${active ? styles.statusActive : ""}`} key={status}
+            aria-pressed={active} aria-busy={savePending} disabled={savePending}
+            onClick={() => { if (!savePending) onStatusChange(active ? "neutral" : status); }}>
+            <span className={styles.statusIcon} aria-hidden="true">{STATUS_META[status].icon}</span>
+            <span>{STATUS_META[status].label}</span>
+            <span className={styles.statusCheck} aria-hidden="true">{active ? "✓" : ""}</span>
+          </button>;
+        })}</div> : <div className={styles.readOnlyStatus}><PlaceStatusBadge status={place.userStatus} /></div>}
+        <p className={styles.statusHint} role="status" aria-live="polite">{savePending ? "마음을 저장하고 있어요." : onStatusChange ? "선택한 마음을 한 번 더 누르면 해제돼요." : "저장한 내 마음이에요."}</p>
+        <div className={styles.partnerStatus}>
+          <span className={styles.partnerAvatar} aria-hidden="true">{partnerName.slice(0, 1)}</span>
+          <span className={styles.partnerLabel}>{partnerName}<small>파트너의 마음</small></span>
+          <span className={styles.partnerBadge}><span aria-hidden="true">{STATUS_META[place.partnerStatus].icon}</span>{STATUS_META[place.partnerStatus].label}</span>
+        </div>
+      </section>
     )}
+    <div className={styles.planActions}>
     {preferredPlan === "date" && onAddDate && <button className={`primary-button full${planPending === "date" ? " is-loading" : ""}`} type="button" onClick={onAddDate} disabled={Boolean(planPending)} aria-busy={planPending === "date"}>{planPending === "date" && <i className="button-spinner" aria-hidden="true" />}{planPending === "date" ? "데이트에 담는 중..." : "이 데이트에 추가"}</button>}
     {preferredPlan === "trip" && <><p className="place-plan-destination">{tripDestinationLabel ?? "선택한 여행 일정"}</p><button className={`primary-button full${planPending === "trip" ? " is-loading" : ""}`} type="button" onClick={onAdd} disabled={Boolean(planPending)} aria-busy={planPending === "trip"}>{planPending === "trip" && <i className="button-spinner" aria-hidden="true" />}{planPending === "trip" ? "선택한 날에 담는 중..." : "선택한 날에 추가"}</button></>}
     {preferredPlan !== "trip" && <button className={`outline-button full${planPending === "trip" ? " is-loading" : ""}`} type="button" onClick={onAdd} disabled={Boolean(planPending)} aria-busy={planPending === "trip"}>{planPending === "trip" && <i className="button-spinner" aria-hidden="true" />}{planPending === "trip" ? "여행에 담는 중..." : "여행 일정에 추가"}</button>}
     {preferredPlan !== "date" && onAddDate && <button className={`outline-button full${planPending === "date" ? " is-loading" : ""}`} type="button" onClick={onAddDate} disabled={Boolean(planPending)} aria-busy={planPending === "date"}>{planPending === "date" && <i className="button-spinner" aria-hidden="true" />}{planPending === "date" ? "데이트에 담는 중..." : "데이트 일정에 추가"}</button>}
+    </div>
   </div>;
 }

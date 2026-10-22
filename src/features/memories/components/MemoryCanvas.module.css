@@ -1,17 +1,51 @@
 .toolbar {
-  padding: 10px;
-  gap: 8px;
+  container: memory-tools / inline-size;
+  min-width: 0;
+  padding: 12px 0 0;
+  gap: 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-family: var(--default);
 }
 
 .toolbar :global(.memory-studio-main) {
-  gap: 10px 16px;
+  gap: 10px 12px;
+  justify-content: space-between;
 }
 
 .toolbar :global(.memory-studio-tool),
 .toolbar :global(.memory-studio-action) {
+  height: 38px;
   min-height: 38px;
-  font-size: .78rem;
+  font: 400 14px/1.3 var(--default);
 }
+
+.toolbar :global(.memory-studio-group) {
+  gap: 3px;
+  padding: 4px;
+  background: #edf0e9;
+  border-radius: 12px;
+}
+
+.toolbar :global(.memory-studio-tool) { padding-inline: 10px; }
+.toolbar :global(.memory-studio-tool.is-active) { box-shadow: 0 2px 5px #263c2b14; }
+.toolbar :global(.memory-studio-actions) { gap: 8px; margin-left: 0; }
+.toolbar :global(.memory-sync-status) { margin: 0; font: 400 13px/1.5 var(--default); }
+.toolbar :global(.memory-studio-ink) { gap: 12px; padding: 12px 0 2px; border-top: 1px solid var(--line); }
+.toolbar :global(.memory-studio-fonts button) { font: 400 14px/1.3 var(--default); }
+
+.history { display: flex; gap: 2px; padding-right: 8px; border-right: 1px solid var(--line); }
+.history :global(.memory-studio-action) { width: 38px; padding: 0; font-size: 24px; }
+.arrange { position: relative; }
+.arrange summary { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: #fffdf8; color: var(--ink); font: 400 14px/1.3 var(--default); cursor: pointer; list-style: none; }
+.arrange summary::-webkit-details-marker { display: none; }
+.arrange summary:focus-visible { outline: 2px solid var(--sage-deep); outline-offset: 3px; }
+.arrange[open] summary { background: var(--sage-soft, #edf0e9); }
+.arrangeMenu { position: absolute; z-index: 12; top: calc(100% + 8px); right: 0; display: grid; min-width: 156px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: #fffdf8; box-shadow: 0 12px 30px #263c2b1c; }
+.arrangeMenu :global(.memory-studio-action) { justify-content: start; padding-inline: 12px; }
+.arrangeMenu .clearInk { color: #9a5047; border-top: 1px solid var(--line); border-radius: 0 0 7px 7px; margin-top: 4px; }
 
 .toolbar :global(.memory-studio-tool svg) {
   width: 16px;
@@ -47,7 +81,7 @@
 
 .canvas :global(.memory-canvas-hint) {
   max-width: calc(100% - 190px);
-  font: 400 .74rem/1.5 var(--sans);
+  font: 400 13px/1.5 var(--default);
   border: 1px solid var(--line);
   background: rgba(255, 252, 247, .92);
   backdrop-filter: blur(8px);
@@ -115,12 +149,12 @@
 .zoomControls output {
   min-width: 42px;
   text-align: center;
-  font-size: .72rem;
+  font: 400 13px/1.3 var(--default);
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
 
-@media (max-width: 640px) {
+@container memory-tools (max-width: 680px) {
   .toolbar :global(.memory-studio-group) {
     width: 100%;
     display: grid;
@@ -130,24 +164,31 @@
   .toolbar :global(.memory-studio-tool) {
     flex-direction: column;
     height: auto;
-    min-height: 50px;
-    padding: 6px 2px;
+    min-height: 48px;
+    padding: 5px 2px;
     gap: 4px;
   }
 
   .toolbar :global(.memory-studio-actions) {
     width: 100%;
     margin: 0;
-    display: flex;
-    overflow-x: auto;
-    flex-wrap: nowrap;
-    scrollbar-width: thin;
+    justify-content: space-between;
+    flex-wrap: wrap;
   }
 
   .toolbar :global(.memory-studio-action) {
     flex-shrink: 0;
   }
 
+}
+
+@container memory-tools (max-width: 360px) {
+  .toolbar :global(.memory-studio-group) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .toolbar :global(.memory-studio-tool) { flex-direction: row; min-height: 40px; }
+  .toolbar :global(.memory-studio-swatches) { gap: 9px; }
+}
+
+@media (max-width: 640px) {
   .canvas :global(.memory-canvas-viewport) {
     height: min(65dvh, 600px);
     min-height: 360px;

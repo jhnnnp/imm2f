@@ -1,28 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createCoupleInvite } from "../session";
+import styles from "./PartnerSpace.module.css";
 
 export function InviteManager() {
   const [link, setLink] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [pending, setPending] = useState(false);
+  const creating = useRef(false);
+  const sharing = useRef(false);
+  const [sharingNow, setSharingNow] = useState(false);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
 
   async function createLink() {
+    if (creating.current || sharing.current) return;
+    creating.current = true;
     setPending(true);
     setError("");
     setCopied(false);
     try {
       const result = await createCoupleInvite();
       if ("error" in result && result.error) { setError(result.error); return; }
-      if ("token" in result) setLink(`${window.location.origin}/invite/${result.token}`);
+      if ("token" in result) { setLink(`${window.location.origin}/invite/${result.token}`); setExpiresAt(result.expiresAt ?? null); }
     } catch { setError("초대 링크를 만들지 못했어요. 다시 시도해 주세요."); }
-    finally { setPending(false); }
+    finally { creating.current = false; setPending(false); }
   }
 
   async function copyLink() {
-    if (!link) return;
+    if (!link || creating.current) return;
     try {
       await navigator.clipboard.writeText(link);
       setCopied(true);
@@ -31,21 +38,23 @@ export function InviteManager() {
   }
 
   async function shareLink() {
-    if (!link) return;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: "ONLY US 초대", text: "우리의 공간에 초대할게요.", url: link });
-        return;
-      } catch (cause) {
-        if (cause instanceof DOMException && cause.name === "AbortError") return;
-        // Share sheet dismissed or unavailable; copy instead.
+    if (!link || creating.current || sharing.current) return;
+    sharing.current = true; setSharingNow(true); setError("");
+    try {
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: "ONLY US 초대", text: "우리의 공간에 초대할게요.", url: link });
+          return;
+        } catch (cause) {
+          if (cause && typeof cause === "object" && "name" in cause && cause.name === "AbortError") return;
+        }
       }
-    }
-    await copyLink();
+      await copyLink();
+    } finally { sharing.current = false; setSharingNow(false); }
   }
 
   return (
-    <section className="invite-studio">
+    <section className={`invite-studio ${styles.space}`} aria-busy={pending || sharingNow}>
       <article className="invite-create-card">
         <header>
           <span className="invite-symbol" aria-hidden="true"><i>나</i><i>?</i></span>
@@ -53,16 +62,18 @@ export function InviteManager() {
         </header>
         {link ? (
           <div className="invite-result" aria-live="polite">
-            <label><span>초대 링크</span><div><input readOnly value={link} aria-label="초대 링크" /><button type="button" onClick={() => void copyLink()}>{copied ? "복사 완료" : "링크 복사"}</button></div></label>
+            <label><span>초대 링크</span><div><input readOnly value={link} aria-label="초대 링크" /><button type="button" disabled={pending || sharingNow} onClick={() => void copyLink()}>{copied ? "복사 완료" : "링크 복사"}</button></div></label>
+            {expiresAt && <small className={styles.expiry}>{new Date(expiresAt).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", month: "long", day: "numeric" })}까지 사용할 수 있어요.</small>}
+            {copied && <p className={styles.feedback} role="status">링크를 복사했어요. 파트너에게 전달해 주세요.</p>}
             <div className="invite-result-actions">
-              <button className="primary-button" type="button" onClick={() => void shareLink()}>파트너에게 공유</button>
-              <button className="text-button" type="button" onClick={() => void createLink()} disabled={pending}>{pending ? "만드는 중…" : "새 링크 만들기"}</button>
+              <button className="primary-button" type="button" disabled={pending || sharingNow} onClick={() => void shareLink()}>{sharingNow ? "공유 창 여는 중…" : "파트너에게 공유"}</button>
+              <button className="text-button" type="button" onClick={() => void createLink()} disabled={pending || sharingNow}>{pending ? "만드는 중…" : "새 링크 만들기"}</button>
             </div>
           </div>
         ) : (
           <div className="invite-create-action">
             <div className="invite-connection-preview" aria-hidden="true"><span>나</span><i><b /></i><span>파트너</span></div>
-            <button className="primary-button" type="button" onClick={() => void createLink()} disabled={pending}>{pending ? "안전한 링크를 만드는 중…" : "초대 링크 만들기"}<span>→</span></button>
+            <button className="primary-button" type="button" onClick={() => void createLink()} disabled={pending || sharingNow}>{pending ? "안전한 링크를 만드는 중…" : "초대 링크 만들기"}<span aria-hidden="true">→</span></button>
           </div>
         )}
         {error && <p className="form-error" role="alert">{error}</p>}

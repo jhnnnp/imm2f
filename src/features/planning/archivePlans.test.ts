@@ -42,11 +42,19 @@ it("preserves the travel notes in both the memory and the archived itinerary", a
   expect(await listArchivedTripPlans()).toEqual([expect.objectContaining({ id: "memory", notes, items: [item] })]);
 });
 
-it("keeps older archives readable when they do not contain travel notes", async () => {
+it("keeps older archives readable and retains their canonical stored metadata", async () => {
   const from = vi.fn().mockReturnValueOnce(query([{ id: "old", title: "지난 여행", happened_on: "2026-10-01", description: "1일 · 1곳" }]))
     .mockReturnValueOnce(query([{ entity_id: "old", after_value: { items: [item], dayCount: 1 } }]));
   mocks.client.mockResolvedValue({ from });
-  expect(await listArchivedTripPlans()).toEqual([expect.objectContaining({ id: "old", notes: "", items: [item] })]);
+  expect(await listArchivedTripPlans()).toEqual([expect.objectContaining({ id: "old", notes: "1일 · 1곳", items: [item] })]);
+});
+
+it("reads edited title and notes from the memory while preserving the original undated itinerary", async () => {
+  const from = vi.fn().mockReturnValueOnce(query([{ id: "edited", title: "수정한 여행", happened_on: "2026-10-11", description: "수정한 메모" }]))
+    .mockReturnValueOnce(query([{ entity_id: "edited", after_value: { startDate: "", notes: "옛 메모", items: [item], dayCount: 3 } }]));
+  mocks.client.mockResolvedValue({ from });
+  expect(await listArchivedTripPlans()).toEqual([expect.objectContaining({ id: "edited", title: "수정한 여행",
+    notes: "수정한 메모", startDate: "", dayCount: 3, items: [item] })]);
 });
 
 it("rejects invalid archive dates and day counts without a database write", async () => {

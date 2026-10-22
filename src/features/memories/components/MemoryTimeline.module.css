@@ -1,4 +1,22 @@
-.stats { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 17px; color: var(--muted); font-size: .78rem; }
+.header { min-width: 0; margin-bottom: 22px; }
+.header h1 { font-family: var(--default); font-size: clamp(26px, 3vw, 38px); line-height: 1.3; overflow-wrap: anywhere; }
+.header p { font: 400 16px/1.6 var(--default); }
+.stats { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 16px; color: var(--muted); font: 400 14px/1.4 var(--default); }
+.controls { container: memory-controls / inline-size; gap: 0; min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255, 252, 247, .95); box-shadow: 0 4px 16px #322c2305; }
+.controls :global(.memory-toolbar-row) { min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; gap: 12px; }
+.controls :global(.memory-tabs) { min-width: 0; max-width: 100%; flex-wrap: wrap; gap: 3px; padding: 4px; border-radius: 12px; background: #edf0e9; }
+.controls :global(.memory-tabs .date-action-button) { height: 38px; min-width: 52px; padding-inline: 12px; font: 400 15px/1.3 var(--default); }
+.controls :global(.date-action-group) { margin-left: auto; }
+.controls :global(.date-action-group .date-action-button.is-primary) { height: 40px; padding-inline: 14px; font: 400 15px/1.3 var(--default); }
+.controls :global(.memory-toolbar-cluster:not([hidden])) { margin-top: 12px; border-top: 1px solid var(--line); }
+.controls button:focus-visible { outline: 2px solid var(--sage-deep); outline-offset: 3px; }
+@container memory-controls (max-width: 520px) {
+  .controls :global(.memory-toolbar-row) { align-items: stretch; }
+  .controls :global(.memory-tabs) { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); width: 100%; }
+  .controls :global(.memory-tabs .date-action-button) { min-width: 0; padding-inline: 4px; }
+  .controls :global(.date-action-group) { width: 100%; margin: 0; }
+  .controls :global(.date-action-group .date-action-button.is-primary) { width: 100%; justify-content: center; }
+}
 .stats span { display: inline-flex; align-items: center; gap: 7px; }
 .stats b { color: var(--green, #416657); font-weight: 600; }
 .searchRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 20px 0; }

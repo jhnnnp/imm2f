@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { loginHrefForInvite, signupHrefForInvite } from "../invitePath";
 import { acceptCoupleInvite } from "../session";
@@ -8,15 +8,18 @@ import { acceptCoupleInvite } from "../session";
 export function InviteAccept({ token, inviterName, signedIn }: { token: string; inviterName: string; signedIn: boolean }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const accepting = useRef(false);
 
   async function accept() {
+    if (accepting.current) return;
+    accepting.current = true;
     setPending(true);
     setError("");
     try {
       const result = await acceptCoupleInvite(token);
       if (result?.error) setError(result.error);
     } catch { setError("초대를 수락하지 못했어요. 다시 시도해 주세요."); }
-    finally { setPending(false); }
+    finally { accepting.current = false; setPending(false); }
   }
 
   return (

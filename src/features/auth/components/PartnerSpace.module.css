@@ -1,0 +1,47 @@
+.space:global(.partner-manage), .space:global(.invite-studio) { container: partner-space / inline-size; display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(250px, 1fr); gap: 20px; min-width: 0; font-family: var(--default); }
+.space :global(.partner-manage-card), .space :global(.partner-manage-taste), .space :global(.partner-manage-leave), .space :global(.invite-create-card), .space :global(.invite-guide) { min-width: 0; padding: clamp(22px, 3vw, 32px); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 8px 28px #2b312e05; }
+.space :global(.partner-manage-card) { display: flex; flex-direction: column; align-items: flex-start; background: linear-gradient(145deg, #fffefa, #eff3eb); }
+.space :global(.partner-manage-card h2), .space :global(.invite-create-card h2) { font: 700 clamp(24px, 3cqi, 30px)/1.35 var(--default); margin: 18px 0 8px; overflow-wrap: anywhere; }
+.space :global(.partner-manage-avatars) { margin: 24px 0 0; }
+.space :global(.partner-manage-avatars .avatar) { width: 54px; height: 54px; font-size: 22px; }
+.space :global(.partner-manage-card p), .space :global(.partner-manage-taste p), .space :global(.partner-manage-leave p), .space :global(.invite-create-card header p), .space :global(.invite-guide li p), .space :global(.invite-create-card > footer p) { max-width: 48ch; font-size: 15px; line-height: 1.75; margin: 8px 0; word-break: keep-all; overflow-wrap: anywhere; }
+.space :global(.partner-manage-status) { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 7px; background: #e2ede3; color: #486b50; font-size: 13px; }
+.space :global(.partner-manage-facts) { display: grid; gap: 10px; padding: 20px 0 0; margin: 18px 0 0; width: 100%; border-top: 1px solid var(--line); }
+.space :global(.partner-manage-facts li) { padding-left: 20px; color: #637468; font-size: 14px; line-height: 1.6; }
+.space :global(.partner-manage-side) { display: grid; grid-template-rows: auto auto; gap: 16px; min-width: 0; }
+.space :global(.partner-manage-taste), .space :global(.partner-manage-leave) { background: #fffefa; }
+.space :global(.partner-manage-taste h3), .space :global(.partner-manage-leave h3), .space :global(.invite-guide h3) { margin: 10px 0; font: 700 21px/1.4 var(--default); }
+.space :global(.partner-manage-leave) { background: #faf7f1; }
+.space :global(.partner-manage-leave .outline-button) { min-height: 42px; margin-top: 12px; padding: 8px 14px; border: 1px solid #decfc6; border-radius: 9px; color: #8c6b60; background: transparent; font-size: 14px; }
+.space :global(.primary-button) { min-height: 44px; height: auto; padding: 11px 18px; border-radius: 10px; font-size: 15px; }
+.space :global(.eyebrow) { font-size: 12px; }
+.space :global(.invite-create-card) { background: #fffefa; }
+.space :global(.invite-create-card > header) { align-items: flex-start; gap: 18px; }
+.space :global(.invite-symbol) { flex-shrink: 0; }
+.space :global(.invite-create-card h2) { margin-top: 8px; }
+.space :global(.invite-create-action) { gap: 22px; padding: 26px 0; }
+.space :global(.invite-guide) { padding: 28px 24px; background: #f5f3eb; }
+.space :global(.invite-guide ol) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; margin-top: 26px; }
+.space :global(.invite-guide li) { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; }
+.space :global(.invite-guide li::after) { display: none; }
+.space :global(.invite-guide li > b) { width: 28px; height: 28px; font-size: 14px; }
+.space :global(.invite-guide strong) { font-size: 16px; }
+.space :global(.invite-privacy) { font-size: 13px; line-height: 1.7; margin-top: 28px; }
+.space :global(.invite-result label > div) { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border-radius: 10px; }
+.space :global(.invite-result input) { flex: 1 1 160px; width: 100%; min-width: 0; padding: 8px; font: 400 14px/1.5 var(--default); }
+.space :global(.invite-result label button) { min-height: 40px; padding: 8px 12px; font-size: 14px; }
+.space :global(.invite-result-actions) { display: flex; flex-wrap: wrap; gap: 10px; }
+.space :global(.invite-result-actions button) { min-height: 44px; font-size: 15px; }
+.space :global(.invite-result-actions .text-button) { padding: 8px 12px; }
+.feedback { padding: 10px 12px; border-radius: 8px; background: #edf3e9; color: #4a6a50; font-size: 14px; line-height: 1.6; }
+.expiry { display: block; margin-top: 8px; color: #7c857b; font-size: 13px; }
+.dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 26px; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); box-shadow: var(--shadow); font-family: var(--default); }
+.dialog h2 { margin: 0 0 14px; font: 700 24px/1.4 var(--default); }
+.dialog p { margin: 12px 0; font-size: 16px; line-height: 1.8; word-break: keep-all; }
+.dialogActions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.dialogActions button { min-height: 44px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 9px; background: #fffefa; font: 600 15px/1.4 var(--default); }
+.dialogActions button:last-child { border-color: #ac8273; color: #fff; background: #ac8273; }
+.space button:focus-visible, .space a:focus-visible, .dialog button:focus-visible { outline: 2px solid #698671; outline-offset: 3px; }
+.space button:disabled, .dialog button:disabled { opacity: .55; cursor: wait; }
+@container partner-space (max-width: 670px) { .space > :global(.partner-manage-card), .space > :global(.partner-manage-side), .space > :global(.invite-create-card), .space > :global(.invite-guide) { grid-column: 1 / -1; } }
+@media (max-width: 600px) { .space:global(.partner-manage), .space:global(.invite-studio) { grid-template-columns: minmax(0, 1fr); gap: 16px; } .space :global(.invite-create-card > header) { flex-direction: column; } }

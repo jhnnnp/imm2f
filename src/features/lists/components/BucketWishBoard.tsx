@@ -17,8 +17,6 @@ export function BucketWishBoard({
   statuses,
   completedStatusId,
   collaborators,
-  progress,
-  doneCount,
   onError,
   onRefresh,
   onOpenDialog,
@@ -33,8 +31,6 @@ export function BucketWishBoard({
   statuses: readonly StatusOption[];
   completedStatusId: string | undefined;
   collaborators?: { viewerId: string; viewerName: string; partnerName: string };
-  progress: number;
-  doneCount: number;
   onError: (message: string) => void;
   onRefresh: () => void;
   onOpenDialog: () => void;
@@ -47,6 +43,7 @@ export function BucketWishBoard({
   const [quickWhen, setQuickWhen] = useState("");
   const [hideDone, setHideDone] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
   const [editDetail, setEditDetail] = useState("");
   const [editExtra, setEditExtra] = useState("");
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -57,12 +54,6 @@ export function BucketWishBoard({
 
   const canReorder = persist && !busy && notes.length > 1 && visibleNotes.length === notes.length;
   const visibleIds = useMemo(() => new Set(visibleNotes.map(note => note.id)), [visibleNotes]);
-
-  const statusCounts = useMemo(() => {
-    const counts = Object.fromEntries(statuses.map(item => [item.id, 0])) as Record<string, number>;
-    for (const note of notes) counts[note.status] = (counts[note.status] ?? 0) + 1;
-    return counts;
-  }, [notes, statuses]);
 
   const { activeNotes, doneNotes } = useMemo(() => {
     const active: CoupleNote[] = [];
@@ -130,6 +121,7 @@ export function BucketWishBoard({
       return;
     }
     if (!beginMutation()) return;
+    onError("");
     setPending(true);
     const input = {
       title,
@@ -157,6 +149,7 @@ export function BucketWishBoard({
 
   function changeStatus(note: CoupleNote, next: string) {
     if (next === note.status || !persist || !beginMutation()) return;
+    onError("");
     const previous = note.status;
     setNotes(current => current.map(item => item.id === note.id ? { ...item, status: next } : item));
     void updateNoteStatus(note.id, next, note.updatedAt)
@@ -181,6 +174,7 @@ export function BucketWishBoard({
   function openEdit(note: CoupleNote) {
     editVersion.current = note.updatedAt;
     setExpandedId(note.id);
+    setEditTitle(note.title);
     setEditDetail(note.detail);
     setEditExtra(note.extra);
   }
@@ -191,8 +185,9 @@ export function BucketWishBoard({
       return;
     }
     if (!beginMutation()) return;
+    onError("");
     setPending(true);
-    const result = await updateNoteContent(note.id, { detail: editDetail, extra: editExtra }, editVersion.current)
+    const result = await updateNoteContent(note.id, { title: editTitle, detail: editDetail, extra: editExtra }, editVersion.current)
       .catch(() => ({ error: "메모를 저장하지 못했어요. 연결을 확인해 주세요." }));
     endMutation();
     setPending(false);
@@ -224,7 +219,6 @@ export function BucketWishBoard({
     const dragging = draggingId === note.id;
     const dropTarget = dropTargetId === note.id && draggingId !== note.id;
     const expanded = expandedId === note.id;
-    const statusIndex = Math.max(0, statuses.findIndex(item => item.id === note.status));
 
     return (
       <li
@@ -247,7 +241,7 @@ export function BucketWishBoard({
           <button
             className="bucket-check"
             type="button"
-            disabled={busy}
+            disabled={busy || !persist}
             aria-label={done ? `${note.title} 완료 취소` : `${note.title} 완료로 표시`}
             aria-pressed={done}
             onClick={() => toggleDone(note)}
@@ -267,24 +261,13 @@ export function BucketWishBoard({
             </div>
           </div>
           <div className="bucket-card-side">
-            <div className="bucket-status-pills" role="group" aria-label={`${note.title} 상태`}>
-              {statuses.map((item, pillIndex) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  disabled={busy}
-                  className={note.status === item.id ? "is-active" : ""}
-                  aria-pressed={note.status === item.id}
-                  onClick={() => changeStatus(note, item.id)}
-                >
-                  <i className={`status-tone status-tone-${pillIndex}`} aria-hidden="true" />
-                  {item.label}
-                </button>
-              ))}
-            </div>
+            <select className="bucket-status-select" aria-label={`${note.title} 상태`} value={note.status}
+              disabled={busy || !persist} onChange={event => changeStatus(note, event.target.value)}>
+              {statuses.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
             <div className="bucket-card-tools">
-              <button type="button" className="bucket-tool" disabled={busy} onClick={() => expanded ? setExpandedId(null) : openEdit(note)}>
-                {expanded ? "닫기" : "메모"}
+              <button type="button" className="bucket-tool" disabled={busy || !persist} aria-label={`${note.title} 수정`} onClick={() => expanded ? setExpandedId(null) : openEdit(note)}>
+                {expanded ? "닫기" : "수정"}
               </button>
               <button type="button" className="bucket-tool is-danger" disabled={busy} aria-label={`${note.title} 지우기`} onClick={() => removeNote(note)}>지우기</button>
             </div>
@@ -298,72 +281,33 @@ export function BucketWishBoard({
               void saveEdit(note);
             }}
           >
+            <label className="bucket-edit-title"><span>함께 해보고 싶은 일</span><input required maxLength={140} value={editTitle} onChange={event => setEditTitle(event.target.value)} disabled={busy} /></label>
             <label>
               <span>이루고 싶은 이유 · 계획</span>
-              <textarea value={editDetail} onChange={event => setEditDetail(event.target.value)} rows={3} placeholder="왜 해보고 싶은지, 어떻게 준비할지 적어 보세요." />
+              <textarea value={editDetail} maxLength={4000} disabled={busy} onChange={event => setEditDetail(event.target.value)} rows={3} placeholder="왜 해보고 싶은지, 어떻게 준비할지 적어 보세요." />
             </label>
             <label>
               <span>언제쯤</span>
-              <input value={editExtra} onChange={event => setEditExtra(event.target.value)} placeholder="올해 겨울, 2주년 전후" />
+              <input value={editExtra} maxLength={4096} disabled={busy} onChange={event => setEditExtra(event.target.value)} placeholder="올해 겨울, 2주년 전후" />
             </label>
             <div className="bucket-card-edit-actions">
               <button type="button" className="outline-button" onClick={() => setExpandedId(null)} disabled={busy}>취소</button>
-              <button type="submit" className={`primary-button${pending ? " is-loading" : ""}`} disabled={busy} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
+              <button type="submit" className={`primary-button${pending ? " is-loading" : ""}`} disabled={busy || !editTitle.trim()} aria-busy={pending}>{pending && <i className="button-spinner" aria-hidden="true" />}{pending ? "저장 중..." : "저장"}</button>
             </div>
           </form>
         )}
-        <span className={`bucket-card-accent status-tone-${statusIndex}`} aria-hidden="true" />
       </li>
     );
   }
 
   return (
     <section className="bucket-paper bucket-paper-v2" aria-label="함께 쓰는 버킷리스트">
-      <header className="bucket-paper-head">
-        <div className="bucket-head-copy">
-          <span className="bucket-kicker">OUR WISH LIST</span>
-          <h2>우리의 다음 장면들</h2>
-          <p>꿈을 적고, 계획하고, 이룬 날엔 체크해요. 메모와 목표 시기도 함께 남길 수 있어요.</p>
-        </div>
-        <div className="bucket-head-panel">
-          <div className="bucket-collaborators" aria-label="함께 작성하는 사람">
-            <span>{collaborators?.viewerName.slice(0, 1) || "나"}</span>
-            <span>{collaborators?.partnerName.slice(0, 1) || "?"}</span>
-            <small>
-              <b>함께 쓰는 목록</b>
-              {collaborators ? `${collaborators.viewerName} · ${collaborators.partnerName}` : "우리의 공간"}
-            </small>
-          </div>
-          <div className="bucket-stat-grid" aria-label="상태별 개수">
-            {statuses.map((item, index) => (
-              <div key={item.id}>
-                <i className={`status-tone status-tone-${index}`} aria-hidden="true" />
-                <b>{statusCounts[item.id] ?? 0}</b>
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-          <div className="bucket-paper-progress" aria-label={`버킷리스트 달성률 ${progress}%`}>
-            <span><b>{doneCount}</b> / {notes.length || 0} 완료</span>
-            <i><b style={{ width: `${progress}%` }} /></i>
-            <strong>{progress}%</strong>
-          </div>
-        </div>
-      </header>
-
-      <div className="bucket-board-bar">
-        <label className="bucket-hide-done">
-          <input type="checkbox" checked={hideDone} onChange={event => setHideDone(event.target.checked)} />
-          <span>완료한 항목 접기</span>
-        </label>
-        {canReorder && <p className="bucket-reorder-hint" role="status">카드를 끌어 순서를 바꿀 수 있어요.</p>}
-      </div>
-
       <form className="bucket-quick-add" onSubmit={event => void submitQuick(event)}>
         <span className="bucket-quick-icon" aria-hidden="true">+</span>
         <div className="bucket-quick-fields">
           <input
             value={quickTitle}
+            maxLength={140}
             onChange={event => setQuickTitle(event.target.value)}
             placeholder="둘이 함께 해보고 싶은 일을 적어 보세요"
             aria-label="새 버킷리스트 항목"
@@ -371,6 +315,7 @@ export function BucketWishBoard({
           />
           <input
             value={quickWhen}
+            maxLength={4096}
             onChange={event => setQuickWhen(event.target.value)}
             placeholder="언제쯤 (선택)"
             aria-label="목표 시기"
@@ -379,6 +324,14 @@ export function BucketWishBoard({
         </div>
         <button type="submit" disabled={busy || !quickTitle.trim()}>{pending ? "추가 중" : "추가"}</button>
       </form>
+
+      <div className="bucket-board-bar">
+        <label className="bucket-hide-done">
+          <input type="checkbox" checked={hideDone} onChange={event => setHideDone(event.target.checked)} />
+          <span>완료한 항목 접기</span>
+        </label>
+        {canReorder && <p className="bucket-reorder-hint" role="status">끌어서 순서 변경</p>}
+      </div>
 
       {!notes.length ? (
         <div className="bucket-empty">

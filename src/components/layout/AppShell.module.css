@@ -1,0 +1,99 @@
+.shell:global(.app-shell) {
+  --shell-nav: 208px;
+  --shell-panel: 320px;
+  display: grid;
+  grid-template-columns: var(--shell-nav) minmax(0, 1fr) var(--shell-panel);
+  max-width: 1920px;
+  width: 100%;
+  transition: none;
+  font-family: var(--default);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.shell:global(.app-shell):has(:global(.ai-editor)) { --shell-panel: 460px; }
+.shell:global(.app-shell):has(:global(.place-detail-panel)) { --shell-panel: 360px; }
+.shell:global(.app-shell) > :global(.sidebar) { min-width: 0; width: 100%; }
+.shell :global(.brand-copy) { font-family: var(--hand); }
+.shell :global(.nav-item) { font-size: 16px; line-height: 1.4; min-height: 42px; }
+.shell :global(.nav-list p) { font-size: 12px; letter-spacing: .12em; }
+.shell :global(.workspace) { min-width: 0; padding: 0 clamp(20px, 2.2vw, 36px) 32px; overflow-x: clip; }
+.shell :global(.page-stage) { min-width: 0; width: 100%; }
+.shell :global(.topbar) { gap: 12px; min-width: 0; height: 76px; }
+.shell :global(.today) { min-width: 0; flex: 1 1 auto; }
+.shell :global(.today span) { font-size: 14px; letter-spacing: 0; }
+.shell :global(.today b) { font-size: 13px; white-space: nowrap; }
+.shell :global(.global-search-wrap) { flex: 0 1 320px; min-width: 44px; margin-left: auto; }
+.shell :global(.global-search) { width: 100%; min-width: 0; height: 40px; }
+.shell :global(.global-search b) { font-size: 14px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.shell :global(.profile-button), .shell :global(.notification-button) { flex-shrink: 0; }
+.shell :global(.context-toolbar-button) { display: none; }
+.shell :global(.context-panel) { min-width: 0; width: 100%; padding: 24px 20px; overflow-x: hidden; scrollbar-width: thin; }
+.shell :global(.context-panel):has(:global(.notes-context)) { padding: 0; }
+.shell :global(.activity-feed .panel-heading h2) { font-size: 20px; line-height: 1.35; }
+.shell :global(.activity-item) { padding: 16px; border-radius: 14px; }
+.shell :global(.activity-item b) { font-size: 15px; line-height: 1.5; }
+.shell :global(.activity-item small) { font-size: 12px; line-height: 1.5; }
+.shell :global(.activity-item p) { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+
+@media (min-width: 901px) and (max-width: 1439px) {
+  .shell:global(.app-shell) { --shell-nav: 76px; }
+  .shell :global(.sidebar) { padding-inline: 10px; }
+  .shell :global(.brand) { justify-content: center; margin-left: 0; padding-inline: 0; }
+  .shell :global(.brand-copy), .shell :global(.nav-list p), .shell :global(.couple-card-copy),
+  .shell :global(.couple-card-action), .shell :global(.paired-avatars .partner) { display: none; }
+  .shell :global(.nav-item), .shell :global(.nav-item.is-active) { justify-content: center; font-size: 0; gap: 0; padding-inline: 8px; }
+  .shell :global(.brand-mark) { width: 40px; height: 40px; }
+  .shell :global(.couple-card-main) { justify-content: center; }
+}
+
+/* Secondary information becomes a drawer before it can squeeze the main page. */
+@media (min-width: 901px) and (max-width: 1279px) {
+  .shell:global(.app-shell) { grid-template-columns: var(--shell-nav) minmax(0, 1fr); }
+}
+@media (max-width: 1279px) {
+  .shell:global(.app-shell) :global(.context-panel),
+  .shell:global(.app-shell) :global(.context-panel):has(:global(#context-panel-slot):not(:empty)) {
+    position: fixed; z-index: 40; inset: 0 0 0 auto;
+    width: min(460px, calc(100vw - 32px)); max-width: 100%; height: 100dvh; max-height: 100dvh;
+    padding: 20px; transform: translateX(110%); visibility: hidden;
+    border: 0; border-left: 1px solid var(--line); border-radius: 0; background: #fbf9f4;
+    box-shadow: -16px 0 56px rgb(43 49 46 / 16%);
+  }
+  .shell:global(.app-shell) :global(.context-panel.is-open),
+  .shell:global(.app-shell) :global(.context-panel.is-open):has(:global(#context-panel-slot):not(:empty)) { transform: translateX(0); visibility: visible; }
+  .shell :global(.mobile-context-head) { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+  .shell :global(.mobile-context-head strong) { font-size: 14px; }
+  .shell :global(.mobile-context-head button) { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); background: white; border-radius: 9px; font-size: 12px; }
+  .shell :global(.mobile-context-scrim) { display: block; position: fixed; inset: 0; z-index: 39; width: 100%; height: 100dvh; border: 0; background: rgb(30 37 33 / 28%); backdrop-filter: blur(3px); }
+  .shell :global(.mobile-context-toggle) { display: none; }
+  .shell :global(.context-toolbar-button) { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: none; min-height: 38px; padding: 0 12px; border: 1px solid rgb(83 111 99 / 18%); border-radius: 9px; background: #fbf9f4; color: #3e5e50; font: 600 13px var(--default); white-space: nowrap; }
+}
+@media (min-width: 1280px) {
+  .shell:global(.app-shell):has(:global(.candidate-exploration)) { --shell-panel: clamp(460px, 38vw, 680px); }
+  .shell:global(.app-shell) :global(.context-panel):has(:global(.candidate-exploration)) { position: relative; inset: auto; z-index: auto; height: 100%; width: 100%; box-shadow: none; }
+
+  .shell :global(.mobile-context-head), .shell :global(.mobile-context-toggle), .shell :global(.mobile-context-scrim) { display: none; }
+}
+@media (max-width: 900px) {
+  .shell:global(.app-shell) { display: block; }
+  .shell :global(.workspace) { width: 100%; padding: 0 20px calc(92px + env(safe-area-inset-bottom)); }
+  .shell:global(.app-shell) > :global(.sidebar) { width: 100%; }
+  .shell :global(.mobile-context-toggle) { bottom: calc(80px + env(safe-area-inset-bottom)); right: 16px; }
+}
+@media (max-width: 599px) {
+  .shell :global(.workspace) { padding-inline: 16px; }
+  .shell :global(.topbar) { height: 68px; gap: 8px; margin-bottom: 24px; }
+  .shell :global(.global-search-wrap) { flex: 0 0 40px; min-width: 40px; }
+  .shell :global(.global-search) { justify-content: center; padding: 0; }
+  .shell :global(.global-search b), .shell :global(.global-search kbd) { display: none; }
+  .shell :global(.today b) { font-size: 10px; }
+  .shell :global(.profile-button) { width: 36px; height: 36px; }
+}
+
+/* Actions must fit the main column even when a detail panel is open. */
+.shell :global(.page-title-row), .shell :global(.page-intro), .shell :global(.trip-header) { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.shell :global(.page-title-row > div), .shell :global(.trip-header > div), .shell :global(.date-planner-header > div) { min-width: 0; max-width: 100%; }
+.shell :global(.date-planner-header > .page-actions), .shell :global(.trip-header > .page-actions) { flex-wrap: wrap; min-width: 0; max-width: 100%; gap: 8px; }
+.shell :global(.title-input) { width: 100%; max-width: 100%; min-width: 0; }
+.shell :global(.page-actions > button), .shell :global(.page-actions > a) { max-width: 100%; }

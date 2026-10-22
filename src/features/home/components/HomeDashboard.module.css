@@ -1,0 +1,327 @@
+.dashboard {
+  container: home-dashboard / inline-size;
+  width: 100%;
+  min-width: 0;
+}
+
+.dashboard :global(.home-layout) {
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(16px, 2.5cqi, 28px);
+  min-width: 0;
+}
+
+.journey {
+  container: home-journey / inline-size;
+  min-width: 0;
+  width: 100%;
+}
+
+.dashboard :global(.home-side-stack) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto;
+  gap: clamp(16px, 2.5cqi, 24px);
+  min-width: 0;
+  padding-top: 0;
+}
+
+.dashboard :global(.home-date),
+.dashboard :global(.home-note) {
+  width: 100%;
+  min-width: 0;
+  padding: clamp(20px, 3cqi, 28px);
+}
+
+.dashboard :global(.home-date h3),
+.dashboard :global(.home-note h3),
+.dashboard :global(.home-index h3),
+.dashboard :global(.section-heading h2),
+.dashboard :global(.partner-picks-empty p) {
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+.dashboard :global(.home-date-stops) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.dashboard :global(.home-note h3) {
+  font-size: clamp(1.15rem, 2.6cqi, 1.5rem);
+}
+
+.dashboard :global(.home-date h3) { font-size: 16px; line-height: 1.45; }
+.dashboard :global(.home-date p) { font-size: 14px; }
+.dashboard :global(.home-index h3) { font-size: 20px; }
+.dashboard :global(.home-index small) { font-size: 13px; }
+.dashboard :global(.home-index p) { font-size: 14px; }
+.dashboard :global(.section-heading h2) { font-size: clamp(20px, 3cqi, 24px); }
+.dashboard :global(.eyebrow) { font-size: 12px; }
+.dashboard :global(.text-link),
+.dashboard :global(.quiet-link) { font-size: 14px; }
+
+.dashboard :global(.home-index-strip) {
+  gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px 4px 16px;
+  scroll-padding-inline: 4px;
+}
+
+.dashboard :global(.home-index) {
+  flex-basis: min(260px, 78cqi);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dashboard :global(.section-heading) {
+  min-width: 0;
+  gap: 16px;
+  align-items: end;
+}
+
+.dashboard :global(.section-heading > div) {
+  min-width: 0;
+}
+
+.dashboard :global(.section-heading .quiet-link) {
+  flex: none;
+  white-space: nowrap;
+}
+
+.journey :global(.home-pass) {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.journey :global(.home-pass-stub) {
+  padding: clamp(22px, 4cqi, 30px);
+}
+
+.journey :global(.home-pass .light-label) {
+  display: grid;
+  gap: 6px;
+  line-height: 1.4;
+}
+
+.journey :global(.home-pass .light-label > span) {
+  font-size: 14px;
+  letter-spacing: .03em;
+  color: #fffaf2;
+}
+
+.journey :global(.home-pass .light-label small) {
+  font-size: 12px;
+  letter-spacing: .15em;
+}
+
+.journey :global(.home-pass-stub h2) {
+  font-size: clamp(1.35rem, 3.4cqi, 1.8rem);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.journey :global(.home-pass-stub p) { font-size: 14px; }
+
+.journey :global(.home-pass-cal-wrap) {
+  justify-content: center;
+}
+
+.journey :global(.home-mini-cal) {
+  max-width: 260px;
+}
+
+.journey :global(.home-mini-cal-month),
+.journey :global(.home-mini-cal-days span),
+.journey :global(.home-pass-dday small),
+.journey :global(.home-pass-count) { font-size: 13px; }
+.journey :global(.home-mini-cal-weekdays span) { font-size: 12px; }
+.journey :global(.home-pass-dday b) { font-size: 18px; }
+
+.journey :global(.home-pass-page-face) {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  padding: clamp(20px, 3.5cqi, 28px);
+}
+
+.journey :global(.home-pass-route-head) {
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.journey :global(.home-pass-route-head b) {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.journey :global(.home-pass-route-day) { font-size: 13px; }
+
+.journey :global(.home-route) {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: 10px;
+  scroll-padding-block: 8px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #a7afa8 transparent;
+}
+
+.journey :global(.home-pass-route-foot) { margin-top: 0; }
+
+.journey :global(.home-stop-head) {
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.journey :global(.home-stop-head b) {
+  flex-basis: 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.journey :global(.home-stop-copy small) {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.journey :global(.home-route.is-empty .home-stop-copy > b) { font-size: 16px; line-height: 1.4; }
+.journey :global(.home-stop-mark.is-ghost) { font-size: 12px; }
+
+.journey :global(.home-route li) {
+  align-items: start;
+  padding-block: 9px;
+}
+
+.journey :global(.home-pass-route-turn),
+.journey :global(.home-pass-more) {
+  min-height: 38px;
+  font-size: 14px;
+}
+
+.journey :global(.home-pass-route-dots) {
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+@container home-dashboard (min-width: 1080px) {
+  .dashboard :global(.home-layout) {
+    grid-template-columns: minmax(0, 1.8fr) minmax(300px, 1fr);
+  }
+
+  .dashboard :global(.home-side-stack) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container home-dashboard (max-width: 580px) {
+  .dashboard :global(.home-side-stack) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard :global(.home-index) {
+    transform: none;
+    margin-top: 0;
+  }
+
+  .dashboard :global(.section-heading) {
+    gap: 12px;
+  }
+}
+
+/* The notebook folds when its own column narrows, including wide screens
+   with both a navigation rail and a context panel. */
+@container home-journey (max-width: 560px) {
+  .journey :global(.home-pass) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 18px 360px;
+    grid-template-areas: "stub" "spine" "route";
+    min-height: 0;
+  }
+
+  .journey :global(.home-pass-stub) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(150px, .85fr);
+    grid-template-areas: "label calendar" "title calendar" "date calendar" "count calendar";
+    gap: 8px 20px;
+    align-content: center;
+    border-radius: var(--radius-outer) var(--radius-outer) 0 0;
+  }
+
+  .journey :global(.home-pass .light-label) { grid-area: label; }
+  .journey :global(.home-pass-stub h2) { grid-area: title; margin: 4px 0; }
+  .journey :global(.home-pass-dday),
+  .journey :global(.home-pass-stub > p) { grid-area: date; margin: 0; }
+  .journey :global(.home-pass-cal-wrap) { grid-area: calendar; margin: 0; }
+  .journey :global(.home-pass-stub-foot) { grid-area: count; justify-content: start; padding-top: 4px; }
+
+  .journey :global(.home-pass-route) {
+    height: 360px;
+    min-height: 360px;
+    padding: 0;
+    border-radius: 0 0 var(--radius-outer) var(--radius-outer);
+  }
+
+  .journey :global(.home-pass-page-face) {
+    border-radius: 0 0 var(--radius-outer) var(--radius-outer);
+  }
+
+  .journey :global(.home-pass-spine) {
+    position: relative;
+    inset: auto;
+    grid-area: spine;
+    width: auto;
+    height: 18px;
+    margin: -9px 18px 0;
+    padding: 0 16px;
+    transform: none;
+    flex-direction: row;
+    perspective: none;
+  }
+
+  .journey :global(.home-pass-spine::before) {
+    inset: 50% 8px auto;
+    width: auto;
+    height: 3px;
+    margin: -1.5px 0 0;
+  }
+
+  .journey :global(.home-pass-spine-ring) { width: 13px; height: 26px; }
+  .journey :global(.home-pass-spine-wire) { width: 16px; height: 22px; }
+  .journey :global(.home-pass-spine-wire.is-rear),
+  .journey :global(.home-pass-spine-wire.is-front) { transform: translate(-50%, -50%); }
+
+  .journey :global(.home-pass-spine-wire::before),
+  .journey :global(.home-pass-spine-wire::after) {
+    top: 50%;
+    left: 50%;
+    right: auto;
+    width: 14px;
+    height: 9px;
+    margin-top: -5px;
+    margin-left: -8px;
+  }
+
+  .journey :global(.home-pass-spine-wire::before) { transform: rotate(-72deg); }
+  .journey :global(.home-pass-spine-wire::after) { transform: rotate(72deg); }
+}
+
+@container home-journey (max-width: 400px) {
+  .journey :global(.home-pass-stub) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "label" "title" "date" "count";
+    padding: 22px;
+  }
+
+  .journey :global(.home-pass-cal-wrap) { display: none; }
+  .journey :global(.home-pass-stub h2) { text-wrap: pretty; }
+}

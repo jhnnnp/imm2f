@@ -708,7 +708,7 @@ export function MemoryTimeline({
     <>
       <SyncNotice message={syncError} onRetry={retrySync} />
       <SyncNotice message={photoError ? "추억 사진 일부를 불러오지 못했어요. 기록은 유지되니 다시 시도해 주세요." : ""} onRetry={() => setPhotoRetry(current => current + 1)} />
-      <div className="page-title-row memory-page-header">
+      <div className={`page-title-row memory-page-header ${styles.header}`}>
         <div>
           <span className="eyebrow">OUR ARCHIVE · {new Date().getFullYear()}</span>
           <h1>함께여서 기억나는 장면들</h1>
@@ -716,7 +716,7 @@ export function MemoryTimeline({
           <div className={styles.stats}><span>기록 <b>{memories.length}</b></span><span>사진 <b>{memories.reduce((count, memory) => count + memory.photos.length, 0)}</b></span><span>지도에 남긴 순간 <b>{memories.filter(memory => memory.coordinates).length}</b></span></div>
         </div>
       </div>
-      <div className="page-actions date-planner-actions trip-planner-actions memory-page-actions">
+      <div className={`page-actions date-planner-actions trip-planner-actions memory-page-actions ${styles.controls}`}>
         <div className="memory-toolbar-row">
           <div className="memory-tabs" role="tablist" aria-label="추억 보기">
             {MEMORY_TABS.map(item => (

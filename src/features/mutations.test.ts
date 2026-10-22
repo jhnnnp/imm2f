@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("react", () => ({ cache: (fn: unknown) => fn }));
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
+vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("@/features/places/location", () => ({ resolvePlaceLocation: mocks.resolvePlaceLocation }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient, createServiceClient: mocks.createServiceClient }));
 vi.mock("@/features/auth/session", () => ({ getAppSession: mocks.getAppSession }));
@@ -241,7 +242,7 @@ describe("memory integrity and photo loading", () => {
 
   it("does not delete a memory when its storage paths cannot be loaded", async () => {
     const db = client(query({ data: { id: "memory", title: "추억" }, error: null }), query({ data: null, error: { message: "offline" } }));
-    expect(await deleteMemory("memory")).toHaveProperty("error");
+    expect(await deleteMemory("11111111-1111-4111-8111-111111111111")).toHaveProperty("error");
     expect(db.from).toHaveBeenCalledTimes(2);
   });
 
@@ -358,7 +359,7 @@ describe("shared memory edit integrity", () => {
 
   it("accepts a partner's completed deletion without keeping a ghost viewer", async () => {
     const db = client(query({ data: null, error: null }));
-    expect(await deleteMemory("already-deleted")).toEqual({ ok: true });
+    expect(await deleteMemory("22222222-2222-4222-8222-222222222222")).toEqual({ ok: true });
     expect(db.from).toHaveBeenCalledTimes(1);
   });
 });
@@ -377,12 +378,13 @@ describe("taste read and mutation replies", () => {
     expect(read.upsert).not.toHaveBeenCalled();
   });
 
-  it("returns the just saved profile without another cached or failed board read", async () => {
+  it("returns the committed profile when its fresh board reload fails", async () => {
     const saved = query({ data: { user_id: "user-1" }, error: null });
-    const db = client(query({ data: [], error: null }), saved);
+    const db = client(query({ data: [], error: null }), query({ data: null, error: null }), saved, query({ data: null, error: { message: "reload unavailable" } }));
     expect(await saveTasteProfile(tasteInput)).toMatchObject({ you: { areas: ["성수"], note: "새 기준" }, partner: null });
-    expect(db.from).toHaveBeenCalledTimes(2);
-    expect(saved.upsert).toHaveBeenCalledWith(expect.objectContaining({ note: "새 기준", user_id: "user-1", couple_id: "couple-1" }), { onConflict: "couple_id,user_id" });
+    expect(db.from).toHaveBeenCalledTimes(4);
+    expect(saved.insert).toHaveBeenCalledWith(expect.objectContaining({ note: "새 기준", user_id: "user-1", couple_id: "couple-1" }));
+    expect(saved.upsert).not.toHaveBeenCalled();
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/insights");
   });
 });

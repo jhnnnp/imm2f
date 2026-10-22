@@ -58,6 +58,7 @@ it.each(entries)("%s enters the title field and restores opener focus on Escape 
 
 it("contains keyboard navigation and preserves editing focus across value changes", () => {
   const { dialog } = openCreate("vault", "보관하기");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "무엇을 보관할까요?" }), { target: { value: "예약 정보" } });
   const first = within(dialog).getByRole("button", { name: "닫기", exact: true });
   const last = within(dialog).getByRole("button", { name: "저장", exact: true });
   first.focus();

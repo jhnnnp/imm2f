@@ -22,10 +22,11 @@ import { createPlanSaveQueue } from "@/features/planning/saveQueue";
 import { readTripWorkspace } from "@/features/collaboration/workspaceReads";
 import { SyncNotice } from "@/components/shared/SyncNotice";
 import { tripSnapshotRecorded } from "../archiveSnapshot";
-import { hasTripContent, tripDateRange, tripDraftsWithActive, type TripDateSnapshot } from "../tripDates";
+import { hasTripContent, tripDraftsWithActive, type TripDateSnapshot } from "../tripDates";
 import { useDialogFocus } from "@/components/shared/useDialogFocus";
 import styles from "./TripDateWorkspace.module.css";
 import { ExpandableText } from "@/components/shared/ExpandableText";
+import { TripArchivePanel } from "./TripArchivePanel";
 
 const PlanMap = dynamic(() => import("./PlanMap").then(mod => mod.PlanMap), {
   ssr: false,
@@ -458,14 +459,19 @@ export function TripPlanner({
       </div>
 
       {tab === "archive" ? (
-        <section className="trip-archive paper-card">
-          <div className="trip-archive-head"><div><span className="eyebrow">PAST JOURNEYS</span><h2>함께 다녀온 여행</h2></div>{archiveNotice && <p>{archiveNotice}</p>}</div>
-          {archivedTrips.length ? (
-            <div className="trip-archive-grid">{archivedTrips.map(journey => <article key={journey.id}><span>{tripDateRange(journey.startDate, journey.dayCount)}</span><h3>{journey.title}</h3><p>{journey.dayCount}일 · {journey.items.length}곳</p>{journey.notes && <p style={{ whiteSpace: "pre-wrap" }}>{journey.notes}</p>}<button className="text-link" type="button" onClick={() => void openArchive(journey)}>여행기록 열기 →</button><Link href="/our-map">기억 지도에서 보기 →</Link></article>)}</div>
-          ) : (
-            <p className="form-hint">아직 지난 여행이 없어요. 일정을 마치면 여기에 남아요.</p>
-          )}
-        </section>
+        <TripArchivePanel journeys={archivedTrips} notice={archiveNotice} disabled={archiving || switchingDate}
+          onOpen={journey => void openArchive(journey)}
+          onUpdated={(id, metadata) => {
+            setArchivedTrips(current => current.map(journey => journey.id === id ? { ...journey, ...metadata } : journey));
+            if (archiveViewRef.current === id) { latest.current = { ...latest.current, ...metadata }; setTitle(metadata.title); setNotes(metadata.notes); }
+            setArchiveNotice("여행 제목과 메모를 수정했어요."); emitCoupleActivitiesChanged();
+          }}
+          onDeleted={id => {
+            setArchivedTrips(current => current.filter(journey => journey.id !== id));
+            setArchiveNotice("여행기록을 삭제했어요."); emitCoupleActivitiesChanged();
+            if (archiveViewRef.current === id) void reloadLatest();
+          }}
+          onReload={async () => { setArchivedTrips(await listArchivedTripPlans()); }} />
       ) : tab === "notes" ? (
         <section className="plan-notes paper-card">
           <span className="eyebrow">TRIP NOTES</span>

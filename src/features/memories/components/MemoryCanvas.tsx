@@ -907,6 +907,7 @@ export function MemoryCanvas({
               key={item.id}
               aria-pressed={tool === item.id}
               aria-label={item.label}
+              title={`${item.label} 도구`}
               disabled={!ready}
               onClick={() => { setTool(item.id); if (item.id !== "text" && item.id !== "select") setSelectedTextId(null); }}
             >
@@ -916,12 +917,19 @@ export function MemoryCanvas({
           ))}
         </div>
         <div className="memory-studio-actions">
-          <button className="memory-studio-action" type="button" disabled={!ready || !historyRef.current.length} onClick={() => restoreHistory()} title="Ctrl / ⌘ Z">되돌리기</button>
-          <button className="memory-studio-action" type="button" disabled={!ready || !futureRef.current.length} onClick={() => restoreHistory(true)} title="Ctrl / ⌘ Shift Z">다시 실행</button>
-          <button className="memory-studio-action" type="button" disabled={!ready} onClick={fitView}>전체 보기</button>
-          <button className="memory-studio-action" type="button" onClick={() => commitStrokes([])} disabled={!ready || !strokes.length}>필기 지우기</button>
-          <button className="memory-studio-action" type="button" disabled={!ready} onClick={() => { layoutBeforeRef.current = boardSnapshot(); onScatter(); window.requestAnimationFrame(fitView); }}>흩뿌리기</button>
-          <button className="memory-studio-action" type="button" disabled={!ready} onClick={() => { layoutBeforeRef.current = boardSnapshot(); onReset(); window.requestAnimationFrame(fitView); }}>가지런히</button>
+          <div className={styles.history} role="group" aria-label="편집 기록">
+            <button className="memory-studio-action" type="button" disabled={!ready || !historyRef.current.length} onClick={() => restoreHistory()} title="되돌리기 (Ctrl / ⌘ Z)" aria-label="되돌리기"><span aria-hidden="true">↶</span></button>
+            <button className="memory-studio-action" type="button" disabled={!ready || !futureRef.current.length} onClick={() => restoreHistory(true)} title="다시 실행 (Ctrl / ⌘ Shift Z)" aria-label="다시 실행"><span aria-hidden="true">↷</span></button>
+          </div>
+          <details className={styles.arrange}>
+            <summary>배치·정리 <span aria-hidden="true">⌄</span></summary>
+            <div className={styles.arrangeMenu} role="group" aria-label="벽면 배치와 정리">
+              <button className="memory-studio-action" type="button" disabled={!ready} onClick={fitView}>전체 보기</button>
+              <button className="memory-studio-action" type="button" disabled={!ready} onClick={() => { layoutBeforeRef.current = boardSnapshot(); onScatter(); window.requestAnimationFrame(fitView); }}>흩뿌리기</button>
+              <button className="memory-studio-action" type="button" disabled={!ready} onClick={() => { layoutBeforeRef.current = boardSnapshot(); onReset(); window.requestAnimationFrame(fitView); }}>가지런히</button>
+              <button className={`memory-studio-action ${styles.clearInk}`} type="button" onClick={() => commitStrokes([])} disabled={!ready || !strokes.length}>필기 지우기</button>
+            </div>
+          </details>
         </div>
       </div>
       <p className={`memory-sync-status is-${syncStatus}`} role="status" aria-live="polite">

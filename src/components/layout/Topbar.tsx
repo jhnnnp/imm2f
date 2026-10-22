@@ -8,6 +8,7 @@ import { initialFromName } from "@/features/auth/types";
 import { signOut } from "@/features/auth/session";
 import { useCoupleActivityFeed } from "@/features/collaboration/activityLive";
 import { hrefForActivity } from "@/features/collaboration/types";
+import { closeContextPanel, openContextPanel } from "./ContextPanelDrawer";
 
 const CommandPalette = dynamic(() => import("@/components/shared/CommandPalette").then(mod => mod.CommandPalette));
 
@@ -42,6 +43,7 @@ export function Topbar() {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        closeContextPanel();
         setSearchOpen(true);
       }
     };
@@ -72,8 +74,9 @@ export function Topbar() {
   return <>
     <header className="topbar">
       <div className="today"><span>우리의 공간</span><b suppressHydrationWarning>{today || "오늘"}</b></div>
+      <button className="context-toolbar-button" type="button" aria-label="요약 및 상세 패널 열기" aria-controls="app-context-panel" aria-haspopup="dialog" onClick={openContextPanel}>요약·상세 <span aria-hidden="true">↗</span></button>
       <div className="global-search-wrap">
-        <button ref={searchButtonRef} className="global-search" type="button" onClick={() => setSearchOpen(true)} aria-label="전체 검색 열기" aria-expanded={searchOpen}>
+        <button ref={searchButtonRef} className="global-search" type="button" onClick={() => { closeContextPanel(); setSearchOpen(true); }} aria-label="전체 검색 열기" aria-expanded={searchOpen}>
           <span>⌕</span><b>장소, 여행, 추억 검색</b><kbd>⌘K</kbd>
         </button>
         {searchOpen && <CommandPalette open onClose={() => { setSearchOpen(false); searchButtonRef.current?.focus(); }} />}

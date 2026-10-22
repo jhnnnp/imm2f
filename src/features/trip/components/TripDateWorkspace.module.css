@@ -56,3 +56,80 @@
 .targetWarning { padding: 15px; margin: 14px 0; border: 1px solid #daceb5; border-radius: 12px; background: #faf5e8; color: #857044; }
 .targetWarning p { margin: 6px 0 12px; font-size: .8rem; }
 .targetWarning label { display: flex; align-items: center; gap: 8px; font-size: .8rem; }
+
+.archiveSection {
+  container-type: inline-size;
+  padding: clamp(20px, 3vw, 32px);
+  border: 1px solid #e4e8e1;
+  border-radius: 22px;
+  background: #fffefa;
+  box-shadow: 0 10px 32px #2d433b05;
+  font-family: var(--default);
+}
+.archiveHead { display: flex; justify-content: space-between; align-items: start; gap: 18px; margin-bottom: 24px; }
+.archiveEyebrow { color: #708679; font-size: .75rem; letter-spacing: .14em; font-weight: 700; }
+.archiveHead h2 { margin: 8px 0 9px; color: #263e34; font: 700 clamp(1.25rem, 2vw, 1.5rem)/1.35 var(--default); letter-spacing: -.04em; }
+.archiveHead p { margin: 0; color: #7d8880; font-size: .8125rem; line-height: 1.6; }
+.archiveCount { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 6px; color: #7b8980; font-size: .8125rem; }
+.archiveCount b { display: grid; place-items: center; min-width: 28px; height: 28px; padding: 0 5px; border-radius: 50%; color: #416452; background: #eaf1eb; font-size: .78rem; }
+.archiveNotice { margin: -4px 0 20px; padding: 11px 14px; border-radius: 10px; color: #496c56; background: #eef5ee; font-size: .875rem; line-height: 1.6; }
+.archiveGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.archiveCard { display: flex; flex-direction: column; min-width: 0; padding: 22px; border: 1px solid #e0e7df; border-radius: 17px; background: #fff; box-shadow: 0 4px 14px #263e3403; }
+.archiveCardTop { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; color: #7a8780; font-size: .8125rem; font-variant-numeric: tabular-nums; line-height: 1.6; }
+.archiveBadge { flex: none; padding: 3px 7px; border-radius: 6px; color: #688471; background: #f0f5ef; font-size: .75rem; font-weight: 600; }
+.archiveCard h3 { margin: 15px 0 12px; color: #2d4136; font: 650 1.375rem/1.5 var(--default); letter-spacing: -.035em; overflow-wrap: anywhere; }
+.archiveStats { display: flex; align-items: center; gap: 7px; }
+.archiveStats span { padding: 4px 8px; border-radius: 6px; color: #63766a; background: #f4f6f2; font-size: .8125rem; font-weight: 500; }
+.archiveCardBody { flex: 1; margin: 20px 0; }
+.archiveRoute > span { display: block; margin-bottom: 5px; color: #8a978e; font-size: .75rem; font-weight: 600; }
+.archiveRoute p { margin: 0; color: #627569; font-size: .9375rem; line-height: 1.8; overflow-wrap: anywhere; }
+.archiveNotes { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; margin: 12px 0 0; color: #7c887f; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9375rem; line-height: 1.8; }
+.archiveEmptyNote { margin: 0; color: #9aA49b; font-size: .875rem; line-height: 1.7; }
+.archiveLinks { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
+.archiveOpen { display: inline-flex; justify-content: center; align-items: center; gap: 14px; min-height: 44px; padding: 9px 13px; border: 1px solid #547360; border-radius: 9px; color: #fff; background: #547360; font: 600 .9375rem/1.35 var(--default); cursor: pointer; text-decoration: none; }
+.archiveOpen:hover:not(:disabled) { border-color: #3c5c48; background: #3c5c48; }
+.archiveOpen span { color: #d7e4da; }
+.archiveMap { display: inline-flex; align-items: center; min-height: 44px; gap: 5px; color: #6e8174; text-decoration: none; font-size: .875rem; font-weight: 500; }
+.archiveMap:hover { color: #385d45; text-decoration: underline; text-underline-offset: 3px; }
+.archiveCardActions { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-top: 16px; margin-top: 18px; border-top: 1px solid #edf0eb; }
+.archiveCardActions > span { color: #98a398; font-size: .75rem; }
+.archiveCardActions > div { display: flex; gap: 4px; }
+.archiveCardActions button { min-width: 44px; min-height: 44px; padding: 6px 8px; border: 0; border-radius: 6px; color: #6d7c71; background: transparent; font: 500 .875rem/1.4 var(--default); cursor: pointer; }
+.archiveCardActions button:hover:not(:disabled) { color: #385b45; background: #f0f5ef; }
+.archiveCardActions button.archiveDelete { color: #a2847e; }
+.archiveCardActions button.archiveDelete:hover:not(:disabled) { color: #a25f54; background: #faf0ec; }
+.archiveSection button:focus-visible, .archiveSection a:focus-visible, .archiveDialog button:focus-visible { outline: 3px solid #a2b7a4; outline-offset: 3px; }
+.archiveSection button:disabled, .archiveDialog button:disabled { cursor: default; opacity: .5; }
+.archiveEmpty { padding: 45px 18px; text-align: center; }
+.archiveEmpty > span { display: grid; place-items: center; width: 46px; height: 46px; margin: 0 auto 15px; border-radius: 50%; color: #8da18f; background: #edf2e9; font-size: 1.2rem; }
+.archiveEmpty h3 { margin: 0 0 10px; color: #58715f; font-size: 1.25rem; font-weight: 600; }
+.archiveEmpty p { margin: 0; color: #8a968c; font-size: .875rem; line-height: 1.8; }
+.archiveDialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; padding: 28px; border: 1px solid #e4e9df; border-radius: 20px; background: #fffefa; box-shadow: 0 20px 80px #1c30222b; font-family: var(--default); }
+.archiveDialogHead { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
+.archiveDialogHead h2 { margin: 7px 0 0; color: #2e4536; font: 650 1.375rem/1.4 var(--default); letter-spacing: -.035em; }
+.archiveDialogHead > button { flex: none; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid #e0e6dc; border-radius: 8px; color: #6b7f70; background: #fff; font-size: 1.3rem; cursor: pointer; }
+.archiveDialogHint { margin: 16px 0 23px; color: #8a978c; font-size: .875rem; line-height: 1.8; }
+.archiveField { display: grid; gap: 9px; margin: 18px 0; }
+.archiveField > span { color: #5f7365; font-size: .9375rem; font-weight: 600; }
+.archiveField small { margin-left: 5px; color: #a0aaa0; font-size: .8125rem; font-weight: 400; }
+.archiveField input, .archiveField textarea { box-sizing: border-box; width: 100%; padding: 12px 13px; border: 1px solid #dce4d9; border-radius: 9px; outline-color: #8da68f; background: #fff; color: #385340; font: 400 1rem/1.7 var(--default); }
+.archiveField textarea { resize: vertical; min-height: 120px; }
+.archiveField textarea::placeholder { color: #a1aba1; }
+.archiveDeleteMessage { margin: 24px 0; }
+.archiveDeleteMessage b { color: #526756; font-size: 1rem; overflow-wrap: anywhere; }
+.archiveDeleteMessage p { margin: 13px 0; color: #87756e; font-size: .9375rem; line-height: 1.9; }
+.archiveDeleteMessage small { color: #93a092; font-size: .8125rem; line-height: 1.6; }
+.archiveError { padding: 12px; margin: 16px 0 0; border-radius: 8px; color: #a66558; background: #fbf0eb; font-size: .875rem; line-height: 1.7; }
+.archiveDialogActions { display: flex; justify-content: end; gap: 9px; margin-top: 25px; }
+.archiveDialogActions > button { min-height: 44px; padding: 10px 15px; border: 1px solid #dce4d9; border-radius: 9px; background: #fff; color: #768777; font: 600 .9375rem/1.4 var(--default); cursor: pointer; }
+.archiveDialogActions > button.archiveOpen { border-color: #547360; background: #547360; color: #fff; }
+.archiveDialogActions > button.archiveConfirmDelete { border-color: #aa7568; background: #aa7568; color: #fff; }
+@container (min-width: 600px) { .archiveGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (min-width: 1000px) { .archiveGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 540px) {
+  .archiveHead { gap: 10px; }
+  .archiveHead p { max-width: 210px; font-size: .8125rem; }
+  .archiveCount { gap: 5px; font-size: .8125rem; }
+  .archiveCard { padding: 20px; }
+  .archiveDialog { padding: 22px; }
+}

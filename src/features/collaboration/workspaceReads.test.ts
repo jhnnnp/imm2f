@@ -2,10 +2,11 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { getWorkspaceReadContext } from "@/lib/supabase/readContext";
 import { readCalendarWorkspace, readDateWorkspace, readMapWorkspace, readPlacesWorkspace, readTripWorkspace } from "./workspaceReads";
 
-const reads = vi.hoisted(() => ({ plan: vi.fn(), drafts: vi.fn(), dates: vi.fn(), trips: vi.fn(), tripDrafts: vi.fn(), tripDate: vi.fn(), places: vi.fn(), memories: vi.fn(), marks: vi.fn() }));
+const reads = vi.hoisted(() => ({ plan: vi.fn(), drafts: vi.fn(), dates: vi.fn(), trips: vi.fn(), tripDrafts: vi.fn(), tripDate: vi.fn(), places: vi.fn(), memories: vi.fn(), marks: vi.fn(), project: vi.fn() }));
 vi.mock("@/features/planning/actions", () => ({ loadCouplePlan: reads.plan, listDateDrafts: reads.drafts, listArchivedDatePlans: reads.dates, listArchivedTripPlans: reads.trips, listTripDrafts: reads.tripDrafts, readTripDate: reads.tripDate }));
 vi.mock("@/features/places/actions", () => ({ listPlaces: reads.places }));
 vi.mock("@/features/memories/actions", () => ({ listMemories: reads.memories, listMemoryCalendarMarks: reads.marks }));
+vi.mock("@/features/date/tripDayPlans", () => ({ projectTripDayPlans: reads.project }));
 const contexts: unknown[] = [];
 beforeEach(() => {
   contexts.length = 0;
@@ -19,13 +20,15 @@ beforeEach(() => {
   reads.tripDate.mockImplementation((startDate?: string | null) => result({ plan: startDate === undefined ? { kind: "trip", revision: "new" } : { startDate, revision: "active" }, drafts: [{ startDate: "2026-11-01" }] }));
   reads.places.mockImplementation(() => result({ persist: true, places: [{ id: "place" }] }));
   reads.memories.mockImplementation(() => result({ persist: true, memories: [{ id: "memory" }] }));
+  reads.project.mockReturnValue([{ id: "shared-trip-day" }]);
   reads.marks.mockImplementation(() => result([{ id: "mark" }]));
 });
 
 it("refreshes date archives alongside the active plan and saved dates in one read scope", async () => {
   const result = await readDateWorkspace();
-  expect(result).toEqual({ plan: { kind: "date", revision: "new" }, drafts: [{ date: "2026-10-15" }], archives: [{ id: "date-archive" }] });
-  expect(contexts).toHaveLength(3);
+  expect(result).toEqual({ plan: { kind: "date", revision: "new" }, drafts: [{ date: "2026-10-15" }], archives: [{ id: "date-archive" }], tripDays: [{ id: "shared-trip-day" }], tripSyncError: "" });
+  expect(reads.project).toHaveBeenCalledWith({ kind: "trip", revision: "new" }, [{ startDate: "2026-11-01" }], [{ id: "trip-archive" }]);
+  expect(contexts).toHaveLength(5);
   expect(contexts[0]).toBeDefined();
   expect(contexts.every(context => context === contexts[0])).toBe(true);
 });
@@ -71,4 +74,10 @@ it.each(["2026-11-01", ""])("refreshes Places trip context for the explicit view
   await readTripWorkspace(null);
   expect(reads.tripDate).toHaveBeenLastCalledWith(null);
   expect(reads.plan).not.toHaveBeenCalled();
+});
+
+it("keeps the date plan available and reports a retryable trip sync failure", async () => {
+  reads.tripDate.mockRejectedValueOnce(new Error("temporarily unavailable"));
+  expect(await readDateWorkspace()).toMatchObject({ plan: { kind: "date" }, archives: [{ id: "date-archive" }], tripDays: null, tripSyncError: expect.stringContaining("다시 조회") });
+  expect(reads.project).not.toHaveBeenCalled();
 });
