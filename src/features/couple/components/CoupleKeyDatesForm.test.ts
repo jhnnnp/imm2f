@@ -9,13 +9,14 @@ vi.mock("@/features/auth/components/SessionProvider", () => ({ useAppSession: ()
 vi.mock("@/features/collaboration/useSharedRefresh", () => ({ useSharedRefresh: () => vi.fn() }));
 vi.mock("@/features/collaboration/activityClient", () => ({ emitCoupleActivitiesChanged: mocks.emit }));
 vi.mock("../keyDateActions", () => ({ readCoupleKeyDates: mocks.read, saveCoupleKeyDates: mocks.save }));
+import { formatKoDate } from "@/lib/dates";
 import { CoupleKeyDatesForm } from "./CoupleKeyDatesForm";
 const empty: CoupleKeyDatesSnapshot = { dates: { relationshipStartedOn: null, birthdays: [] }, revision: 0, onboardingCompleted: false, persist: true, scope: { userId: "user-a", coupleId: "couple-a" } };
 beforeEach(() => { vi.clearAllMocks(); mocks.session.partner = { userId: "user-b", displayName: "파트너" }; mocks.save.mockResolvedValue({ ok: true, snapshot: { ...empty, revision: 1, onboardingCompleted: true } }); });
 afterEach(cleanup);
 it("offers optional onboarding and skips with no invented personal dates", async () => {
   render(createElement(CoupleKeyDatesForm, { initial: empty, onboarding: true }));
-  expect(screen.getByText(/양력 생일 기준/)).toBeTruthy();
+  expect(screen.getByText(/양력 기준/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "나중에 할게요" }));
   await waitFor(() => expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ dates: empty.dates, expectedRevision: 0 })));
   expect(mocks.emit).toHaveBeenCalledWith(empty.scope);
@@ -25,7 +26,10 @@ it("prefills current names only for an empty draft and keeps new birthday identi
   render(createElement(CoupleKeyDatesForm, { initial: empty }));
   expect((screen.getByLabelText("생일 1 이름") as HTMLInputElement).value).toBe("나");
   expect((screen.getByLabelText("생일 2 이름") as HTMLInputElement).value).toBe("파트너");
-  fireEvent.change(screen.getByLabelText("생일 1 날짜"), { target: { value: "2000-01-01" } });
+  fireEvent.click(screen.getByRole("button", { name: "생일 1 날짜", exact: true }));
+  fireEvent.change(screen.getByLabelText("연도"), { target: { value: "2000" } });
+  fireEvent.change(screen.getByLabelText("월"), { target: { value: "1" } });
+  fireEvent.click(screen.getByRole("button", { name: formatKoDate("2000-01-01"), exact: true }));
   fireEvent.click(screen.getByRole("button", { name: "둘의 날짜 저장" }));
   await screen.findByRole("alert");
   fireEvent.click(screen.getByRole("button", { name: "둘의 날짜 저장" }));
@@ -50,7 +54,10 @@ it("preserves typed fields on a conflict and requires an explicit latest-value r
   mocks.save.mockResolvedValue({ error: "파트너가 먼저 수정했어요", conflict: true });
   render(createElement(CoupleKeyDatesForm, { initial: empty }));
   fireEvent.change(screen.getByLabelText("생일 1 이름"), { target: { value: "내 입력" } });
-  fireEvent.change(screen.getByLabelText("생일 1 날짜"), { target: { value: "2000-01-01" } });
+  fireEvent.click(screen.getByRole("button", { name: "생일 1 날짜", exact: true }));
+  fireEvent.change(screen.getByLabelText("연도"), { target: { value: "2000" } });
+  fireEvent.change(screen.getByLabelText("월"), { target: { value: "1" } });
+  fireEvent.click(screen.getByRole("button", { name: formatKoDate("2000-01-01"), exact: true }));
   fireEvent.click(screen.getByRole("button", { name: "둘의 날짜 저장" }));
   await screen.findByRole("alert");
   expect((screen.getByLabelText("생일 1 이름") as HTMLInputElement).value).toBe("내 입력");

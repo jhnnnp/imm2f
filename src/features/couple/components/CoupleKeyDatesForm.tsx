@@ -9,6 +9,7 @@ import { emitCoupleActivitiesChanged } from "@/features/collaboration/activityCl
 import { seoulTodayIso } from "@/lib/dates";
 import { readCoupleKeyDates, saveCoupleKeyDates } from "../keyDateActions";
 import { type CoupleKeyDates, type CoupleKeyDatesSnapshot } from "../keyDates";
+import { KeyDatePicker } from "./KeyDatePicker";
 import styles from "./CoupleKeyDatesForm.module.css";
 
 function birthdayFields(dates: CoupleKeyDates, draftIds: string[], initialNames: string[]) {
@@ -83,10 +84,10 @@ export function CoupleKeyDatesForm({ initial, onboarding = false }: { initial: C
     <header className={styles.heading}><span className={styles.seal} aria-hidden="true">♡</span><div><span className={styles.eyebrow}>DATES TO REMEMBER</span><h2 id={onboarding ? "couple-dates-first-title" : "couple-dates-title"}>{onboarding ? "둘만 아는 날짜부터 남겨볼까요?" : "우리의 날짜"}</h2><p>처음 함께한 날과 서로의 생일, 오래 기억할 날짜를 남겨요.</p></div></header>
     <form onSubmit={submit}>
       <fieldset disabled={pending}>
-        <div className={styles.beginning}><div><span className={styles.sectionEyebrow}>OUR FIRST DAY</span><h3>우리의 이야기가 시작된 날</h3><p>기념일과 100일마다 캘린더에서 함께 챙겨요.</p></div><label className={styles.started}><span>사귀기 시작한 날</span><input type="date" aria-label="사귀기 시작한 날" min="1900-01-01" max={today} value={started} onChange={event => { changed(); setStarted(event.target.value); }} /></label></div>
+        <div className={styles.beginning}><div><span className={styles.sectionEyebrow}>OUR FIRST DAY</span><h3>우리의 이야기가 시작된 날</h3><p>기념일과 100일마다 캘린더에서 함께 챙겨요.</p></div><label className={styles.started}><span>사귀기 시작한 날</span><KeyDatePicker label="사귀기 시작한 날" max={today} value={started} onChange={value => { changed(); setStarted(value); }} /></label></div>
         <div className={styles.birthdays}>{birthdays.map((entry, index) => <div className={styles.birthday} key={entry.id || `new-birthday-${index}`}>
           <div className={styles.birthdayHeading}><span aria-hidden="true">{String(index + 1).padStart(2, "0")}</span><h3>{entry.name.trim() ? `${entry.name.trim()}의 생일` : "소중한 생일"}</h3><i aria-hidden="true">♡</i></div><label><span>이름</span><input aria-label={`생일 ${index + 1} 이름`} maxLength={60} placeholder="이름 또는 둘만의 호칭" value={entry.name} onChange={event => { changed(); setBirthdays(current => current.map((item, position) => position === index ? { ...item, name: event.target.value } : item)); }} /></label>
-          <label><span>생일</span><input type="date" aria-label={`생일 ${index + 1} 날짜`} min="1900-01-01" max={today} value={entry.date} onChange={event => { changed(); setBirthdays(current => current.map((item, position) => position === index ? { ...item, date: event.target.value } : item)); }} /></label>
+          <label><span>생일</span><KeyDatePicker label={`생일 ${index + 1} 날짜`} max={today} value={entry.date} onChange={value => { changed(); setBirthdays(current => current.map((item, position) => position === index ? { ...item, date: value } : item)); }} /></label>
         </div>)}</div>
       </fieldset>
       <p className={styles.note}>양력 기준으로 매년 캘린더에 표시돼요. 날짜는 비워 두거나 언제든 수정할 수 있어요.</p>

@@ -1,0 +1,29 @@
+.trigger.trigger { width: 100%; min-width: 0; min-height: 46px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid #dce1cf; border-radius: 8px; background: #fffefa; color: #53654b; font: 400 15px/1.5 var(--default); text-align: left; box-shadow: none; }
+.trigger:hover { border-color: #aab99a; }
+.trigger svg { width: 19px; height: 19px; flex: none; stroke: #8d9d7f; stroke-width: 1.5; }
+.placeholder { color: #a1a691; }
+.backdrop { position: fixed; z-index: 100; inset: 0; padding: 20px; display: grid; place-items: center; background: #343d3540; backdrop-filter: blur(4px); }
+.picker { box-sizing: border-box; width: min(350px, 100%); max-height: calc(100dvh - 40px); overflow: auto; padding: 24px; border: 1px solid #e1ddce; border-top: 3px solid #a4b393; border-radius: 6px 16px 16px 6px; background: #fffdf5; box-shadow: 0 4px 0 -1px #eae5d6, 0 22px 70px #26342a30; font-family: var(--default); }
+.picker header { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid #e8e4d5; }
+.picker header span { color: #9aa68a; font-size: 10px; letter-spacing: .12em; }
+.picker h2 { margin: 7px 0 0; color: #52664a; font: 700 22px/1.4 var(--default); }
+.picker button { border: 0; background: transparent; cursor: pointer; color: #718563; font-family: var(--default); }
+.picker header button { display: grid; place-items: center; width: 30px; height: 30px; background: #f0f2e7; border-radius: 50%; font-size: 23px; }
+.navigation { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 18px 0; }
+.navigation > button { width: 32px; height: 34px; border: 1px solid #e4e6d7; border-radius: 8px; font-size: 24px; }
+.navigation > div { display: flex; gap: 6px; min-width: 0; }
+.navigation select { min-width: 0; padding: 7px 5px; border: 0; border-bottom: 1px solid #d8dfc9; border-radius: 0; background: #fffdf5; color: #566b4c; font: 700 17px/1.4 var(--default); cursor: pointer; }
+.week, .days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.week { margin-bottom: 8px; color: #a4ab96; text-align: center; font-size: 12px; }
+.week span:first-child { color: #ba9587; }
+.week span:last-child { color: #8da5ac; }
+.days button { aspect-ratio: 1; min-width: 0; padding: 0; border-radius: 50%; font-size: 17px; }
+.days button:hover { background: #edf1e2; }
+.days button[data-today=true] { box-shadow: inset 0 0 0 1px #c5d0b5; }
+.days button[aria-pressed=true] { background: #6f855e; color: #fffdf5; box-shadow: 0 3px 8px #72865e25; }
+.picker button:disabled { opacity: .3; cursor: default; }
+.picker footer { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 14px; border-top: 1px solid #e8e4d5; }
+.picker footer button { min-height: 36px; padding: 6px 10px; font-size: 13px; }
+.picker footer button:last-child { background: #edf1e3; border-radius: 7px; }
+.picker p { margin: 14px 0 0; text-align: center; color: #b0ad99; font-size: 12px; }
+.picker :is(button,select):focus-visible, .trigger:focus-visible { outline: 2px solid #8b9f75; outline-offset: 2px; }
