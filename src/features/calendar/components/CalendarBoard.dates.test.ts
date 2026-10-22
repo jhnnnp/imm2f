@@ -20,7 +20,7 @@ it("places official holidays on the correct date and shows their full name in th
   fireEvent.click(holiday);
   expect(within(screen.getByRole("dialog")).getByText("한글날")).toBeTruthy();
   expect(within(screen.getByRole("dialog")).queryByText("아직 일정이 없는 날이에요.")).toBeNull();
-  expect(screen.getByRole("link", { name: /공휴일 출처/ }).getAttribute("href")).toContain("astro.kasi.re.kr");
+  expect(screen.queryByRole("link", { name: /공휴일 출처/ })).toBeNull();
 });
 it("automatically displays both saved birthdays and recurring relationship anniversaries", () => {
   render(createElement(CalendarBoard, { trip: empty, date: empty, memories: [], drafts: [], keyDates: {

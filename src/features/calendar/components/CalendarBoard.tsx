@@ -205,7 +205,6 @@ export function CalendarBoard({
         </div>
       </div>
       <div className={styles.legend} aria-label="캘린더 표시 안내"><span><i />공휴일</span><span><i />생일·기념일</span><span><i />우리의 약속과 기록</span></div>
-      <p className={styles.source} role="status">{holidays.loading ? "공식 공휴일 정보를 가져오고 있어요." : <>{holidays.source && <a href={holidays.source} target="_blank" rel="noreferrer">공휴일 출처 · 한국천문연구원 ↗</a>}{holidays.message ? ` · ${holidays.message}` : ""}</>}</p>
       {modalOpen && (
         <div className="calendar-modal-backdrop" role="presentation" onMouseDown={event => {
           if (event.target === event.currentTarget) setModalOpen(false);
