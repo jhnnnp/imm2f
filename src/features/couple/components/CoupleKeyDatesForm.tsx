@@ -80,16 +80,16 @@ export function CoupleKeyDatesForm({ initial, onboarding = false }: { initial: C
   function submit(event: FormEvent) { event.preventDefault(); void save(); }
   const today = seoulTodayIso();
   return <section className={styles.letter} aria-labelledby={onboarding ? "couple-dates-first-title" : "couple-dates-title"}>
-    <header><span className={styles.eyebrow}>DATES TO REMEMBER</span><h2 id={onboarding ? "couple-dates-first-title" : "couple-dates-title"}>{onboarding ? "둘만 아는 날짜부터 남겨볼까요?" : "우리의 날짜"}</h2><p>두 사람의 생일과 사귀기 시작한 날을 캘린더에 함께 표시해요. 비워 두어도 괜찮아요.</p></header>
+    <header className={styles.heading}><span className={styles.seal} aria-hidden="true">♡</span><div><span className={styles.eyebrow}>DATES TO REMEMBER</span><h2 id={onboarding ? "couple-dates-first-title" : "couple-dates-title"}>{onboarding ? "둘만 아는 날짜부터 남겨볼까요?" : "우리의 날짜"}</h2><p>처음 함께한 날과 서로의 생일, 오래 기억할 날짜를 남겨요.</p></div></header>
     <form onSubmit={submit}>
       <fieldset disabled={pending}>
-        <label className={styles.started}><span>사귀기 시작한 날</span><input type="date" aria-label="사귀기 시작한 날" min="1900-01-01" max={today} value={started} onChange={event => { changed(); setStarted(event.target.value); }} /></label>
+        <div className={styles.beginning}><div><span className={styles.sectionEyebrow}>OUR FIRST DAY</span><h3>우리의 이야기가 시작된 날</h3><p>기념일과 100일마다 캘린더에서 함께 챙겨요.</p></div><label className={styles.started}><span>사귀기 시작한 날</span><input type="date" aria-label="사귀기 시작한 날" min="1900-01-01" max={today} value={started} onChange={event => { changed(); setStarted(event.target.value); }} /></label></div>
         <div className={styles.birthdays}>{birthdays.map((entry, index) => <div className={styles.birthday} key={entry.id || `new-birthday-${index}`}>
-          <label><span>이름</span><input aria-label={`생일 ${index + 1} 이름`} maxLength={60} placeholder="이름 또는 둘만의 호칭" value={entry.name} onChange={event => { changed(); setBirthdays(current => current.map((item, position) => position === index ? { ...item, name: event.target.value } : item)); }} /></label>
+          <div className={styles.birthdayHeading}><span aria-hidden="true">{String(index + 1).padStart(2, "0")}</span><h3>{entry.name.trim() ? `${entry.name.trim()}의 생일` : "소중한 생일"}</h3><i aria-hidden="true">♡</i></div><label><span>이름</span><input aria-label={`생일 ${index + 1} 이름`} maxLength={60} placeholder="이름 또는 둘만의 호칭" value={entry.name} onChange={event => { changed(); setBirthdays(current => current.map((item, position) => position === index ? { ...item, name: event.target.value } : item)); }} /></label>
           <label><span>생일</span><input type="date" aria-label={`생일 ${index + 1} 날짜`} min="1900-01-01" max={today} value={entry.date} onChange={event => { changed(); setBirthdays(current => current.map((item, position) => position === index ? { ...item, date: event.target.value } : item)); }} /></label>
         </div>)}</div>
       </fieldset>
-      <p className={styles.note}>양력 생일 기준으로 표시해요. 입력한 이름을 두 사람이 함께 보며, Insights 화면에서 언제든 바꾸거나 지울 수 있어요.</p>
+      <p className={styles.note}>양력 기준으로 매년 캘린더에 표시돼요. 날짜는 비워 두거나 언제든 수정할 수 있어요.</p>
       {conflict && <div className={styles.conflict} role="status"><p>서로의 변경을 덮어쓰지 않도록 저장을 멈췄어요. 입력을 유지하거나 최신 값을 다시 불러올 수 있어요.</p><button type="button" disabled={pending} onClick={async () => { try { const next = await readCoupleKeyDates(); if (scopeRef.current === currentScope) { apply(next); setMessage("최신 날짜를 불러왔어요."); } } catch { setError("최신 날짜를 불러오지 못했어요."); } }}>입력 대신 최신 값 불러오기</button></div>}
       {error && <p className={styles.error} role="alert">{error}</p>}
       {message && <p className={styles.feedback} role="status">{message}</p>}
